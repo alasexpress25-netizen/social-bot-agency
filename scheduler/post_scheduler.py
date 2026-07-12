@@ -182,14 +182,20 @@ def publish_instagram(ig_business_id, page_access_token, caption, media_url, med
     r.raise_for_status()
     creation_id = r.json()["id"]
 
-    # Para video, Meta procesa async: esperamos a que el status sea FINISHED
-    if media_type == "video":
-        status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
-        for _ in range(20):
-            time.sleep(5)
-            s = requests.get(status_url, params={"fields": "status_code", "access_token": page_access_token}, timeout=30)
-            if s.json().get("status_code") == "FINISHED":
-                break
+    # Meta procesa el contenedor de forma async (mas tiempo para video, pero
+    # tambien puede pasar con imagenes grandes/lentas de descargar): esperamos
+    # a que el status sea FINISHED antes de publicar.
+    status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
+    max_attempts = 20 if media_type == "video" else 6
+    wait_seconds = 5 if media_type == "video" else 3
+    for _ in range(max_attempts):
+        time.sleep(wait_seconds)
+        s = requests.get(status_url, params={"fields": "status_code", "access_token": page_access_token}, timeout=30)
+        status = s.json().get("status_code")
+        if status == "FINISHED":
+            break
+        if status == "ERROR":
+            raise RuntimeError(f"Meta reporto error procesando el media: {s.json()}")
 
     # Paso 2: publicar el contenedor
     publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/media_publish"
@@ -273,7 +279,7 @@ def process_client(client_id):
                 )
 
             sb_update(
-                "socialbot_posts",
+                "posts",
                 {"id": f"eq.{created['id']}"},
                 {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id},
             )
