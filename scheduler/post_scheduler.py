@@ -279,7 +279,7 @@ def process_client(client_id):
                 )
 
             sb_update(
-                "posts",
+                "socialbot_posts",
                 {"id": f"eq.{created['id']}"},
                 {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id},
             )
