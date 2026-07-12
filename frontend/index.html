@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Panel · Automatización de redes</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --ink:#1a1d23;
+    --paper:#f7f6f3;
+    --line:#e1ddd4;
+    --accent:#3d5a4c;
+    --accent-soft:#e8efe9;
+    --warn:#a34e3a;
+    --muted:#6b6a66;
+    --radius:10px;
+    font-family:'Iowan Old Style','Georgia',serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:15px; line-height:1.5;
+  }
+  header{
+    padding:28px 32px; border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; justify-content:space-between;
+  }
+  header h1{
+    font-family:'Iowan Old Style','Georgia',serif; font-size:22px; margin:0;
+    letter-spacing:-0.01em;
+  }
+  header .tag{ color:var(--muted); font-size:13px; }
+  main{ max-width:980px; margin:0 auto; padding:32px; }
+  .auth-box{ max-width:360px; margin:80px auto; text-align:center; }
+  .auth-box input{
+    width:100%; padding:11px 12px; margin-bottom:10px; border:1px solid var(--line);
+    border-radius:var(--radius); font-size:14px; background:#fff;
+  }
+  button{
+    background:var(--accent); color:#fff; border:none; padding:10px 18px;
+    border-radius:var(--radius); font-size:14px; cursor:pointer; font-weight:500;
+  }
+  button:hover{ opacity:0.92; }
+  button.secondary{ background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  section{ margin-bottom:36px; }
+  section h2{ font-size:15px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:14px; font-weight:600; }
+  .card{
+    background:#fff; border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px 20px; margin-bottom:12px;
+  }
+  .card-row{ display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .client-name{ font-weight:600; font-size:16px; }
+  .pill{
+    display:inline-block; font-size:11px; padding:2px 9px; border-radius:99px;
+    background:var(--accent-soft); color:var(--accent); margin-left:8px; font-weight:600;
+  }
+  .pill.off{ background:#f1ece5; color:var(--muted); }
+  .meta-row{ color:var(--muted); font-size:13px; margin-top:6px; }
+  form.inline{ display:grid; gap:10px; margin-top:14px; }
+  form.inline input, form.inline select, form.inline textarea{
+    padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%;
+    font-family:inherit;
+  }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  details{ margin-top:10px; }
+  summary{ cursor:pointer; color:var(--accent); font-size:13px; font-weight:600; }
+  .status-published{ color:var(--accent); }
+  .status-failed{ color:var(--warn); }
+  .status-pending, .status-publishing{ color:var(--muted); }
+  small.hint{ color:var(--muted); display:block; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Panel de automatización</h1>
+  <span class="tag" id="userTag"></span>
+</header>
+
+<main>
+  <!-- LOGIN -->
+  <div class="auth-box" id="authBox">
+    <p style="color:var(--muted); margin-bottom:18px;">Iniciá sesión para gestionar tus clientes</p>
+    <input type="email" id="email" placeholder="Email" />
+    <input type="password" id="password" placeholder="Contraseña" />
+    <button onclick="login()" style="width:100%;">Entrar</button>
+    <p style="margin-top:10px;"><a href="#" onclick="signup()" style="color:var(--accent); font-size:13px;">Crear cuenta nueva</a></p>
+  </div>
+
+  <!-- APP -->
+  <div id="app" style="display:none;">
+
+    <section>
+      <h2>Nuevo cliente</h2>
+      <div class="card">
+        <form class="inline" onsubmit="createClient(event)">
+          <input id="newClientName" placeholder="Nombre del cliente / negocio" required />
+          <input id="newClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
+          <button type="submit">Agregar cliente</button>
+        </form>
+      </div>
+    </section>
+
+    <section>
+      <h2>Clientes</h2>
+      <div id="clientsList"></div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+// ⚠️ Completá con los datos de tu proyecto Supabase (Settings > API)
+const SUPABASE_URL = "https://redaqqxoeciycqgjhpbv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlZGFxcXhvZWNpeWNxZ2pocGJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxMDcyMjEsImV4cCI6MjA5MzY4MzIyMX0.HqpOrWPtbYImgy57TafbaB4qriqmq4FI9GIa4Vg9FhI";
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let currentAgencyId = null;
+
+async function login(){
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if(error){ alert(error.message); return; }
+  boot();
+}
+
+async function signup(){
+  const email = prompt("Email:");
+  const password = prompt("Contraseña (mínimo 6 caracteres):");
+  if(!email || !password) return;
+  const { data, error } = await sb.auth.signUp({ email, password });
+  if(error){ alert(error.message); return; }
+  alert("Cuenta creada. Si tu proyecto pide confirmación por email, revisá tu bandeja de entrada.");
+}
+
+async function boot(){
+  const { data: { session } } = await sb.auth.getSession();
+  if(!session){ return; }
+
+  document.getElementById('authBox').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('userTag').innerText = session.user.email;
+
+  // Buscar o crear la agencia del usuario logueado
+  let { data: agencies } = await sb.from('socialbot_agencies').select('*').eq('owner_user_id', session.user.id);
+  if(!agencies || agencies.length === 0){
+    const name = prompt("Nombre de tu agencia:") || "Mi Agencia";
+    const { data: created } = await sb.from('socialbot_agencies').insert({ owner_user_id: session.user.id, name }).select();
+    agencies = created;
+  }
+  currentAgencyId = agencies[0].id;
+  loadClients();
+}
+
+async function createClient(e){
+  e.preventDefault();
+  const name = document.getElementById('newClientName').value;
+  const sales_link = document.getElementById('newClientLink').value;
+  await sb.from('socialbot_clients').insert({ agency_id: currentAgencyId, name, sales_link });
+  document.getElementById('newClientName').value = '';
+  document.getElementById('newClientLink').value = '';
+  loadClients();
+}
+
+async function loadClients(){
+  const { data: clients } = await sb.from('socialbot_clients').select('*').order('created_at', { ascending:false });
+  const container = document.getElementById('clientsList');
+  container.innerHTML = '';
+
+  for(const c of (clients||[])){
+    const { data: accounts } = await sb.from('socialbot_social_accounts').select('*').eq('client_id', c.id);
+    const { data: aiRows } = await sb.from('socialbot_ai_settings').select('*').eq('client_id', c.id);
+    const { data: slots } = await sb.from('socialbot_schedule_slots').select('*').eq('client_id', c.id).order('hour');
+    const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
+    const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(5);
+
+    const ai = (aiRows && aiRows[0]) || {};
+
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.innerHTML = `
+      <div class="card-row">
+        <div>
+          <span class="client-name">${c.name}</span>
+          <span class="pill ${c.active ? '' : 'off'}">${c.active ? 'activo' : 'pausado'}</span>
+        </div>
+        <div>
+          <button class="secondary" onclick="toggleActive('${c.id}', ${c.active})">${c.active ? 'Pausar' : 'Reactivar'}</button>
+        </div>
+      </div>
+      <div class="meta-row">Link de venta: ${c.sales_link || '—'}</div>
+      <div class="meta-row">Cuentas conectadas: ${(accounts||[]).map(a => `${a.platform} (${a.page_name||a.page_id})`).join(', ') || 'ninguna aún'}</div>
+
+      <details>
+        <summary>Conectar cuenta de Facebook / Instagram</summary>
+        <form class="inline" onsubmit="addAccount(event, '${c.id}')">
+          <small class="hint">Generá el Page Access Token de larga duración en Graph API Explorer (ver README) y pegalo acá.</small>
+          <div class="grid2">
+            <select name="platform" required>
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+            </select>
+            <input name="page_name" placeholder="Nombre de la página" />
+          </div>
+          <input name="page_id" placeholder="Page ID" required />
+          <input name="ig_business_id" placeholder="Instagram Business ID (solo si es Instagram)" />
+          <input name="page_access_token" placeholder="Page Access Token" required />
+          <button type="submit">Guardar cuenta</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Configurar IA (${ai.provider || 'sin configurar'})</summary>
+        <form class="inline" onsubmit="saveAi(event, '${c.id}')">
+          <div class="grid2">
+            <select name="provider">
+              <option value="groq" ${ai.provider==='groq'?'selected':''}>Groq (gratis)</option>
+              <option value="openai" ${ai.provider==='openai'?'selected':''}>OpenAI</option>
+              <option value="claude" ${ai.provider==='claude'?'selected':''}>Claude</option>
+            </select>
+            <input name="tone" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
+          </div>
+          <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
+          <textarea name="system_prompt" placeholder="Instrucciones para la IA">${ai.system_prompt||''}</textarea>
+          <button type="submit">Guardar configuración</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Horarios de publicación (${(slots||[]).length})</summary>
+        <div>${(slots||[]).map(s => `${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')}`).join(' · ') || 'sin horarios'}</div>
+        <form class="inline" onsubmit="addSlot(event, '${c.id}')">
+          <div class="grid2">
+            <input name="hour" type="number" min="0" max="23" placeholder="Hora (0-23)" required />
+            <input name="minute" type="number" min="0" max="59" placeholder="Minuto" value="0" />
+          </div>
+          <button type="submit">Agregar horario</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Reglas de auto-respuesta (${(rules||[]).length})</summary>
+        <div>${(rules||[]).map(r => `"${r.keyword}" → ${r.match_type}`).join('<br>') || 'sin reglas'}</div>
+        <form class="inline" onsubmit="addRule(event, '${c.id}')">
+          <input name="keyword" placeholder="Palabra clave (ej: precio, quiero, info)" required />
+          <select name="match_type">
+            <option value="both">Comentarios + DMs</option>
+            <option value="comment">Solo comentarios</option>
+            <option value="dm">Solo DMs</option>
+          </select>
+          <textarea name="reply_template" placeholder="Respuesta. Usá {{sales_link}} para el link" required></textarea>
+          <button type="submit">Agregar regla</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Últimas publicaciones</summary>
+        <div>${(posts||[]).map(p => `<div class="status-${p.status}">[${p.status}] ${(p.caption||'').slice(0,80)}...</div>`).join('') || 'todavía no hay publicaciones'}</div>
+      </details>
+    `;
+    container.appendChild(div);
+  }
+}
+
+async function toggleActive(clientId, current){
+  await sb.from('socialbot_clients').update({ active: !current }).eq('id', clientId);
+  loadClients();
+}
+
+async function addAccount(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  await sb.from('socialbot_social_accounts').insert({
+    client_id: clientId,
+    platform: f.get('platform'),
+    page_id: f.get('page_id'),
+    ig_business_id: f.get('ig_business_id') || null,
+    page_name: f.get('page_name'),
+    page_access_token: f.get('page_access_token'),
+  });
+  loadClients();
+}
+
+async function saveAi(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  await sb.from('socialbot_ai_settings').upsert({
+    client_id: clientId,
+    provider: f.get('provider'),
+    tone: f.get('tone'),
+    topics: f.get('topics'),
+    system_prompt: f.get('system_prompt'),
+  }, { onConflict: 'client_id' });
+  loadClients();
+}
+
+async function addSlot(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  await sb.from('socialbot_schedule_slots').insert({
+    client_id: clientId,
+    hour: parseInt(f.get('hour')),
+    minute: parseInt(f.get('minute') || 0),
+  });
+  loadClients();
+}
+
+async function addRule(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  await sb.from('socialbot_auto_reply_rules').insert({
+    client_id: clientId,
+    keyword: f.get('keyword'),
+    match_type: f.get('match_type'),
+    reply_template: f.get('reply_template'),
+  });
+  loadClients();
+}
+
+boot();
+</script>
+
+</body>
+</html>
