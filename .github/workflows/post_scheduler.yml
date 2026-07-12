@@ -1,1 +1,33 @@
+name: Publicar en redes (5x al dia)
 
+on:
+  schedule:
+    # Los horarios de GitHub Actions son en UTC. Ajusta segun tu zona horaria.
+    # Ejemplo para Argentina/Brasil (UTC-3), publicar a las 8,11,14,17,20 hora local:
+    - cron: "0 11 * * *"  # 08:00 hora local
+    - cron: "0 14 * * *"  # 11:00 hora local
+    - cron: "0 17 * * *"  # 14:00 hora local
+    - cron: "0 20 * * *"  # 17:00 hora local
+    - cron: "0 23 * * *"  # 20:00 hora local
+  workflow_dispatch: {}   # permite ejecutarlo manualmente desde GitHub para probar
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r scheduler/requirements.txt
+
+      - name: Ejecutar scheduler
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python scheduler/post_scheduler.py
