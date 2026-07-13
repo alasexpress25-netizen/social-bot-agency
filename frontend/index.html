@@ -77,6 +77,7 @@
 <header>
   <h1>Panel de automatización</h1>
   <span class="tag" id="userTag"></span>
+  <button onclick="logout()" style="margin-left:12px; padding:6px 14px; font-size:13px;">Cerrar sesión</button>
 </header>
 
 <main>
@@ -134,6 +135,11 @@ async function signup(){
   const { data, error } = await sb.auth.signUp({ email, password });
   if(error){ alert(error.message); return; }
   alert("Cuenta creada. Si tu proyecto pide confirmación por email, revisá tu bandeja de entrada.");
+}
+
+async function logout(){
+  await sb.auth.signOut();
+  location.reload();
 }
 
 async function boot(){
