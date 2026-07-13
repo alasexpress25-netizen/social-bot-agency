@@ -2,13 +2,13 @@ name: Publicar en redes (5x al dia)
 
 on:
   schedule:
-    # Los horarios de GitHub Actions son en UTC. Ajusta segun tu zona horaria.
-    # Ejemplo para Argentina/Brasil (UTC-3), publicar a las 8,11,14,17,20 hora local:
-    - cron: "0 11 * * *"  # 08:00 hora local
-    - cron: "0 14 * * *"  # 11:00 hora local
-    - cron: "0 17 * * *"  # 14:00 hora local
-    - cron: "0 20 * * *"  # 17:00 hora local
-    - cron: "0 23 * * *"  # 20:00 hora local
+    # Corre cada 15 minutos, todo el dia. El propio script decide si hay que
+    # publicar o no, comparando la hora local de CADA cliente (segun su
+    # timezone en Supabase) contra sus horarios en `socialbot_schedule_slots`
+    # (que ahora soportan un horario distinto por dia de la semana).
+    # Cambiar los horarios ya NO requiere tocar este archivo: se edita
+    # directo en la tabla `socialbot_schedule_slots` desde Supabase.
+    - cron: "*/15 * * * *"
   workflow_dispatch: {}   # permite ejecutarlo manualmente desde GitHub para probar
 
 jobs:
