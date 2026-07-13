@@ -155,7 +155,36 @@ def _call_claude(system_prompt, user_prompt):
 # ---------------------------------------------------------------------------
 # Publicacion en Meta Graph API
 # ---------------------------------------------------------------------------
-def publish_facebook(page_id, page_access_token, caption, media_url=None):
+def resolve_location_id(location_name, access_token):
+    """
+    Busca en Graph API un lugar (Place) que coincida con `location_name`
+    (ej: "Imbituba", "Imbituba, SC") y devuelve su ID para usar como
+    location_id al publicar. No requiere permisos extra ni App Review:
+    es una busqueda de lugares, no una accion sobre un usuario externo.
+
+    Devuelve None si no encuentra nada (el post se publica igual, sin ubicacion).
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/search",
+            params={"type": "place", "q": location_name, "access_token": access_token, "limit": 5},
+            timeout=20,
+        )
+        r.raise_for_status()
+        results = r.json().get("data", [])
+        if not results:
+            print(f"AVISO: no se encontro ningun lugar para '{location_name}'. Se publica sin ubicacion.")
+            return None
+        # Nos quedamos con el primer resultado (el mas relevante segun Meta)
+        place = results[0]
+        print(f"Ubicacion resuelta: '{location_name}' -> {place.get('name')} (id: {place.get('id')})")
+        return place.get("id")
+    except Exception as e:
+        print(f"AVISO: fallo la busqueda de ubicacion para '{location_name}': {e}. Se publica sin ubicacion.")
+        return None
+
+
+def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None):
     if media_url:
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
         payload = {"url": media_url, "caption": caption, "access_token": page_access_token}
@@ -163,12 +192,15 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None):
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/feed"
         payload = {"message": caption, "access_token": page_access_token}
 
+    if location_id:
+        payload["place"] = location_id
+
     r = requests.post(url, data=payload, timeout=60)
     r.raise_for_status()
     return r.json().get("id") or r.json().get("post_id")
 
 
-def publish_instagram(ig_business_id, page_access_token, caption, media_url, media_type="image"):
+def publish_instagram(ig_business_id, page_access_token, caption, media_url, media_type="image", location_id=None):
     if not media_url:
         raise ValueError("Instagram requiere si o si una imagen o video (media_url).")
 
@@ -178,6 +210,8 @@ def publish_instagram(ig_business_id, page_access_token, caption, media_url, med
     payload["video_url" if media_type == "video" else "image_url"] = media_url
     if media_type == "video":
         payload["media_type"] = "REELS"
+    if location_id:
+        payload["location_id"] = location_id
 
     r = requests.post(create_url, data=payload, timeout=60)
     r.raise_for_status()
@@ -291,13 +325,11 @@ def process_client(client_id):
     else:
         caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
 
-    if media and media.get("location_name"):
-        print(
-            f"AVISO: el media tiene location_name='{media['location_name']}' pero el etiquetado "
-            f"automatico de ubicacion todavia NO esta implementado; se va a publicar SIN ubicacion."
-        )
-
     for account in accounts:
+        location_id = None
+        if media and media.get("location_name"):
+            location_id = resolve_location_id(media["location_name"], account["page_access_token"])
+
         post_row = {
             "client_id": client_id,
             "social_account_id": account["id"],
@@ -310,10 +342,17 @@ def process_client(client_id):
 
         try:
             if account["platform"] == "facebook":
-                external_id = publish_facebook(account["page_id"], account["page_access_token"], caption, media_url)
+                external_id = publish_facebook(
+                    account["page_id"], account["page_access_token"], caption, media_url, location_id
+                )
             else:
                 external_id = publish_instagram(
-                    account["ig_business_id"], account["page_access_token"], caption, media_url, media_type or "image"
+                    account["ig_business_id"],
+                    account["page_access_token"],
+                    caption,
+                    media_url,
+                    media_type or "image",
+                    location_id,
                 )
 
             sb_update(
