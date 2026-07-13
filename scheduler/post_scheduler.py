@@ -279,10 +279,23 @@ def process_client(client_id):
         print(f"Cliente {client['name']}: no tiene cuentas conectadas, se salta.")
         return
 
-    caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
     media = pick_media(client_id)
     media_url = media["url"] if media else None
     media_type = media["media_type"] if media else None
+
+    # Si el media tiene un caption_override cargado (texto fijo escrito a mano,
+    # con hashtags y CTA incluidos), lo usamos tal cual y NO llamamos a la IA.
+    # Si no, generamos un caption nuevo automaticamente como antes.
+    if media and media.get("caption_override"):
+        caption = media["caption_override"]
+    else:
+        caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
+
+    if media and media.get("location_name"):
+        print(
+            f"AVISO: el media tiene location_name='{media['location_name']}' pero el etiquetado "
+            f"automatico de ubicacion todavia NO esta implementado; se va a publicar SIN ubicacion."
+        )
 
     for account in accounts:
         post_row = {
