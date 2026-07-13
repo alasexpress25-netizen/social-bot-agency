@@ -20,6 +20,7 @@ import time
 import random
 import requests
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------------------
 # Config general (viene de GitHub Secrets -> variables de entorno)
@@ -182,20 +183,14 @@ def publish_instagram(ig_business_id, page_access_token, caption, media_url, med
     r.raise_for_status()
     creation_id = r.json()["id"]
 
-    # Meta procesa el contenedor de forma async (mas tiempo para video, pero
-    # tambien puede pasar con imagenes grandes/lentas de descargar): esperamos
-    # a que el status sea FINISHED antes de publicar.
-    status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
-    max_attempts = 20 if media_type == "video" else 6
-    wait_seconds = 5 if media_type == "video" else 3
-    for _ in range(max_attempts):
-        time.sleep(wait_seconds)
-        s = requests.get(status_url, params={"fields": "status_code", "access_token": page_access_token}, timeout=30)
-        status = s.json().get("status_code")
-        if status == "FINISHED":
-            break
-        if status == "ERROR":
-            raise RuntimeError(f"Meta reporto error procesando el media: {s.json()}")
+    # Para video, Meta procesa async: esperamos a que el status sea FINISHED
+    if media_type == "video":
+        status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
+        for _ in range(20):
+            time.sleep(5)
+            s = requests.get(status_url, params={"fields": "status_code", "access_token": page_access_token}, timeout=30)
+            if s.json().get("status_code") == "FINISHED":
+                break
 
     # Paso 2: publicar el contenedor
     publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/media_publish"
@@ -217,22 +212,52 @@ def pick_media(client_id):
 
 
 def run():
-    now = datetime.now(timezone.utc)
-    current_hour = now.hour
-    current_minute = now.minute
+    now_utc = datetime.now(timezone.utc)
 
-    # Traemos los horarios activos que coinciden (con tolerancia de +/- 5 min por si el cron no cae justo)
+    # Los horarios (hour/minute/day_of_week) estan en la hora LOCAL de cada cliente,
+    # no en UTC. Por eso no comparamos una unica "hora actual" global: convertimos
+    # now_utc al timezone de CADA cliente antes de comparar contra sus slots.
     slots = sb_get("socialbot_schedule_slots", {"active": "eq.true"})
-    matching_slots = [s for s in slots if s["hour"] == current_hour and abs(s["minute"] - current_minute) <= 10]
-
-    if not matching_slots:
-        print(f"[{now.isoformat()}] No hay horarios que coincidan con {current_hour}:{current_minute:02d} UTC. Nada que hacer.")
+    if not slots:
+        print(f"[{now_utc.isoformat()}] No hay horarios activos configurados. Nada que hacer.")
         return
 
-    client_ids = list({s["client_id"] for s in matching_slots})
-    print(f"Procesando {len(client_ids)} cliente(s) para este horario...")
+    clients_by_id = {}
+    for client_id in {s["client_id"] for s in slots}:
+        rows = sb_get("socialbot_clients", {"id": f"eq.{client_id}"})
+        if rows:
+            clients_by_id[client_id] = rows[0]
 
-    for client_id in client_ids:
+    matching_client_ids = set()
+    for slot in slots:
+        client = clients_by_id.get(slot["client_id"])
+        if not client:
+            continue
+
+        tz_name = client.get("timezone") or "America/Sao_Paulo"
+        try:
+            local_now = now_utc.astimezone(ZoneInfo(tz_name))
+        except Exception as e:
+            print(f"Timezone invalido '{tz_name}' para cliente {slot['client_id']}: {e}. Se salta.")
+            continue
+
+        # day_of_week: 1=Lunes..7=Domingo (ISO). NULL = aplica todos los dias.
+        if slot.get("day_of_week") is not None and slot["day_of_week"] != local_now.isoweekday():
+            continue
+
+        # Tolerancia de +/- 10 min por si el cron no cae exactamente justo
+        slot_minutes = slot["hour"] * 60 + slot["minute"]
+        now_minutes = local_now.hour * 60 + local_now.minute
+        if abs(slot_minutes - now_minutes) <= 10:
+            matching_client_ids.add(slot["client_id"])
+
+    if not matching_client_ids:
+        print(f"[{now_utc.isoformat()}] Ningun horario coincide con la hora local de algun cliente. Nada que hacer.")
+        return
+
+    print(f"Procesando {len(matching_client_ids)} cliente(s) para este horario...")
+
+    for client_id in matching_client_ids:
         try:
             process_client(client_id)
         except Exception as e:
