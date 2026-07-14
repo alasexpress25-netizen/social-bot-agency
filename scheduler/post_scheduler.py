@@ -184,8 +184,13 @@ def resolve_location_id(location_name, access_token):
         return None
 
 
-def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None):
-    if media_url:
+def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None, media_type="image"):
+    if media_url and media_type == "video":
+        # Los videos NO van al endpoint de /photos (es solo para imagenes).
+        # Facebook tiene un endpoint dedicado para video.
+        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/videos"
+        payload = {"file_url": media_url, "description": caption, "access_token": page_access_token}
+    elif media_url:
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
         payload = {"url": media_url, "caption": caption, "access_token": page_access_token}
     else:
@@ -197,7 +202,7 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
 
     r = requests.post(url, data=payload, timeout=60)
     r.raise_for_status()
-    return r.json().get("id") or r.json().get("post_id")
+    return r.json().get("id") or r.json().get("post_id") or r.json().get("video_id")
 
 
 def publish_instagram(ig_business_id, page_access_token, caption, media_url, media_type="image", location_id=None):
@@ -345,7 +350,7 @@ def process_client(client_id):
         try:
             if account["platform"] == "facebook":
                 external_id = publish_facebook(
-                    account["page_id"], account["page_access_token"], caption, media_url, location_id
+                    account["page_id"], account["page_access_token"], caption, media_url, location_id, media_type or "image"
                 )
             else:
                 external_id = publish_instagram(
