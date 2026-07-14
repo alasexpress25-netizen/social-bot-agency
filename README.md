@@ -267,15 +267,61 @@ duplicados idénticos por una pregunta genérica repetida.
   tarjeta de cada cliente), `supabase/migrations/0009_agency_approval_and_pending_notification.sql`,
   `supabase/functions/notify-pending-post/index.ts`.*
 
-  **Pendiente de tu lado** (dashboard de Supabase, no requiere tocar código):
-  Edge Functions → `notify-pending-post` → Secrets, agregar:
-  * `SMTP_USER` = `lavisualmk@alastecno.com`
-  * `SMTP_PASS` = la contraseña de ese correo
-  * (opcional) `SMTP_HOST` / `SMTP_PORT` — ya vienen con los valores de
-    Hostinger por defecto (`smtp.hostinger.com` / `465`), no hace falta
-    tocarlos salvo que cambies de proveedor
-  * (opcional) `SMTP_FROM` si querés un remitente distinto a `SMTP_USER`
-  * (opcional) `CLIENT_PORTAL_URL` con la URL pública de `cliente.html`
+  **✅ Ya configurado y probado** (dashboard de Supabase → Edge Functions →
+  `notify-pending-post` → Secrets): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+  `SMTP_PASS` apuntando al correo de Hostinger (`lavisualmk@alastecno.com`).
+  Probado end-to-end el 14/07/2026: post pendiente insertado manualmente →
+  trigger disparó `notify-pending-post` → email recibido en
+  `la.visualmk@gmail.com`. Opcional, todavía sin cargar: `CLIENT_PORTAL_URL`
+  (URL pública de `cliente.html`, para incluirla en el cuerpo del mail) y
+  `SMTP_FROM` (si se quiere un remitente distinto a `SMTP_USER`).
+
+* [ ] **Fase 6 — La IA sugiere QUÉ publicar (calendario de ideas de contenido), no solo el texto.**
+  Hoy la IA solo redacta un caption suelto en el momento de publicar
+  (`generate_caption` en `post_scheduler.py`), sin ningún criterio de
+  variedad ni estrategia: no sabe qué se publicó antes, ni qué le interesa
+  a los leads reales del cliente, ni qué funcionó mejor. Esta fase agrega
+  una capa previa: la IA propone un **lote de ideas de contenido** (no el
+  post final) para que la agencia elija/edite antes de que se genere el
+  caption definitivo. Como hoy la publicación la seguís haciendo vos a
+  mano, el resultado principal es una lista de ideas concretas en el panel
+  de agencia — el enganche con el scheduler automático queda como paso
+  opcional, más adelante.
+
+  **Contexto que le daríamos a la IA** (todo ya existe en la base, no hace
+  falta cargar nada nuevo):
+  * `socialbot_ai_settings` (topics, tone) — igual que hoy.
+  * Los últimos ~15 `caption` de `socialbot_posts` de ese cliente — para
+    que la IA evite repetir ángulos ya usados.
+  * `interest` de los últimos `socialbot_leads` — pistas reales de qué le
+    preguntan/interesa a la gente (ej. si todos preguntan por precio de
+    tal producto, sugerir un post que lo aclare).
+  * Cantidad de posts publicados por semana (ya calculado en la Fase 4,
+    `bucketByWeek`) — para detectar si hace tiempo no se toca un tema.
+
+  **Cómo lo implementaríamos:**
+  1. Tabla nueva `socialbot_content_ideas` (`client_id`, `idea_text`,
+     `angle` o `pilar_de_contenido`, `status` [`nueva`/`usada`/`descartada`],
+     `created_at`) — igual patrón de RLS que el resto (`owner sees own...`).
+  2. Edge Function nueva `generate-content-ideas`, similar a
+     `meta-webhook`: recibe `client_id`, arma el contexto de arriba, le
+     pide a Groq/OpenAI/Claude (reusa `ai_settings.provider`) un JSON con
+     5-8 ideas (`{idea, angulo, por_que}`), y las guarda en
+     `socialbot_content_ideas`.
+  3. En `frontend/index.html`, un botón "💡 Sugerir ideas de contenido" por
+     cliente (nuevo `<details>`), que llama la función y muestra la lista;
+     cada idea con botones "Usar" (la marca `usada`, y opcionalmente
+     precarga un `media_asset.caption_override` a partir de esa idea) o
+     "Descartar".
+  4. Opcional / a futuro: exponer la misma lista en `frontend/cliente.html`
+     en modo solo-lectura, para que el cliente también pueda ver hacia
+     dónde va el contenido y dar feedback (ej. votar qué idea le gusta
+     más) antes de que se publique — encaja con el mismo espíritu del
+     portal de cliente de la Fase 3.
+
+  *Archivos (a crear): `supabase/migrations/0010_content_ideas.sql`,
+  `supabase/functions/generate-content-ideas/index.ts`,
+  `frontend/index.html` (sección nueva por cliente).*
 
 ### Backlog (más adelante, cuando haya 5+ clientes)
 
