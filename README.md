@@ -188,13 +188,13 @@ resto del código.
 
 ### Fases
 
-* \[x] **Fase 1 — IA conversacional prudente en el webhook.**
+* [x] **Fase 1 — IA conversacional prudente en el webhook.**
 Reemplaza el matching de palabra clave por una llamada a Groq con el
 contexto del cliente (`topics`, `tone`, `sales\_link`). Suma control de
 límite diario de uso por cliente con fallback a plantilla fija.
 *Archivos: `supabase/migrations/0003\_ai\_usage\_log.sql`,
 `supabase/functions/meta-webhook/index.ts`.*
-* \[x] **Fase 2 — Calificación y guardado de leads.**
+* [x] **Fase 2 — Calificación y guardado de leads.**
 La misma llamada de IA de la Fase 1 devuelve, además de la respuesta,
 si el contacto es un lead caliente y sus datos (nombre, contacto,
 interés), y se guardan en `socialbot\_leads` vía upsert por
@@ -228,26 +228,40 @@ duplicados idénticos por una pregunta genérica repetida.
   del cliente y toggle de aprobación), `scheduler/post_scheduler.py`
   (respeta `require_approval` y publica lo aprobado en la siguiente
   corrida), `supabase/migrations/0006_client_portal.sql`.*
-* \[ ] **Fase 4 — Dashboard de métricas.**
-Gráficos de leads por semana, posts publicados y tasa de respuesta en
-ambos paneles (agencia y cliente), usando los datos que ya se guardan
-desde las Fases 1 y 2.
-*Archivos: `frontend/index.html`, `frontend/cliente.html`.*
-* \[ ] **Fase 5 — Aprobación de contenido antes de publicar.**
+* [x] **Fase 4 — Dashboard de métricas.**
+  Gráficos de leads por semana, posts publicados por semana y tasa de
+  respuesta automática a comentarios/DMs, en ambos paneles (agencia y
+  cliente), agrupando por semana ISO (lunes a domingo) los datos que ya se
+  guardaban desde las Fases 1 y 2 (`socialbot_leads`, `socialbot_posts`,
+  `socialbot_interactions_log`). Barras simples en HTML/CSS puro, sin sumar
+  librerías nuevas.
+  El portal de cliente no podía leer `socialbot_interactions_log` hasta
+  ahora (solo la veía la agencia), así que se sumó una policy de
+  solo-lectura nueva para que el cliente pueda calcular su propia tasa de
+  respuesta.
+  *Archivos: `frontend/index.html` (métricas por cliente, dentro de un
+  `<details>`), `frontend/cliente.html` (sección "Métricas"),
+  `supabase/migrations/0008_client_metrics_access.sql`.*
+* [ ] **Fase 5 — Aprobación de contenido antes de publicar.**
 Flujo borrador → aprobado → publicado para los posts generados por IA,
 con botón de aprobación en el panel correspondiente.
 *Archivos: `supabase/migrations/0005\_post\_approval.sql`,
 `scheduler/post\_scheduler.py`, panel(es).*
 
+> Nota: gran parte de la Fase 5 ya quedó cubierta por el flujo de
+> aprobación que se adelantó en la Fase 3 (`require_approval`,
+> `approval_status`, RPC `client_review_post`). Lo que falta puntualmente
+> es revisar si hace falta algo adicional (ej. notificaciones, o exponer
+> el flujo también para el panel de agencia) antes de marcarla como hecha.
+
 ### Backlog (más adelante, cuando haya 5+ clientes)
 
-* \[ ] Botón "conectar cuenta" con OAuth automático en vez de pegar el token
+* [ ] Botón "conectar cuenta" con OAuth automático en vez de pegar el token
 a mano (requiere Advanced Access si vas a manejar cuentas que no
 administrás directamente vos).
-* \[ ] Refresco automático del Page Access Token antes de que venza.
-* \[ ] Generación de imágenes con IA (ej. vía Groq/otros) además del texto.
-* \[ ] Subida de medios directo desde el panel (hoy se hace vía Supabase
+* [ ] Refresco automático del Page Access Token antes de que venza.
+* [ ] Generación de imágenes con IA (ej. vía Groq/otros) además del texto.
+* [ ] Subida de medios directo desde el panel (hoy se hace vía Supabase
 Storage a mano).
-* \[ ] Respuesta a menciones y Stories (hoy el webhook solo cubre feed,
+* [ ] Respuesta a menciones y Stories (hoy el webhook solo cubre feed,
 comments y messages).
-
