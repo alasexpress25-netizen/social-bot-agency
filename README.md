@@ -141,6 +141,24 @@ Desde ahí vas a poder: crear clientes, conectar sus páginas, configurar el
 prompt de IA, definir horarios y reglas de auto-respuesta — todo sin tocar
 código.
 
+## 5. Activar el portal de cliente (opcional, por cliente)
+
+1. Subí `frontend/cliente.html` al mismo hosting estático que el panel de
+   agencia (puede ser una URL distinta, ej. `tu-dominio.com/cliente.html`).
+2. En el panel de agencia (`frontend/index.html`), abrí la tarjeta del
+   cliente y cargá su email en "Acceso del cliente". Si además querés que
+   apruebe cada post antes de publicarse, tildá esa opción ahí mismo.
+3. Pasale al cliente la URL de `cliente.html`. La primera vez que entra con
+   su email, Supabase le manda un magic link; al hacer click queda
+   vinculado automáticamente a su cuenta — no hace falta que hagas nada más
+   del lado de Supabase.
+4. Importante: en Supabase Dashboard → Authentication → URL Configuration,
+   agregá la URL donde vive `cliente.html` a la lista de **Redirect URLs**
+   permitidas, o el magic link no va a poder volver a la página.
+(Ajustá la numeración de "5. Cargar imágenes/videos" a "6." si ya tenías esa sección después.)
+Con esto el README queda al día con lo que ya está corriendo. ¿Subís los archivos y seguimos con la Fase 4, o querés que primero repasemos algo del portal de cliente?el post_schelude.py y el index no me lo distes completos, solo de a pedazos, el readme yo lo actualizo, pero yo te pedi me entregues siempre los archivos completos y listos. fue asi o no?Reconoció omisión y se comprometió entregar archivos completosReconoció omisión y se comprometió entregar archivos completosTenés razón en pedirlo así — no tengo registro de que me lo hayas pedido como instrucción permanente antes de ahora, pero es lo correcto de todos modos y no lo cumplí bien recién. Te dejo los dos archivos completos, listos para reemplazar tal cual en el repo.Post_scheduler.py completo con soporte de require_approval (Fase 3)Post_scheduler.py completo con soporte de require_approval (Fase 3)post_scheduler.py completo con soporte de require_approval (Fase 3)post_scheduler.pyListo
+
+
 ## 5\. Cargar imágenes/videos para los posts
 
 Subí las imágenes a un bucket público de **Supabase Storage** y agregá cada
@@ -191,10 +209,33 @@ respuestas repetidas no se vuelve a evaluar como lead, para no crear
 duplicados idénticos por una pregunta genérica repetida.
 *Archivos: `supabase/migrations/0004\_leads.sql`,
 `supabase/functions/meta-webhook/index.ts`.*
-* \[ ] **Fase 3 — Panel de cliente separado (login + RLS).**
+* \[x] **Fase 3 — Panel de cliente separado (login + RLS).**
 Nuevo `frontend/cliente.html` con Supabase Auth. Cada cliente entra y
 ve solo sus propios datos (posts, leads, interacciones), separado del
 panel de agencia que ya existe.
+* [x] **Fase 3 — Panel de cliente separado (login + RLS).**
+  Nuevo `frontend/cliente.html` con Supabase Auth vía **magic link** (el
+  cliente entra con su email, sin contraseña que administrar). La agencia
+  carga el email del cliente desde su propio panel (`client_email` en
+  `socialbot_clients`); la primera vez que el cliente entra, su cuenta se
+  vincula sola a esa fila (self-claim).
+  De paso se adelantó parte de la Fase 5: cada cliente puede tener
+  `require_approval = true`, en cuyo caso el scheduler genera el post pero
+  no lo publica hasta que el cliente lo aprueba o rechaza desde su portal
+  (`socialbot_posts.approval_status`). El cliente también puede actualizar
+  el estado de sus propios leads y su tono/temas de IA.
+  **Seguridad:** el cliente no tiene ningún `UPDATE` directo por tabla.
+  Todo lo que puede modificar (aprobar/rechazar post, cambiar estado de
+  lead, actualizar tono/temas) pasa por 4 funciones RPC en Postgres
+  (`client_claim_account`, `client_review_post`,
+  `client_update_lead_status`, `client_update_ai_prefs`), que corren con
+  `SECURITY DEFINER` y validan del lado del servidor quién es el dueño de
+  la fila, qué campo se toca y qué valores están permitidos — no dependen
+  de que el HTML se comporte bien.
+  *Archivos: `frontend/cliente.html`, `frontend/index.html` (asignar email
+  del cliente y toggle de aprobación), `scheduler/post_scheduler.py`
+  (respeta `require_approval` y publica lo aprobado en la siguiente
+  corrida), `supabase/migrations/0006_client_portal.sql`.*
 *Archivos: `frontend/cliente.html`, políticas RLS nuevas.*
 * \[ ] **Fase 4 — Dashboard de métricas.**
 Gráficos de leads por semana, posts publicados y tasa de respuesta en
