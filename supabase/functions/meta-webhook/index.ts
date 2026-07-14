@@ -336,7 +336,13 @@ async function saveLead(clientId: string, platform: string, senderId: string, ex
 
 // Intenta responder con IA. Devuelve null si hay que caer al fallback de
 // palabra clave (limite superado, sin API key, o error de Groq).
-async function tryAiReply(account: any, incomingText: string): Promise<{ reply: string; source: "ia" | "ia-cache" } | null> {
+//
+// FASE 2: el `lead` solo viaja en la llamada "fresca" a Groq (source: "ia").
+// Cuando la respuesta sale del cache (source: "ia-cache") no hay `lead`,
+// porque el cache de Fase 1 solo guarda el texto de la respuesta, no la
+// calificacion de lead -- y ademas no tendria sentido re-crear un lead
+// identico cada vez que alguien repite la misma pregunta generica.
+async function tryAiReply(account: any, incomingText: string): Promise<{ reply: string; source: "ia" | "ia-cache"; lead: LeadDetection | null } | null> {
   const clientId = account.client_id;
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
   const salesLink = account.socialbot_clients?.sales_link ?? null;
@@ -348,7 +354,7 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
 
   // El cache no cuenta contra el limite diario, se puede consultar siempre.
   const cached = await getCachedReply(clientId, normalized);
-  if (cached) return { reply: cached, source: "ia-cache" };
+  if (cached) return { reply: cached, source: "ia-cache", lead: null };
 
   const usedToday = await getTodayUsage(clientId);
   if (usedToday >= limit) return null; // se paso del limite -> fallback a plantilla fija
@@ -357,9 +363,9 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
   if (!aiReply) return null; // Groq fallo o no esta configurado -> fallback
 
   await incrementUsage(clientId);
-  await saveCachedReply(clientId, normalized, aiReply);
+  await saveCachedReply(clientId, normalized, aiReply.reply);
 
-  return { reply: aiReply, source: "ia" };
+  return { reply: aiReply.reply, source: "ia", lead: aiReply.lead };
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +384,10 @@ async function handleComment(params: { platform: string; pageId: string; comment
   if (aiResult) {
     replyText = aiResult.reply;
     matchedLabel = aiResult.source; // "ia" o "ia-cache"
+
+    if (aiResult.lead?.is_hot) {
+      await saveLead(account.client_id, platform, params.senderId ?? "", commentId, text, aiResult.lead);
+    }
   } else {
     // 2) Fallback: matching de palabra clave con plantilla fija de siempre
     const { data: rules } = await supabase
@@ -425,6 +435,10 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
   if (aiResult) {
     replyText = aiResult.reply;
     matchedLabel = aiResult.source;
+
+    if (aiResult.lead?.is_hot) {
+      await saveLead(account.client_id, platform, senderId, null, text, aiResult.lead);
+    }
   } else {
     // 2) Fallback: matching de palabra clave con plantilla fija de siempre
     const { data: rules } = await supabase
