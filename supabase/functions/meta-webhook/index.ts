@@ -208,13 +208,32 @@ async function incrementUsage(clientId: string) {
   }
 }
 
-async function callGroq(aiSettings: any, salesLink: string | null, incomingText: string): Promise<string | null> {
+// Datos de lead que puede devolver la IA en la misma llamada que genera la
+// respuesta (Fase 2). Todo opcional: si no hay indicio de lead, is_hot=false.
+interface LeadDetection {
+  is_hot: boolean;
+  name: string | null;
+  contact: string | null;
+  interest: string | null;
+}
+
+interface GroqReplyResult {
+  reply: string;
+  lead: LeadDetection | null;
+}
+
+async function callGroq(aiSettings: any, salesLink: string | null, incomingText: string): Promise<GroqReplyResult | null> {
   if (!GROQ_API_KEY) return null; // sin API key configurada, directo al fallback
 
   const maxChars = aiSettings?.max_chars ?? 400;
   const basePrompt = aiSettings?.system_prompt ??
     "Sos un community manager. Escribí un post corto, atractivo, con emojis moderados y un llamado a la acción claro.";
 
+  // FASE 2: le pedimos a la IA que, en la misma respuesta, tambien califique
+  // si el contacto es un lead caliente (interesado en comprar/contratar,
+  // pidiendo precio, dejando telefono/email, etc.) y extraiga sus datos si
+  // los menciono. No es una llamada extra: es el mismo request de Fase 1,
+  // solo que ahora exigimos formato JSON con ambos campos.
   const systemPrompt = [
     basePrompt,
     aiSettings?.topics ? `Temas del negocio: ${aiSettings.topics}.` : null,
@@ -222,7 +241,11 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     salesLink ? `Si tiene sentido, invitá a visitar: ${salesLink}.` : null,
     `Estás respondiendo un comentario o mensaje directo de un seguidor en redes sociales, no generando un post nuevo.`,
     `Respondé en portugués de Brasil, natural y cercano, como si fueras una persona real del equipo.`,
-    `Máximo ${maxChars} caracteres. No uses markdown ni asteriscos.`,
+    `Máximo ${maxChars} caracteres para la respuesta. No uses markdown ni asteriscos.`,
+    ``,
+    `Además, evaluá si este contacto es un lead caliente: alguien que muestra intención real de compra/contratación (pregunta precio, disponibilidad, quiere agendar, dejó teléfono/email/usuario de contacto, dice "quiero comprar/contratar", etc.). Una pregunta genérica o un comentario de cortesía NO cuenta como lead caliente.`,
+    `Respondé EXCLUSIVAMENTE con un JSON valido (sin texto antes ni despues, sin markdown, sin \`\`\`), con esta forma exacta:`,
+    `{"reply": "<tu respuesta al usuario>", "lead": {"is_hot": true|false, "name": "<nombre si lo menciono, o null>", "contact": "<telefono/email/usuario si lo menciono, o null>", "interest": "<en pocas palabras que le interesa, o null>"}}`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -240,8 +263,9 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
           { role: "system", content: systemPrompt },
           { role: "user", content: incomingText },
         ],
-        max_tokens: 300,
+        max_tokens: 400,
         temperature: 0.7,
+        response_format: { type: "json_object" },
       }),
     });
 
@@ -251,14 +275,63 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     }
 
     const json = await res.json();
-    const reply: string | undefined = json?.choices?.[0]?.message?.content?.trim();
+    const rawContent: string | undefined = json?.choices?.[0]?.message?.content?.trim();
+    if (!rawContent) return null;
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(rawContent);
+    } catch {
+      // La IA no devolvio JSON valido (raro con response_format json_object,
+      // pero puede pasar). Usamos el texto crudo como respuesta y sin lead,
+      // en vez de tirar todo el intento a la basura.
+      console.error("No se pudo parsear JSON de Groq, se usa texto crudo como reply:", rawContent);
+      return { reply: rawContent.length > maxChars ? rawContent.slice(0, maxChars).trim() : rawContent, lead: null };
+    }
+
+    const reply: string | undefined = parsed?.reply?.trim();
     if (!reply) return null;
 
-    return reply.length > maxChars ? reply.slice(0, maxChars).trim() : reply;
+    const leadRaw = parsed?.lead;
+    const lead: LeadDetection | null = leadRaw && leadRaw.is_hot
+      ? {
+          is_hot: true,
+          name: leadRaw.name ?? null,
+          contact: leadRaw.contact ?? null,
+          interest: leadRaw.interest ?? null,
+        }
+      : null;
+
+    return {
+      reply: reply.length > maxChars ? reply.slice(0, maxChars).trim() : reply,
+      lead,
+    };
   } catch (e) {
     console.error("Error llamando a Groq:", e);
     return null;
   }
+}
+
+async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection) {
+  if (!senderId) return; // sin sender_id no hay a quien contactar despues, no vale la pena guardarlo
+
+  // upsert: si el mismo contacto ya estaba guardado, actualizamos con los
+  // datos mas recientes (puede haber completado nombre/telefono en un
+  // mensaje posterior) sin duplicar filas.
+  await supabase.from("socialbot_leads").upsert(
+    {
+      client_id: clientId,
+      platform,
+      sender_id: senderId,
+      external_id: externalId,
+      name: lead.name,
+      contact: lead.contact,
+      interest: lead.interest,
+      source_text: sourceText,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "client_id,platform,sender_id" },
+  );
 }
 
 // Intenta responder con IA. Devuelve null si hay que caer al fallback de
