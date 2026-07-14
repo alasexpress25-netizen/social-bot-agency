@@ -220,11 +220,16 @@ def upload_video_resumable(app_id, access_token, video_url):
 
 def _is_video_permission_error(exc):
     """
-    Detecta especificamente el error (#100) 'No permission to publish the
-    video' que tira Meta cuando el token tiene Standard Access en vez de
-    Advanced Access para pages_manage_posts. Asi solo hacemos fallback a
-    imagen para ESE error puntual, y dejamos que cualquier otro error
-    (token vencido, red caida, etc.) siga fallando normalmente.
+    Detecta los errores de permiso de video que tira Meta cuando el token
+    tiene Standard Access en vez de Advanced Access para pages_manage_posts.
+    Meta usa distintos codigos segun el endpoint:
+      - (#100) "No permission to publish the video"  -> endpoint /videos
+      - (#200) "does not have permission to post videos on this target" -> /video_reels
+    Por eso matcheamos por texto del mensaje ("permission" + "video"), no por
+    un unico codigo fijo, para cubrir ambos casos (y cualquier variante
+    similar que use Meta) sin enmascarar errores de otro tipo (token
+    vencido, red caida, etc.), que no van a mencionar "permission"+"video"
+    juntos.
     """
     if exc.response is None:
         return False
@@ -232,7 +237,8 @@ def _is_video_permission_error(exc):
         err = exc.response.json().get("error", {})
     except ValueError:
         return False
-    return err.get("code") == 100 and "permission to publish the video" in (err.get("message") or "").lower()
+    msg = (err.get("message") or "").lower()
+    return err.get("code") in (100, 200) and "permission" in msg and "video" in msg
 
 
 def publish_facebook_reel(page_id, page_access_token, caption, video_url, location_id=None):
@@ -351,7 +357,8 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
         # arriba van a funcionar directo y este fallback nunca se va a activar.
         frame_path = extract_video_frame(media_url)
         try:
-            return publish_facebook_photo_from_file(page_id, page_access_token, caption, frame_path, location_id)
+            photo_id = publish_facebook_photo_from_file(page_id, page_access_token, caption, frame_path, location_id)
+            return f"{photo_id} (fallback foto, video no habilitado aun)"
         finally:
             os.remove(frame_path)
 
