@@ -260,6 +260,9 @@ def _fetch_with_retries(url, retries=3, backoff=5, **kwargs):
             if attempt < retries:
                 time.sleep(backoff * attempt)
     raise last_exc
+
+
+def publish_facebook_reel(page_id, page_access_token, caption, video_url, location_id=None):
     """
     Publica el video como Reel de Pagina usando el endpoint dedicado
     /video_reels (distinto de /videos). Flujo oficial de 3 fases:
