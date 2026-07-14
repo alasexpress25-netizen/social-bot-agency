@@ -54,6 +54,15 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
+# GitHub Actions inyecta estas variables automaticamente en cada corrida,
+# no hace falta declararlas en el workflow.yml. Sirven para saber si un
+# post se genero por el cron ("schedule") o porque alguien lo tiro a mano
+# desde la pestaña Actions ("workflow_dispatch"), y para poder linkear
+# directo al log de esa corrida especifica.
+GITHUB_EVENT_NAME = os.environ.get("GITHUB_EVENT_NAME", "unknown")
+GITHUB_RUN_ID = os.environ.get("GITHUB_RUN_ID", "")
+TRIGGER_SOURCE = "manual" if GITHUB_EVENT_NAME == "workflow_dispatch" else "schedule"
+
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
@@ -496,6 +505,7 @@ def pick_media(client_id):
 
 def run():
     now_utc = datetime.now(timezone.utc)
+    print(f"[{now_utc.isoformat()}] Trigger: {TRIGGER_SOURCE} (event={GITHUB_EVENT_NAME}, run_id={GITHUB_RUN_ID})")
 
     # Los horarios (hour/minute/day_of_week) estan en la hora LOCAL de cada cliente,
     # no en UTC. Por eso no comparamos una unica "hora actual" global: convertimos
@@ -585,6 +595,8 @@ def process_client(client_id):
             "media_url": media_url,
             "status": "publishing",
             "scheduled_at": datetime.now(timezone.utc).isoformat(),
+            "trigger_source": TRIGGER_SOURCE,
+            "github_run_id": GITHUB_RUN_ID,
         }
         created = sb_insert("socialbot_posts", post_row)[0]
 
