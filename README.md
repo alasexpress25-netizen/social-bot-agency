@@ -242,17 +242,40 @@ duplicados idénticos por una pregunta genérica repetida.
   *Archivos: `frontend/index.html` (métricas por cliente, dentro de un
   `<details>`), `frontend/cliente.html` (sección "Métricas"),
   `supabase/migrations/0008_client_metrics_access.sql`.*
-* [ ] **Fase 5 — Aprobación de contenido antes de publicar.**
-Flujo borrador → aprobado → publicado para los posts generados por IA,
-con botón de aprobación en el panel correspondiente.
-*Archivos: `supabase/migrations/0005\_post\_approval.sql`,
-`scheduler/post\_scheduler.py`, panel(es).*
+* [x] **Fase 5 — Aprobación de contenido antes de publicar.**
+  El flujo borrador → aprobado → publicado ya venía en gran parte de la
+  Fase 3 (`require_approval`, `approval_status`, RPC `client_review_post`
+  en el portal de cliente). Esta fase cerró lo que faltaba:
+  * La **agencia** ahora también puede aprobar/rechazar (y editar el texto
+    de) un post pendiente desde su propio panel — útil si el cliente
+    todavía no tiene el portal activado, o hay apuro. No necesitó ninguna
+    función RPC nueva: la agencia ya tenía `UPDATE` directo sobre
+    `socialbot_posts` vía la policy `"owner sees own posts"` (0001_init.sql,
+    `for all`); solo faltaba la UI.
+  * **Notificación por email al cliente**: cada vez que el scheduler genera
+    un post que queda pendiente de aprobación, un trigger de Postgres
+    (`pg_net`) llama a una Edge Function nueva (`notify-pending-post`) que
+    le manda un mail avisándole, con un preview del texto propuesto. Manda
+    el correo por **SMTP directo contra Hostinger** (el mismo correo que ya
+    usa la agencia, `lavisualmk@alastecno.com` — `smtp.hostinger.com:465`
+    con TLS), sin depender de ningún servicio de terceros. Si no se
+    configuran las credenciales SMTP, el sistema simplemente no manda el
+    email (no rompe nada, mismo criterio de "fallback silencioso" que el
+    resto del proyecto). Opcionalmente se puede setear `CLIENT_PORTAL_URL`
+    (la URL donde vive `cliente.html`) para incluirla en el cuerpo del mail.
+  *Archivos: `frontend/index.html` (sección de aprobación por post en la
+  tarjeta de cada cliente), `supabase/migrations/0009_agency_approval_and_pending_notification.sql`,
+  `supabase/functions/notify-pending-post/index.ts`.*
 
-> Nota: gran parte de la Fase 5 ya quedó cubierta por el flujo de
-> aprobación que se adelantó en la Fase 3 (`require_approval`,
-> `approval_status`, RPC `client_review_post`). Lo que falta puntualmente
-> es revisar si hace falta algo adicional (ej. notificaciones, o exponer
-> el flujo también para el panel de agencia) antes de marcarla como hecha.
+  **Pendiente de tu lado** (dashboard de Supabase, no requiere tocar código):
+  Edge Functions → `notify-pending-post` → Secrets, agregar:
+  * `SMTP_USER` = `lavisualmk@alastecno.com`
+  * `SMTP_PASS` = la contraseña de ese correo
+  * (opcional) `SMTP_HOST` / `SMTP_PORT` — ya vienen con los valores de
+    Hostinger por defecto (`smtp.hostinger.com` / `465`), no hace falta
+    tocarlos salvo que cambies de proveedor
+  * (opcional) `SMTP_FROM` si querés un remitente distinto a `SMTP_USER`
+  * (opcional) `CLIENT_PORTAL_URL` con la URL pública de `cliente.html`
 
 ### Backlog (más adelante, cuando haya 5+ clientes)
 
