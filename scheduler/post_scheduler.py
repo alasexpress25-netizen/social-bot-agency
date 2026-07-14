@@ -155,41 +155,77 @@ def _call_claude(system_prompt, user_prompt):
 # ---------------------------------------------------------------------------
 # Publicacion en Meta Graph API
 # ---------------------------------------------------------------------------
-def resolve_location_id(location_name, access_token):
+def get_app_id_from_token(access_token):
     """
-    Busca en Graph API un lugar (Place) que coincida con `location_name`
-    (ej: "Imbituba", "Imbituba, SC") y devuelve su ID para usar como
-    location_id al publicar. No requiere permisos extra ni App Review:
-    es una busqueda de lugares, no una accion sobre un usuario externo.
+    Obtiene el App ID de Meta directamente desde el propio token (via
+    debug_token), en vez de tenerlo hardcodeado. Asi funciona sin importar
+    que cliente/app este detras de cada cuenta.
+    """
+    r = requests.get(
+        f"https://graph.facebook.com/{GRAPH_API_VERSION}/debug_token",
+        params={"input_token": access_token, "access_token": access_token},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return r.json()["data"]["app_id"]
 
-    Devuelve None si no encuentra nada (el post se publica igual, sin ubicacion).
+
+def upload_video_resumable(app_id, access_token, video_url):
     """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/search",
-            params={"type": "place", "q": location_name, "access_token": access_token, "limit": 5},
-            timeout=20,
-        )
-        r.raise_for_status()
-        results = r.json().get("data", [])
-        if not results:
-            print(f"AVISO: no se encontro ningun lugar para '{location_name}'. Se publica sin ubicacion.")
-            return None
-        # Nos quedamos con el primer resultado (el mas relevante segun Meta)
-        place = results[0]
-        print(f"Ubicacion resuelta: '{location_name}' -> {place.get('name')} (id: {place.get('id')})")
-        return place.get("id")
-    except Exception as e:
-        print(f"AVISO: fallo la busqueda de ubicacion para '{location_name}': {e}. Se publica sin ubicacion.")
-        return None
+    Sube un video a Meta usando la Resumable Upload API (el metodo vigente;
+    mandar un file_url directo al endpoint /videos ya no esta soportado).
+    Pasos oficiales:
+      1) Abrir una sesion de subida contra /{app_id}/uploads
+      2) Mandar los bytes del archivo a /upload:{session_id}
+      3) Devolver el "file handle" (h) para usar al publicar el video
+    """
+    head = requests.head(video_url, timeout=30, allow_redirects=True)
+    head.raise_for_status()
+    file_length = int(head.headers.get("Content-Length", 0))
+    if not file_length:
+        # Algunos servidores no devuelven Content-Length en HEAD; bajamos
+        # el archivo entero para saber el tamano real si hace falta.
+        probe = requests.get(video_url, timeout=120)
+        probe.raise_for_status()
+        file_length = len(probe.content)
+    file_name = video_url.split("/")[-1].split("?")[0] or "video.mp4"
+
+    session_resp = requests.post(
+        f"https://graph.facebook.com/{GRAPH_API_VERSION}/{app_id}/uploads",
+        params={
+            "file_name": file_name,
+            "file_length": file_length,
+            "file_type": "video/mp4",
+            "access_token": access_token,
+        },
+        timeout=30,
+    )
+    session_resp.raise_for_status()
+    upload_session_id = session_resp.json()["id"]  # formato: "upload:XXXXXXXX"
+
+    video_resp = requests.get(video_url, timeout=180)
+    video_resp.raise_for_status()
+
+    upload_resp = requests.post(
+        f"https://graph.facebook.com/{GRAPH_API_VERSION}/{upload_session_id}",
+        headers={"Authorization": f"OAuth {access_token}", "file_offset": "0"},
+        data=video_resp.content,
+        timeout=180,
+    )
+    upload_resp.raise_for_status()
+    return upload_resp.json()["h"]
 
 
 def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None, media_type="image"):
     if media_url and media_type == "video":
-        # Los videos NO van al endpoint de /photos (es solo para imagenes).
-        # Facebook tiene un endpoint dedicado para video.
+        app_id = get_app_id_from_token(page_access_token)
+        file_handle = upload_video_resumable(app_id, page_access_token, media_url)
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/videos"
-        payload = {"file_url": media_url, "description": caption, "access_token": page_access_token}
+        payload = {
+            "fbuploader_video_file_chunk": file_handle,
+            "description": caption,
+            "access_token": page_access_token,
+        }
     elif media_url:
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
         payload = {"url": media_url, "caption": caption, "access_token": page_access_token}
@@ -330,12 +366,7 @@ def process_client(client_id):
         caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
 
     for account in accounts:
-        location_id = None
-        # TEMPORALMENTE DESACTIVADO: /search?type=place fue discontinuado por Meta
-        # y siempre falla con 400. Sacamos esta llamada por completo (no solo el
-        # resultado) para descartar que el fallo previo afecte al publish que sigue.
-        # if media and media.get("location_name"):
-        #     location_id = resolve_location_id(media["location_name"], account["page_access_token"])
+        location_id = media.get("location_id_override") if media else None
 
         post_row = {
             "client_id": client_id,
