@@ -18,11 +18,30 @@ import os
 import sys
 import time
 import random
+import socket
 import subprocess
 import tempfile
 import requests
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+# ---------------------------------------------------------------------------
+# Forzar IPv4 en todas las conexiones salientes.
+# ---------------------------------------------------------------------------
+# Hostinger (lavisualmk.alastecno.com) resuelve tanto en IPv4 como en IPv6.
+# Los runners de GitHub Actions a veces no tienen ruta de salida IPv6
+# completa, entonces al intentar conectar por IPv6 primero tira
+# "[Errno 101] Network is unreachable" aunque el sitio ande perfecto por
+# IPv4. Este parche obliga a que TODO el DNS resuelto por el proceso
+# (requests, urllib3, etc.) devuelva solo direcciones IPv4.
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+
+socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 # ---------------------------------------------------------------------------
 # Config general (viene de GitHub Secrets -> variables de entorno)
