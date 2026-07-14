@@ -1,4 +1,4 @@
-name: Publicar en redes (5x al dia)
+name: Publicar en redes (1x al dia)
 
 on:
   schedule:
