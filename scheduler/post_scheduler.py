@@ -241,7 +241,25 @@ def _is_video_permission_error(exc):
     return err.get("code") in (100, 200) and "permission" in msg and "video" in msg
 
 
-def publish_facebook_reel(page_id, page_access_token, caption, video_url, location_id=None):
+def _fetch_with_retries(url, retries=3, backoff=5, **kwargs):
+    """
+    GET con reintentos para las descargas de media desde Hostinger, que a
+    veces corta la conexion desde los runners de GitHub Actions (ya se vio
+    antes con HTTP 206 / webp). No soluciona el problema de fondo -- eso
+    esta previsto resolverlo migrando los assets a Cloudinary -- pero
+    absorbe los cortes intermitentes mientras tanto.
+    """
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.get(url, timeout=kwargs.pop("timeout", 120), **kwargs)
+            resp.raise_for_status()
+            return resp
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_exc = e
+            if attempt < retries:
+                time.sleep(backoff * attempt)
+    raise last_exc
     """
     Publica el video como Reel de Pagina usando el endpoint dedicado
     /video_reels (distinto de /videos). Flujo oficial de 3 fases:
