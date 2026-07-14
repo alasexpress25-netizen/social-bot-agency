@@ -75,6 +75,9 @@
   .chart-bar{ background:var(--accent); border-radius:3px 3px 0 0; margin:0 auto; width:70%; }
   .chart-label{ font-size:10px; color:var(--muted); margin-top:4px; }
   .metric-title{ font-size:12px; color:var(--muted); margin:10px 0 2px; }
+  .card.pending{ border-color:#d8c7a8; background:#fdfaf3; }
+  .btn-row{ display:flex; gap:8px; margin-top:10px; }
+  button.reject{ background:var(--warn); }
 </style>
 </head>
 <body>
@@ -234,6 +237,7 @@ async function loadClients(){
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
     const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(5);
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
+    const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
 
     const ai = (aiRows && aiRows[0]) || {};
     const leadsNuevos = (leads||[]).filter(l => l.status === 'nuevo').length;
@@ -263,6 +267,24 @@ async function loadClients(){
       <div class="meta-row">Link de venta: ${c.sales_link || '—'}</div>
       <div class="meta-row">Cuentas conectadas: ${(accounts||[]).map(a => `${a.platform} (${a.page_name||a.page_id})`).join(', ') || 'ninguna aún'}</div>
       <div class="meta-row">Acceso del cliente: ${c.client_email || 'sin asignar'} ${c.client_user_id ? '<span class="pill">ya entró</span>' : (c.client_email ? '<span class="pill off">pendiente</span>' : '')}</div>
+
+      ${(pendingPosts||[]).length ? `
+      <div style="margin-top:14px;">
+        <div class="meta-row" style="margin-bottom:6px;">
+          <strong>${pendingPosts.length} post(s) esperando aprobación</strong> — normalmente los aprueba el cliente desde su portal, pero también podés hacerlo vos acá (ej. si el cliente todavía no tiene acceso, o hay apuro).
+        </div>
+        ${pendingPosts.map(p => `
+          <div class="card pending" style="margin-top:8px;">
+            <textarea id="agency-caption-${p.id}" rows="3">${(p.caption||'').replace(/</g,'&lt;')}</textarea>
+            <div class="btn-row">
+              <button class="secondary" onclick="saveCaptionAsAgency('${p.id}')">Guardar texto</button>
+              <button onclick="reviewPostAsAgency('${p.id}', 'approved')">Aprobar</button>
+              <button class="reject" onclick="reviewPostAsAgency('${p.id}', 'rejected')">Rechazar</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      ` : ''}
 
       <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
         <input name="client_email" placeholder="Email del cliente (portal)" value="${c.client_email || ''}" />
@@ -563,6 +585,27 @@ async function deleteRule(ruleId, clientId){
 async function updateLeadStatus(leadId, status){
   await sb.from('socialbot_leads').update({ status, updated_at: new Date().toISOString() }).eq('id', leadId);
   loadClients();
+}
+
+// ---------------------------------------------------------------------------
+// FASE 5: la agencia tambien puede aprobar/rechazar (y editar el texto de)
+// un post pendiente, ademas del cliente desde su propio portal. No hace
+// falta ninguna funcion RPC especial para esto (a diferencia del cliente):
+// la agencia ya tiene UPDATE directo sobre estas filas via la policy
+// "owner sees own posts" (0001_init.sql, "for all"). El scheduler publica
+// lo aprobado en la siguiente corrida sin importar quien lo aprobo.
+// ---------------------------------------------------------------------------
+async function reviewPostAsAgency(postId, decision){
+  const { error } = await sb.from('socialbot_posts').update({ approval_status: decision }).eq('id', postId);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+async function saveCaptionAsAgency(postId){
+  const value = document.getElementById(`agency-caption-${postId}`).value;
+  const { error } = await sb.from('socialbot_posts').update({ caption: value }).eq('id', postId);
+  if(error){ alert(error.message); return; }
+  alert('Texto guardado.');
 }
 
 boot();
