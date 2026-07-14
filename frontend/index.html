@@ -267,6 +267,7 @@ async function loadClients(){
             <option value="video">Video / Reel</option>
             <option value="image">Imagen</option>
           </select>
+          <input name="fb_photo_url" placeholder="URL de foto para Facebook (opcional, solo si el medio de arriba es un video). Si la cargás, en Facebook se publica esta foto en vez del video." />
           <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez. Incluí acá los hashtags si querés."></textarea>
           <button type="submit">Agregar medio</button>
         </form>
@@ -365,6 +366,7 @@ async function addMedia(e, clientId){
     url: f.get('url'),
     media_type: f.get('media_type'),
     caption_override: f.get('caption_override') || null,
+    fb_photo_url: f.get('fb_photo_url') || null,
   });
   loadClients();
 }
