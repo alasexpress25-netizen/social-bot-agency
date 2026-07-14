@@ -372,19 +372,37 @@ def publish_facebook_photo_from_file(page_id, page_access_token, caption, file_p
     return r.json().get("id") or r.json().get("post_id")
 
 
-def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None, media_type="image"):
+def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None, media_type="image", fb_photo_override=None):
     if media_url and media_type == "video":
+        # Si el cliente cargo una foto manual especifica para Facebook (capturada
+        # a mano en vez de depender del frame auto-extraido), la usamos directo y
+        # ni siquiera intentamos el video en Facebook. Instagram sigue publicando
+        # el video normalmente (esto no lo afecta, ver publish_instagram).
+        if fb_photo_override:
+            print("Facebook: usando foto manual cargada por el cliente (fb_photo_url), se salta el video.")
+            url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
+            payload = {"url": fb_photo_override, "caption": caption, "access_token": page_access_token}
+            if location_id:
+                payload["place"] = location_id
+            r = requests.post(url, data=payload, timeout=60)
+            r.raise_for_status()
+            photo_id = r.json().get("id") or r.json().get("post_id")
+            return f"{photo_id} (foto manual)"
+
         # Intento 1: endpoint dedicado de Reels.
         try:
+            print("Facebook: intento 1 (video_reels)...")
             return publish_facebook_reel(page_id, page_access_token, caption, media_url, location_id)
         except requests.HTTPError as e:
             if not _is_video_permission_error(e):
                 raise
+            print(f"Facebook: intento 1 fallo por permiso de video ({e.response.text[:200]}), sigo con intento 2.")
 
         # Intento 2: endpoint clasico de /videos (resumable upload), por si
         # el permiso se comporta distinto ahi. Si tambien falla por el mismo
         # motivo de permisos, pasamos al fallback de imagen.
         try:
+            print("Facebook: intento 2 (videos resumable upload)...")
             app_id = get_app_id_from_token(page_access_token)
             file_handle = upload_video_resumable(app_id, page_access_token, media_url)
             url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/videos"
@@ -401,10 +419,12 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
         except requests.HTTPError as e:
             if not _is_video_permission_error(e):
                 raise
+            print(f"Facebook: intento 2 fallo por permiso de video ({e.response.text[:200]}), sigo con intento 3 (foto auto).")
 
         # Intento 3 (fallback definitivo): publicar un frame del video como foto.
         # Cuando en el futuro se apruebe Advanced Access, los intentos 1/2 de
         # arriba van a funcionar directo y este fallback nunca se va a activar.
+        print("Facebook: intento 3 (extrayendo frame del video con ffmpeg)...")
         frame_path = extract_video_frame(media_url)
         try:
             photo_id = publish_facebook_photo_from_file(page_id, page_access_token, caption, frame_path, location_id)
@@ -570,8 +590,15 @@ def process_client(client_id):
 
         try:
             if account["platform"] == "facebook":
+                fb_photo_override = media.get("fb_photo_url") if media else None
                 external_id = publish_facebook(
-                    account["page_id"], account["page_access_token"], caption, media_url, location_id, media_type or "image"
+                    account["page_id"],
+                    account["page_access_token"],
+                    caption,
+                    media_url,
+                    location_id,
+                    media_type or "image",
+                    fb_photo_override,
                 )
             else:
                 external_id = publish_instagram(
