@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mi panel · Redes sociales</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --ink:#1a1d23; --paper:#f7f6f3; --line:#e1ddd4;
+    --accent:#3d5a4c; --accent-soft:#e8efe9; --warn:#a34e3a; --warn-soft:#f6e8e4;
+    --muted:#6b6a66; --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:15px; line-height:1.5;
+  }
+  header{
+    padding:24px 28px; border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; justify-content:space-between;
+  }
+  header h1{ font-size:20px; margin:0; }
+  header .tag{ color:var(--muted); font-size:13px; }
+  main{ max-width:760px; margin:0 auto; padding:28px; }
+  .auth-box{ max-width:360px; margin:80px auto; text-align:center; }
+  .auth-box input{
+    width:100%; padding:11px 12px; margin-bottom:10px; border:1px solid var(--line);
+    border-radius:var(--radius); font-size:14px; background:#fff;
+  }
+  button{
+    background:var(--accent); color:#fff; border:none; padding:10px 18px;
+    border-radius:var(--radius); font-size:14px; cursor:pointer; font-weight:500;
+  }
+  button:hover{ opacity:0.92; }
+  button.secondary{ background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.reject{ background:var(--warn); }
+  section{ margin-bottom:32px; }
+  section h2{ font-size:14px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:12px; font-weight:600; }
+  .card{ background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:10px; }
+  .card.pending{ border-color:#d8c7a8; background:#fdfaf3; }
+  .meta-row{ color:var(--muted); font-size:13px; margin-top:6px; }
+  .pill{ display:inline-block; font-size:11px; padding:2px 9px; border-radius:99px; background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  .pill.warn{ background:var(--warn-soft); color:var(--warn); }
+  .btn-row{ display:flex; gap:8px; margin-top:12px; }
+  select, textarea, input{ padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%; font-family:inherit; }
+  form.inline{ display:grid; gap:10px; margin-top:10px; }
+  .empty{ color:var(--muted); font-size:13px; padding:12px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="headerTitle">Mi panel</h1>
+  <div>
+    <span class="tag" id="userTag"></span>
+    <button onclick="logout()" style="margin-left:12px; padding:6px 14px; font-size:13px; display:none;" id="logoutBtn">Salir</button>
+  </div>
+</header>
+
+<main>
+  <div class="auth-box" id="authBox">
+    <p style="color:var(--muted); margin-bottom:18px;">Ingresá tu email para recibir un link de acceso</p>
+    <input type="email" id="email" placeholder="Email" />
+    <button onclick="sendMagicLink()" style="width:100%;">Enviarme el link de acceso</button>
+    <p id="authMsg" style="margin-top:14px; color:var(--accent); font-size:13px;"></p>
+  </div>
+
+  <div id="app" style="display:none;">
+
+    <section id="pendingSection" style="display:none;">
+      <h2>Posts esperando tu aprobación</h2>
+      <div id="pendingList"></div>
+    </section>
+
+    <section>
+      <h2>Últimas publicaciones</h2>
+      <div id="postsList"></div>
+    </section>
+
+    <section>
+      <h2>Contactos interesados</h2>
+      <div id="leadsList"></div>
+    </section>
+
+    <section>
+      <h2>Preferencias de contenido</h2>
+      <div class="card">
+        <form class="inline" onsubmit="saveAiPrefs(event)">
+          <label style="font-size:13px; color:var(--muted);">Tono de los posts</label>
+          <input id="toneInput" placeholder="ej: cercano y profesional" />
+          <label style="font-size:13px; color:var(--muted);">Temas / palabras clave del negocio</label>
+          <textarea id="topicsInput" placeholder="ej: cursos online, marketing digital"></textarea>
+          <button type="submit">Guardar preferencias</button>
+        </form>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+const SUPABASE_URL = "https://redaqqxoeciycqgjhpbv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlZGFxcXhvZWNpeWNxZ2pocGJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxMDcyMjEsImV4cCI6MjA5MzY4MzIyMX0.HqpOrWPtbYImgy57TafbaB4qriqmq4FI9GIa4Vg9FhI";
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let currentClient = null;
+
+async function sendMagicLink(){
+  const email = document.getElementById('email').value.trim();
+  if(!email){ alert('Ingresá tu email'); return; }
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.href }
+  });
+  if(error){ alert(error.message); return; }
+  document.getElementById('authMsg').innerText = 'Listo, revisá tu email y hacé click en el link para entrar.';
+}
+
+async function logout(){
+  await sb.auth.signOut();
+  location.reload();
+}
+
+async function boot(){
+  const { data: { session } } = await sb.auth.getSession();
+  if(!session){ return; }
+
+  document.getElementById('authBox').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('logoutBtn').style.display = 'inline-block';
+  document.getElementById('userTag').innerText = session.user.email;
+
+  // Reclama (o recupera) la fila de cliente vinculada a este usuario.
+  // Corre server-side via RPC: valida el email de la sesion actual, no
+  // confia en nada que mande el frontend.
+  const { data: claimed, error: claimError } = await sb.rpc('client_claim_account');
+
+  if(claimError || !claimed){
+    document.getElementById('app').innerHTML =
+      '<p style="color:var(--muted);">Tu cuenta todavía no está vinculada a ningún cliente. Pedile a tu agencia que cargue tu email en el panel.</p>';
+    return;
+  }
+
+  currentClient = claimed;
+  document.getElementById('headerTitle').innerText = currentClient.name;
+  loadAll();
+}
+
+async function loadAll(){
+  await Promise.all([loadPending(), loadPosts(), loadLeads(), loadAiPrefs()]);
+}
+
+async function loadPending(){
+  const { data: pending } = await sb.from('socialbot_posts')
+    .select('*').eq('client_id', currentClient.id).eq('approval_status', 'pending')
+    .order('created_at', { ascending:false });
+
+  const section = document.getElementById('pendingSection');
+  const list = document.getElementById('pendingList');
+
+  if(!pending || pending.length === 0){
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  list.innerHTML = pending.map(p => `
+    <div class="card pending">
+      <div>${(p.caption||'').slice(0,300)}</div>
+      ${p.media_url ? `<div class="meta-row">Media: <a href="${p.media_url}" target="_blank">ver</a></div>` : ''}
+      <div class="btn-row">
+        <button onclick="reviewPost('${p.id}', 'approved')">Aprobar</button>
+        <button class="reject" onclick="reviewPost('${p.id}', 'rejected')">Rechazar</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function reviewPost(postId, decision){
+  const { error } = await sb.rpc('client_review_post', { p_post_id: postId, p_decision: decision });
+  if(error){ alert(error.message); return; }
+  loadAll();
+}
+
+async function loadPosts(){
+  const { data: posts } = await sb.from('socialbot_posts')
+    .select('*').eq('client_id', currentClient.id).neq('approval_status', 'pending')
+    .order('created_at', { ascending:false }).limit(10);
+
+  const list = document.getElementById('postsList');
+  if(!posts || posts.length === 0){
+    list.innerHTML = '<div class="empty">Todavía no hay publicaciones.</div>';
+    return;
+  }
+  list.innerHTML = posts.map(p => `
+    <div class="card">
+      <span class="pill ${p.status==='failed' ? 'warn' : ''}">${p.status}${p.approval_status==='rejected' ? ' · rechazado' : ''}</span>
+      <div style="margin-top:8px;">${(p.caption||'').slice(0,160)}...</div>
+    </div>
+  `).join('');
+}
+
+async function loadLeads(){
+  const { data: leads } = await sb.from('socialbot_leads')
+    .select('*').eq('client_id', currentClient.id).order('created_at', { ascending:false });
+
+  const list = document.getElementById('leadsList');
+  if(!leads || leads.length === 0){
+    list.innerHTML = '<div class="empty">Todavía no hay contactos interesados.</div>';
+    return;
+  }
+  list.innerHTML = leads.map(l => `
+    <div class="card">
+      <div class="card-row" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <div>
+          <strong>${l.name || 'Sin nombre'}</strong>
+          <div class="meta-row">${l.platform} · ${l.contact || 'sin contacto'} · ${l.interest || ''}</div>
+        </div>
+        <select onchange="updateLeadStatus('${l.id}', this.value)">
+          <option value="nuevo" ${l.status==='nuevo'?'selected':''}>Nuevo</option>
+          <option value="contactado" ${l.status==='contactado'?'selected':''}>Contactado</option>
+          <option value="convertido" ${l.status==='convertido'?'selected':''}>Convertido</option>
+          <option value="descartado" ${l.status==='descartado'?'selected':''}>Descartado</option>
+        </select>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function updateLeadStatus(leadId, status){
+  const { error } = await sb.rpc('client_update_lead_status', { p_lead_id: leadId, p_status: status });
+  if(error){ alert(error.message); return; }
+  loadLeads();
+}
+
+async function loadAiPrefs(){
+  const { data: rows } = await sb.from('socialbot_ai_settings').select('*').eq('client_id', currentClient.id);
+  const ai = (rows && rows[0]) || {};
+  document.getElementById('toneInput').value = ai.tone || '';
+  document.getElementById('topicsInput').value = ai.topics || '';
+}
+
+async function saveAiPrefs(e){
+  e.preventDefault();
+  const { error } = await sb.rpc('client_update_ai_prefs', {
+    p_tone: document.getElementById('toneInput').value,
+    p_topics: document.getElementById('topicsInput').value,
+  });
+  if(error){ alert(error.message); return; }
+  alert('Preferencias guardadas.');
+}
+
+boot();
+</script>
+
+</body>
+</html>
