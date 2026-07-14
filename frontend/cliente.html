@@ -29,6 +29,9 @@
     width:100%; padding:11px 12px; margin-bottom:10px; border:1px solid var(--line);
     border-radius:var(--radius); font-size:14px; background:#fff;
   }
+  .auth-box input.code-input{
+    text-align:center; letter-spacing:6px; font-size:20px; font-weight:600;
+  }
   button{
     background:var(--accent); color:#fff; border:none; padding:10px 18px;
     border-radius:var(--radius); font-size:14px; cursor:pointer; font-weight:500;
@@ -36,6 +39,7 @@
   button:hover{ opacity:0.92; }
   button.secondary{ background:transparent; color:var(--accent); border:1px solid var(--accent); }
   button.reject{ background:var(--warn); }
+  button:disabled{ opacity:0.5; cursor:default; }
   section{ margin-bottom:32px; }
   section h2{ font-size:14px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:12px; font-weight:600; }
   .card{ background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:10px; }
@@ -47,6 +51,9 @@
   select, textarea, input{ padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%; font-family:inherit; }
   form.inline{ display:grid; gap:10px; margin-top:10px; }
   .empty{ color:var(--muted); font-size:13px; padding:12px 0; }
+  .section-hint{ color:var(--muted); font-size:12.5px; margin:-6px 0 12px; line-height:1.45; }
+  .divider-text{ color:var(--muted); font-size:12px; margin:16px 0; text-transform:uppercase; letter-spacing:0.04em; }
+  .link-btn{ background:none; border:none; color:var(--accent); font-size:13px; cursor:pointer; padding:0; text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -63,29 +70,47 @@
   <div class="auth-box" id="authBox">
     <p style="color:var(--muted); margin-bottom:18px;">Ingresá tu email para recibir un link de acceso</p>
     <input type="email" id="email" placeholder="Email" />
-    <button onclick="sendMagicLink()" style="width:100%;">Enviarme el link de acceso</button>
+    <button onclick="sendMagicLink()" style="width:100%;" id="sendLinkBtn">Enviarme el link de acceso</button>
     <p id="authMsg" style="margin-top:14px; color:var(--accent); font-size:13px;"></p>
+
+    <!-- Paso 2 (aparece despues de pedir el link): confirmar con el codigo
+         de 6 digitos que llega en el MISMO email, como alternativa al link.
+         Util cuando el link no funciona en la PC (algunos webmails/antivirus
+         "abren" el link ellos solos para revisarlo y lo consumen antes de
+         que el usuario lo clickee; el codigo no tiene ese problema). -->
+    <div id="codeBox" style="display:none; margin-top:22px; border-top:1px solid var(--line); padding-top:18px;">
+      <p style="color:var(--muted); font-size:13px; margin-bottom:10px;">
+        ¿El link no funcionó? Ingresá el código de 6 dígitos que también llegó en ese email.
+      </p>
+      <input type="text" id="codeInput" class="code-input" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
+      <button onclick="verifyCode()" style="width:100%;" id="verifyCodeBtn">Confirmar código</button>
+      <p style="margin-top:10px;"><button class="link-btn" onclick="sendMagicLink(true)">Reenviar código / link</button></p>
+    </div>
   </div>
 
   <div id="app" style="display:none;">
 
     <section id="pendingSection" style="display:none;">
       <h2>Posts esperando tu aprobación</h2>
+      <p class="section-hint">Estos posts ya fueron generados pero no se van a publicar hasta que vos los apruebes o rechaces. Podés editar el texto antes de aprobar. Si rechazás uno, se descarta para siempre (no se vuelve a intentar publicar).</p>
       <div id="pendingList"></div>
     </section>
 
     <section>
       <h2>Últimas publicaciones</h2>
+      <p class="section-hint">Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.</p>
       <div id="postsList"></div>
     </section>
 
     <section>
       <h2>Contactos interesados</h2>
+      <p class="section-hint">Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Vos solo tenés que ir actualizando el estado a medida que los contactás.</p>
       <div id="leadsList"></div>
     </section>
 
     <section>
       <h2>Preferencias de contenido</h2>
+      <p class="section-hint">Esto define cómo suena tu marca: el tono y los temas que cargues acá los usa la IA tanto para escribir los posts nuevos como para responder comentarios y mensajes directos automáticamente.</p>
       <div class="card">
         <form class="inline" onsubmit="saveAiPrefs(event)">
           <label style="font-size:13px; color:var(--muted);">Tono de los posts</label>
@@ -106,16 +131,55 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let currentClient = null;
+let pendingEmail = null;
 
-async function sendMagicLink(){
+async function sendMagicLink(isResend){
   const email = document.getElementById('email').value.trim();
   if(!email){ alert('Ingresá tu email'); return; }
+
+  const btn = document.getElementById('sendLinkBtn');
+  btn.disabled = true;
+  btn.innerText = 'Enviando...';
+
   const { error } = await sb.auth.signInWithOtp({
     email,
     options: { emailRedirectTo: window.location.href }
   });
+
+  btn.disabled = false;
+  btn.innerText = 'Enviarme el link de acceso';
+
   if(error){ alert(error.message); return; }
-  document.getElementById('authMsg').innerText = 'Listo, revisá tu email y hacé click en el link para entrar.';
+
+  pendingEmail = email;
+  document.getElementById('authMsg').innerText =
+    isResend
+      ? 'Te reenviamos un nuevo email. El link y el código anteriores ya no sirven, usá el más reciente.'
+      : 'Listo, revisá tu email. Podés hacer click en el link, o si no funciona, ingresar el código de 6 dígitos de más abajo.';
+  document.getElementById('codeBox').style.display = 'block';
+}
+
+async function verifyCode(){
+  const code = document.getElementById('codeInput').value.trim();
+  if(!pendingEmail){ alert('Primero pedí el link/código con tu email.'); return; }
+  if(!/^\d{6}$/.test(code)){ alert('El código son 6 dígitos.'); return; }
+
+  const btn = document.getElementById('verifyCodeBtn');
+  btn.disabled = true;
+  btn.innerText = 'Confirmando...';
+
+  const { error } = await sb.auth.verifyOtp({
+    email: pendingEmail,
+    token: code,
+    type: 'email',
+  });
+
+  btn.disabled = false;
+  btn.innerText = 'Confirmar código';
+
+  if(error){ alert(error.message); return; }
+
+  boot();
 }
 
 async function logout(){
@@ -152,6 +216,10 @@ async function loadAll(){
   await Promise.all([loadPending(), loadPosts(), loadLeads(), loadAiPrefs()]);
 }
 
+function escapeHtml(str){
+  return (str||'').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
 async function loadPending(){
   const { data: pending } = await sb.from('socialbot_posts')
     .select('*').eq('client_id', currentClient.id).eq('approval_status', 'pending')
@@ -165,16 +233,42 @@ async function loadPending(){
     return;
   }
   section.style.display = 'block';
-  list.innerHTML = pending.map(p => `
-    <div class="card pending">
-      <div>${(p.caption||'').slice(0,300)}</div>
-      ${p.media_url ? `<div class="meta-row">Media: <a href="${p.media_url}" target="_blank">ver</a></div>` : ''}
-      <div class="btn-row">
-        <button onclick="reviewPost('${p.id}', 'approved')">Aprobar</button>
-        <button class="reject" onclick="reviewPost('${p.id}', 'rejected')">Rechazar</button>
+
+  const cards = await Promise.all(pending.map(async p => {
+    let mediaHtml = '';
+    if(p.media_type === 'carousel' && p.media_asset_id){
+      const { data: items } = await sb.from('socialbot_carousel_items')
+        .select('*').eq('media_asset_id', p.media_asset_id).order('position');
+      const links = (items||[]).map((it, i) => `<a href="${it.url}" target="_blank">imagen ${i+1}</a>`).join(' · ');
+      mediaHtml = `<div class="meta-row">Carrusel (${(items||[]).length} imágenes): ${links || 'sin imágenes'}</div>`;
+    } else if(p.media_url){
+      mediaHtml = `<div class="meta-row">Media: <a href="${p.media_url}" target="_blank">ver</a></div>`;
+    }
+
+    return `
+      <div class="card pending">
+        <label style="font-size:12px; color:var(--muted);">Texto del post (podés editarlo antes de aprobar)</label>
+        <textarea id="caption-${p.id}" rows="4">${escapeHtml(p.caption)}</textarea>
+        <div class="btn-row">
+          <button class="secondary" onclick="saveCaption('${p.id}')">Guardar texto</button>
+        </div>
+        ${mediaHtml}
+        <div class="btn-row">
+          <button onclick="reviewPost('${p.id}', 'approved')">Aprobar</button>
+          <button class="reject" onclick="reviewPost('${p.id}', 'rejected')">Rechazar</button>
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }));
+
+  list.innerHTML = cards.join('');
+}
+
+async function saveCaption(postId){
+  const value = document.getElementById(`caption-${postId}`).value;
+  const { error } = await sb.rpc('client_edit_pending_post_caption', { p_post_id: postId, p_caption: value });
+  if(error){ alert(error.message); return; }
+  alert('Texto guardado.');
 }
 
 async function reviewPost(postId, decision){
