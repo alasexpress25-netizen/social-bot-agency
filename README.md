@@ -90,8 +90,7 @@ proyecto — no hace falta tocarlos.
 Python): Supabase Dashboard > Settings > API > `service\_role` (secret).
 **Nunca lo pongas en el frontend**, solo en los secrets de GitHub Actions.
 
-## 2\. Configurar el scheduler (Python + GitHub Actions)
-
+## 2\. Configurar el scheduler (Python + GitHub Actions) ✅ YA HECHO
 1. Subí esta carpeta a un repositorio de GitHub (puede ser privado). *(Tu
 conector de GitHub todavía no me aparece habilitado del lado del chat —
 revisalo en el ícono de conectores; mientras tanto subilo vos manualmente
@@ -155,11 +154,8 @@ código.
 4. Importante: en Supabase Dashboard → Authentication → URL Configuration,
    agregá la URL donde vive `cliente.html` a la lista de **Redirect URLs**
    permitidas, o el magic link no va a poder volver a la página.
-(Ajustá la numeración de "5. Cargar imágenes/videos" a "6." si ya tenías esa sección después.)
-Con esto el README queda al día con lo que ya está corriendo. ¿Subís los archivos y seguimos con la Fase 4, o querés que primero repasemos algo del portal de cliente?el post_schelude.py y el index no me lo distes completos, solo de a pedazos, el readme yo lo actualizo, pero yo te pedi me entregues siempre los archivos completos y listos. fue asi o no?Reconoció omisión y se comprometió entregar archivos completosReconoció omisión y se comprometió entregar archivos completosTenés razón en pedirlo así — no tengo registro de que me lo hayas pedido como instrucción permanente antes de ahora, pero es lo correcto de todos modos y no lo cumplí bien recién. Te dejo los dos archivos completos, listos para reemplazar tal cual en el repo.Post_scheduler.py completo con soporte de require_approval (Fase 3)Post_scheduler.py completo con soporte de require_approval (Fase 3)post_scheduler.py completo con soporte de require_approval (Fase 3)post_scheduler.pyListo
 
-
-## 5\. Cargar imágenes/videos para los posts
+## 6\. Cargar imágenes/videos para los posts
 
 Subí las imágenes a un bucket público de **Supabase Storage** y agregá cada
 URL a la tabla `media\_assets` (por ahora se hace desde el SQL editor o
@@ -209,10 +205,6 @@ respuestas repetidas no se vuelve a evaluar como lead, para no crear
 duplicados idénticos por una pregunta genérica repetida.
 *Archivos: `supabase/migrations/0004\_leads.sql`,
 `supabase/functions/meta-webhook/index.ts`.*
-* \[x] **Fase 3 — Panel de cliente separado (login + RLS).**
-Nuevo `frontend/cliente.html` con Supabase Auth. Cada cliente entra y
-ve solo sus propios datos (posts, leads, interacciones), separado del
-panel de agencia que ya existe.
 * [x] **Fase 3 — Panel de cliente separado (login + RLS).**
   Nuevo `frontend/cliente.html` con Supabase Auth vía **magic link** (el
   cliente entra con su email, sin contraseña que administrar). La agencia
@@ -236,7 +228,6 @@ panel de agencia que ya existe.
   del cliente y toggle de aprobación), `scheduler/post_scheduler.py`
   (respeta `require_approval` y publica lo aprobado en la siguiente
   corrida), `supabase/migrations/0006_client_portal.sql`.*
-*Archivos: `frontend/cliente.html`, políticas RLS nuevas.*
 * \[ ] **Fase 4 — Dashboard de métricas.**
 Gráficos de leads por semana, posts publicados y tasa de respuesta en
 ambos paneles (agencia y cliente), usando los datos que ya se guardan
