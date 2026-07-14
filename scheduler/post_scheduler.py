@@ -238,7 +238,17 @@ def _is_video_permission_error(exc):
     except ValueError:
         return False
     msg = (err.get("message") or "").lower()
-    return err.get("code") in (100, 200) and "permission" in msg and "video" in msg
+    if err.get("code") not in (100, 200):
+        return False
+    if "permission" in msg and "video" in msg:
+        return True
+    # Variante vista en la practica: Meta devuelve (#200) quejandose del
+    # permiso legacy "publish_actions" (deprecado hace anos) en vez de
+    # mencionar "video" explicitamente. Tambien es, en los hechos, un
+    # bloqueo de permisos de publicacion -> debe activar el fallback.
+    if "permission" in msg and "publish_actions" in msg:
+        return True
+    return False
 
 
 def _fetch_with_retries(url, retries=3, backoff=5, **kwargs):
