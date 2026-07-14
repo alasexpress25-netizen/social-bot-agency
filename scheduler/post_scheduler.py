@@ -327,8 +327,11 @@ def process_client(client_id):
 
     for account in accounts:
         location_id = None
-        if media and media.get("location_name"):
-            location_id = resolve_location_id(media["location_name"], account["page_access_token"])
+        # TEMPORALMENTE DESACTIVADO: /search?type=place fue discontinuado por Meta
+        # y siempre falla con 400. Sacamos esta llamada por completo (no solo el
+        # resultado) para descartar que el fallo previo afecte al publish que sigue.
+        # if media and media.get("location_name"):
+        #     location_id = resolve_location_id(media["location_name"], account["page_access_token"])
 
         post_row = {
             "client_id": client_id,
