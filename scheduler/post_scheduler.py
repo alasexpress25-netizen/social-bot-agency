@@ -1,13 +1,20 @@
 """
 post_scheduler.py
 ------------------
-Se ejecuta 5 veces al dia (via GitHub Actions cron) y para cada cliente activo
-que tenga un horario (schedule_slot) que coincida con la hora actual:
+Se ejecuta cada 15 minutos (via GitHub Actions cron) y para cada cliente
+activo que tenga un horario (schedule_slot) que coincida con la hora actual:
 
   1. Genera un texto nuevo con IA (OpenAI o Claude, segun ai_settings.provider)
   2. Elige una imagen/video de la biblioteca del cliente (media_assets)
-  3. Publica en Facebook y/o Instagram via Meta Graph API
-  4. Guarda el resultado en la tabla `posts` de Supabase
+  3. Si el cliente tiene require_approval=true, guarda el post como pendiente
+     de aprobacion y NO publica todavia (el cliente lo aprueba/rechaza desde
+     su portal, frontend/cliente.html). Si no, publica directo como siempre.
+  4. Publica en Facebook y/o Instagram via Meta Graph API
+  5. Guarda el resultado en la tabla `posts` de Supabase
+
+Ademas, en cada corrida, ANTES de generar posts nuevos, revisa si hay posts
+que ya estaban esperando aprobacion y el cliente ya aprobo desde su portal,
+y los publica.
 
 No requiere servidor: corre como un job de GitHub Actions y termina.
 Todas las credenciales sensibles viven en Supabase (por cliente) o en
@@ -494,8 +501,79 @@ def pick_media(client_id):
     return assets[0]
 
 
+def publish_approved_pending_posts():
+    """
+    Busca posts que quedaron en status='pending' (generados pero no
+    publicados porque el cliente tenia require_approval=true) y cuyo
+    approval_status ya paso a 'approved' desde el portal de cliente
+    (frontend/cliente.html), y los publica ahora. Los rechazados
+    (approval_status='rejected') se ignoran para siempre: quedan como
+    registro historico, sin publicarse nunca.
+
+    Se corre al principio de cada ejecucion del scheduler, antes de generar
+    posts nuevos.
+    """
+    pending = sb_get("socialbot_posts", {"status": "eq.pending", "approval_status": "eq.approved"})
+    if not pending:
+        return
+
+    print(f"Publicando {len(pending)} post(s) aprobado(s) por el cliente...")
+    for post in pending:
+        accounts = sb_get("socialbot_social_accounts", {"id": f"eq.{post['social_account_id']}"})
+        if not accounts:
+            sb_update("socialbot_posts", {"id": f"eq.{post['id']}"}, {"status": "failed", "error_message": "cuenta social no encontrada"})
+            continue
+        account = accounts[0]
+
+        media = None
+        if post.get("media_url"):
+            # Reconstruimos el media_type/fb_photo_url original si el asset sigue
+            # existiendo, para no perder el comportamiento de fallback de video
+            # en Facebook (ver publish_facebook).
+            assets = sb_get(
+                "socialbot_media_assets",
+                {"url": f"eq.{post['media_url']}", "client_id": f"eq.{post['client_id']}", "limit": "1"},
+            )
+            media = assets[0] if assets else None
+
+        try:
+            if account["platform"] == "facebook":
+                external_id = publish_facebook(
+                    account["page_id"],
+                    account["page_access_token"],
+                    post["caption"],
+                    post.get("media_url"),
+                    media.get("location_id_override") if media else None,
+                    (media.get("media_type") if media else "image") or "image",
+                    media.get("fb_photo_url") if media else None,
+                )
+            else:
+                external_id = publish_instagram(
+                    account["ig_business_id"],
+                    account["page_access_token"],
+                    post["caption"],
+                    post.get("media_url"),
+                    (media.get("media_type") if media else "image") or "image",
+                    media.get("location_id_override") if media else None,
+                )
+            sb_update(
+                "socialbot_posts",
+                {"id": f"eq.{post['id']}"},
+                {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id},
+            )
+            print(f"OK (aprobado por cliente) -> post {post['id']}")
+        except requests.HTTPError as e:
+            error_msg = e.response.text[:500] if e.response is not None else str(e)
+            sb_update("socialbot_posts", {"id": f"eq.{post['id']}"}, {"status": "failed", "error_message": error_msg})
+            print(f"FALLO (aprobado por cliente) -> post {post['id']}: {error_msg}")
+
+
 def run():
     now_utc = datetime.now(timezone.utc)
+
+    # Antes de generar posts nuevos, publicamos los que ya estaban esperando
+    # aprobacion del cliente y fueron aprobados desde su portal.
+    publish_approved_pending_posts()
 
     # Los horarios (hour/minute/day_of_week) estan en la hora LOCAL de cada cliente,
     # no en UTC. Por eso no comparamos una unica "hora actual" global: convertimos
@@ -576,6 +654,12 @@ def process_client(client_id):
     else:
         caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
 
+    # Si el cliente tiene aprobacion manual activada, el post se genera y se
+    # guarda esperando su decision, pero NO se publica en este momento.
+    # publish_approved_pending_posts() se encarga de publicarlo mas adelante,
+    # en la corrida en la que ya este aprobado.
+    require_approval = client.get("require_approval", False)
+
     for account in accounts:
         location_id = media.get("location_id_override") if media else None
 
@@ -584,10 +668,15 @@ def process_client(client_id):
             "social_account_id": account["id"],
             "caption": caption,
             "media_url": media_url,
-            "status": "publishing",
+            "status": "pending" if require_approval else "publishing",
+            "approval_status": "pending" if require_approval else "approved",
             "scheduled_at": datetime.now(timezone.utc).isoformat(),
         }
         created = sb_insert("socialbot_posts", post_row)[0]
+
+        if require_approval:
+            print(f"ESPERA APROBACION -> {client['name']} / {account['platform']} (post {created['id']} generado, sin publicar)")
+            continue
 
         try:
             if account["platform"] == "facebook":
@@ -625,8 +714,9 @@ def process_client(client_id):
             print(f"FALLO -> {client['name']} / {account['platform']}: {error_msg}")
 
     # Solo contamos el media como "usado" si se publico de verdad en al menos
-    # una cuenta. Si todo fallo, el media sigue con su times_used original y
-    # va a volver a ser el candidato mas prioritario en el proximo intento.
+    # una cuenta. Si todo fallo (o quedo esperando aprobacion), el media sigue
+    # con su times_used original y va a volver a ser el candidato mas
+    # prioritario en el proximo intento.
     if media and media_published_ok:
         sb_update("socialbot_media_assets", {"id": f"eq.{media['id']}"}, {"times_used": media["times_used"] + 1})
 
