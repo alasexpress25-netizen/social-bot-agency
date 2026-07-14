@@ -240,9 +240,7 @@ def pick_media(client_id):
     assets = sb_get("socialbot_media_assets", {"client_id": f"eq.{client_id}", "order": "times_used.asc", "limit": "1"})
     if not assets:
         return None
-    asset = assets[0]
-    sb_update("socialbot_media_assets", {"id": f"eq.{asset['id']}"}, {"times_used": asset["times_used"] + 1})
-    return asset
+    return assets[0]
 
 
 def run():
@@ -316,6 +314,7 @@ def process_client(client_id):
     media = pick_media(client_id)
     media_url = media["url"] if media else None
     media_type = media["media_type"] if media else None
+    media_published_ok = False
 
     # Si el media tiene un caption_override cargado (texto fijo escrito a mano,
     # con hashtags y CTA incluidos), lo usamos tal cual y NO llamamos a la IA.
@@ -364,11 +363,18 @@ def process_client(client_id):
                 {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id},
             )
             print(f"OK -> {client['name']} / {account['platform']} / post {external_id}")
+            media_published_ok = True
 
         except requests.HTTPError as e:
             error_msg = e.response.text[:500] if e.response is not None else str(e)
             sb_update("socialbot_posts", {"id": f"eq.{created['id']}"}, {"status": "failed", "error_message": error_msg})
             print(f"FALLO -> {client['name']} / {account['platform']}: {error_msg}")
+
+    # Solo contamos el media como "usado" si se publico de verdad en al menos
+    # una cuenta. Si todo fallo, el media sigue con su times_used original y
+    # va a volver a ser el candidato mas prioritario en el proximo intento.
+    if media and media_published_ok:
+        sb_update("socialbot_media_assets", {"id": f"eq.{media['id']}"}, {"times_used": media["times_used"] + 1})
 
 
 if __name__ == "__main__":
