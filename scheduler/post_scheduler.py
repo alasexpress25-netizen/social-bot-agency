@@ -18,6 +18,8 @@ import os
 import sys
 import time
 import random
+import subprocess
+import tempfile
 import requests
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -216,29 +218,160 @@ def upload_video_resumable(app_id, access_token, video_url):
     return upload_resp.json()["h"]
 
 
+def _is_video_permission_error(exc):
+    """
+    Detecta especificamente el error (#100) 'No permission to publish the
+    video' que tira Meta cuando el token tiene Standard Access en vez de
+    Advanced Access para pages_manage_posts. Asi solo hacemos fallback a
+    imagen para ESE error puntual, y dejamos que cualquier otro error
+    (token vencido, red caida, etc.) siga fallando normalmente.
+    """
+    if exc.response is None:
+        return False
+    try:
+        err = exc.response.json().get("error", {})
+    except ValueError:
+        return False
+    return err.get("code") == 100 and "permission to publish the video" in (err.get("message") or "").lower()
+
+
+def publish_facebook_reel(page_id, page_access_token, caption, video_url, location_id=None):
+    """
+    Publica el video como Reel de Pagina usando el endpoint dedicado
+    /video_reels (distinto de /videos). Flujo oficial de 3 fases:
+      1) start  -> Meta reserva un video_id y devuelve una upload_url
+      2) upload -> le pasamos el file_url del video para que Meta lo baje el mismo
+      3) finish -> publicamos el reel con video_state=PUBLISHED
+    """
+    base = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/video_reels"
+
+    start = requests.post(base, params={"upload_phase": "start", "access_token": page_access_token}, timeout=30)
+    start.raise_for_status()
+    start_data = start.json()
+    video_id = start_data["video_id"]
+    upload_url = start_data["upload_url"]
+
+    upload = requests.post(
+        upload_url,
+        headers={
+            "Authorization": f"OAuth {page_access_token}",
+            "file_url": video_url,
+        },
+        timeout=180,
+    )
+    upload.raise_for_status()
+
+    finish_payload = {
+        "upload_phase": "finish",
+        "video_id": video_id,
+        "video_state": "PUBLISHED",
+        "description": caption,
+        "access_token": page_access_token,
+    }
+    if location_id:
+        finish_payload["place"] = location_id
+
+    finish = requests.post(base, data=finish_payload, timeout=60)
+    finish.raise_for_status()
+    return video_id
+
+
+def extract_video_frame(video_url):
+    """
+    Descarga el video a un archivo temporal y extrae un frame (segundo 1)
+    con ffmpeg, para usarlo como fallback de imagen cuando Facebook no
+    permite publicar video (Standard Access). Devuelve la ruta local del
+    .jpg generado; el caller es responsable de borrarlo despues.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_video:
+        video_path = tmp_video.name
+        resp = requests.get(video_url, timeout=120, stream=True)
+        resp.raise_for_status()
+        for chunk in resp.iter_content(chunk_size=1 << 20):
+            tmp_video.write(chunk)
+
+    frame_path = video_path.replace(".mp4", ".jpg")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", "1", "-i", video_path, "-frames:v", "1", "-q:v", "2", frame_path],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+    finally:
+        os.remove(video_path)
+
+    return frame_path
+
+
+def publish_facebook_photo_from_file(page_id, page_access_token, caption, file_path, location_id=None):
+    """Sube una imagen local (binaria) a la pagina, sin necesitar que tenga URL publica."""
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
+    payload = {"caption": caption, "access_token": page_access_token}
+    if location_id:
+        payload["place"] = location_id
+    with open(file_path, "rb") as f:
+        r = requests.post(url, data=payload, files={"source": f}, timeout=60)
+    r.raise_for_status()
+    return r.json().get("id") or r.json().get("post_id")
+
+
 def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None, media_type="image"):
     if media_url and media_type == "video":
-        app_id = get_app_id_from_token(page_access_token)
-        file_handle = upload_video_resumable(app_id, page_access_token, media_url)
-        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/videos"
-        payload = {
-            "fbuploader_video_file_chunk": file_handle,
-            "description": caption,
-            "access_token": page_access_token,
-        }
+        # Intento 1: endpoint dedicado de Reels.
+        try:
+            return publish_facebook_reel(page_id, page_access_token, caption, media_url, location_id)
+        except requests.HTTPError as e:
+            if not _is_video_permission_error(e):
+                raise
+
+        # Intento 2: endpoint clasico de /videos (resumable upload), por si
+        # el permiso se comporta distinto ahi. Si tambien falla por el mismo
+        # motivo de permisos, pasamos al fallback de imagen.
+        try:
+            app_id = get_app_id_from_token(page_access_token)
+            file_handle = upload_video_resumable(app_id, page_access_token, media_url)
+            url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/videos"
+            payload = {
+                "fbuploader_video_file_chunk": file_handle,
+                "description": caption,
+                "access_token": page_access_token,
+            }
+            if location_id:
+                payload["place"] = location_id
+            r = requests.post(url, data=payload, timeout=60)
+            r.raise_for_status()
+            return r.json().get("id") or r.json().get("post_id") or r.json().get("video_id")
+        except requests.HTTPError as e:
+            if not _is_video_permission_error(e):
+                raise
+
+        # Intento 3 (fallback definitivo): publicar un frame del video como foto.
+        # Cuando en el futuro se apruebe Advanced Access, los intentos 1/2 de
+        # arriba van a funcionar directo y este fallback nunca se va a activar.
+        frame_path = extract_video_frame(media_url)
+        try:
+            return publish_facebook_photo_from_file(page_id, page_access_token, caption, frame_path, location_id)
+        finally:
+            os.remove(frame_path)
+
     elif media_url:
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
         payload = {"url": media_url, "caption": caption, "access_token": page_access_token}
+        if location_id:
+            payload["place"] = location_id
+        r = requests.post(url, data=payload, timeout=60)
+        r.raise_for_status()
+        return r.json().get("id") or r.json().get("post_id") or r.json().get("video_id")
+
     else:
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/feed"
         payload = {"message": caption, "access_token": page_access_token}
-
-    if location_id:
-        payload["place"] = location_id
-
-    r = requests.post(url, data=payload, timeout=60)
-    r.raise_for_status()
-    return r.json().get("id") or r.json().get("post_id") or r.json().get("video_id")
+        if location_id:
+            payload["place"] = location_id
+        r = requests.post(url, data=payload, timeout=60)
+        r.raise_for_status()
+        return r.json().get("id") or r.json().get("post_id") or r.json().get("video_id")
 
 
 def publish_instagram(ig_business_id, page_access_token, caption, media_url, media_type="image", location_id=None):
