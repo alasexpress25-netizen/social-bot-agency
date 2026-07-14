@@ -70,6 +70,11 @@
   .status-failed{ color:var(--warn); }
   .status-pending, .status-publishing{ color:var(--muted); }
   small.hint{ color:var(--muted); display:block; margin-top:4px; }
+  .chart-wrap{ display:flex; align-items:flex-end; gap:6px; height:80px; padding:6px 0; }
+  .chart-bar-col{ flex:1; text-align:center; }
+  .chart-bar{ background:var(--accent); border-radius:3px 3px 0 0; margin:0 auto; width:70%; }
+  .chart-label{ font-size:10px; color:var(--muted); margin-top:4px; }
+  .metric-title{ font-size:12px; color:var(--muted); margin:10px 0 2px; }
 </style>
 </head>
 <body>
@@ -169,6 +174,51 @@ async function createClient(e){
   document.getElementById('newClientName').value = '';
   document.getElementById('newClientLink').value = '';
   loadClients();
+}
+
+// ---------------------------------------------------------------------------
+// FASE 4: Métricas — agrupa registros por semana (lunes a domingo, hora
+// local del navegador) y los renderiza como barras simples con CSS puro,
+// sin sumar ninguna libreria nueva. Mismo criterio que frontend/cliente.html.
+// ---------------------------------------------------------------------------
+function bucketByWeek(rows, dateField, weeks = 8, replyField = null){
+  const now = new Date();
+  const buckets = [];
+  for(let i = weeks - 1; i >= 0; i--){
+    const start = new Date(now);
+    const dow = (start.getDay() + 6) % 7; // 0=lunes .. 6=domingo
+    start.setHours(0,0,0,0);
+    start.setDate(start.getDate() - dow - (i * 7));
+    const end = new Date(start);
+    end.setDate(start.getDate() + 7);
+    buckets.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}`, count: 0, total: 0, replied: 0 });
+  }
+  (rows||[]).forEach(r => {
+    if(!r[dateField]) return;
+    const d = new Date(r[dateField]);
+    const b = buckets.find(b => d >= b.start && d < b.end);
+    if(!b) return;
+    b.count++;
+    if(replyField){ b.total++; if(r[replyField]) b.replied++; }
+  });
+  return buckets;
+}
+
+function renderBarChart(containerEl, buckets, { rate = false } = {}){
+  const values = buckets.map(b => rate ? (b.total ? Math.round((b.replied / b.total) * 100) : 0) : b.count);
+  const max = Math.max(1, ...values);
+  containerEl.innerHTML = `
+    <div class="chart-wrap">
+      ${buckets.map((b, i) => {
+        const value = values[i];
+        const h = Math.max(3, (value / max) * 70);
+        return `
+          <div class="chart-bar-col">
+            <div class="chart-bar" style="height:${h}px;" title="${b.label}: ${value}${rate ? '%' : ''}"></div>
+            <div class="chart-label">${b.label}</div>
+          </div>`;
+      }).join('')}
+    </div>`;
 }
 
 async function loadClients(){
@@ -334,6 +384,16 @@ async function loadClients(){
       </details>
 
       <details>
+        <summary>Métricas (últimas 8 semanas)</summary>
+        <div class="metric-title">Leads por semana</div>
+        <div id="chartLeads-${c.id}"></div>
+        <div class="metric-title">Posts publicados por semana</div>
+        <div id="chartPosts-${c.id}"></div>
+        <div class="metric-title">Tasa de respuesta automática (%)</div>
+        <div id="chartReplyRate-${c.id}"></div>
+      </details>
+
+      <details>
         <summary>Leads capturados (${(leads||[]).length}${leadsNuevos ? ` · ${leadsNuevos} sin contactar` : ''})</summary>
         ${(leads||[]).map(l => `
           <div class="card" style="margin-top:8px; padding:12px 14px;">
@@ -356,6 +416,20 @@ async function loadClients(){
       </details>
     `;
     container.appendChild(div);
+
+    // Metricas: se cargan aparte porque necesitan una tabla mas
+    // (interactions_log) que no se pidio arriba junto con el resto.
+    const { data: interactions } = await sb.from('socialbot_interactions_log')
+      .select('created_at, replied').eq('client_id', c.id);
+    const publishedPosts = (posts||[]).filter(p => p.status === 'published');
+    // posts de arriba viene limitado a 5 (para el listado); para el grafico
+    // de 8 semanas conviene traer el historial completo del cliente.
+    const { data: allPosts } = await sb.from('socialbot_posts')
+      .select('published_at').eq('client_id', c.id).eq('status', 'published');
+
+    renderBarChart(document.getElementById(`chartLeads-${c.id}`), bucketByWeek(leads, 'created_at'));
+    renderBarChart(document.getElementById(`chartPosts-${c.id}`), bucketByWeek(allPosts, 'published_at'));
+    renderBarChart(document.getElementById(`chartReplyRate-${c.id}`), bucketByWeek(interactions, 'created_at', 8, 'replied'), { rate: true });
   }
 }
 
