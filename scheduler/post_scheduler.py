@@ -5,10 +5,11 @@ Se ejecuta cada 15 minutos (via GitHub Actions cron) y para cada cliente
 activo que tenga un horario (schedule_slot) que coincida con la hora actual:
 
   1. Genera un texto nuevo con IA (OpenAI o Claude, segun ai_settings.provider)
-  2. Elige una imagen/video de la biblioteca del cliente (media_assets)
+  2. Elige una imagen/video/carrusel de la biblioteca del cliente (media_assets)
   3. Si el cliente tiene require_approval=true, guarda el post como pendiente
-     de aprobacion y NO publica todavia (el cliente lo aprueba/rechaza desde
-     su portal, frontend/cliente.html). Si no, publica directo como siempre.
+     de aprobacion y NO publica todavia (el cliente lo aprueba/rechaza, y
+     puede editar el texto, desde su portal, frontend/cliente.html). Si no,
+     publica directo como siempre.
   4. Publica en Facebook y/o Instagram via Meta Graph API
   5. Guarda el resultado en la tabla `posts` de Supabase
 
@@ -24,6 +25,7 @@ GitHub Secrets (claves generales: Supabase service key, OpenAI/Claude key).
 import os
 import sys
 import time
+import json
 import random
 import socket
 import subprocess
@@ -379,7 +381,41 @@ def publish_facebook_photo_from_file(page_id, page_access_token, caption, file_p
     return r.json().get("id") or r.json().get("post_id")
 
 
-def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None, media_type="image", fb_photo_override=None):
+def publish_facebook_carousel(page_id, page_access_token, caption, image_urls, location_id=None):
+    """
+    Publica varias imagenes juntas como un unico post ("carrusel") en la
+    Pagina de Facebook. Flujo oficial de 2 pasos:
+      1) Subir cada imagen como foto NO publicada (published=false) via
+         /{page-id}/photos -> queda "guardada" con un id, sin aparecer sola
+         en el feed.
+      2) Crear el post real en /{page-id}/feed adjuntando esas fotos con
+         attached_media[N]={"media_fbid": "<id>"}.
+    """
+    photo_ids = []
+    for url in image_urls:
+        r = requests.post(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos",
+            data={"url": url, "published": "false", "access_token": page_access_token},
+            timeout=60,
+        )
+        r.raise_for_status()
+        photo_ids.append(r.json()["id"])
+
+    payload = {"message": caption, "access_token": page_access_token}
+    for i, photo_id in enumerate(photo_ids):
+        payload[f"attached_media[{i}]"] = json.dumps({"media_fbid": photo_id})
+    if location_id:
+        payload["place"] = location_id
+
+    r2 = requests.post(f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/feed", data=payload, timeout=60)
+    r2.raise_for_status()
+    return r2.json().get("id") or r2.json().get("post_id")
+
+
+def publish_facebook(page_id, page_access_token, caption, media_url=None, location_id=None, media_type="image", fb_photo_override=None, carousel_urls=None):
+    if media_type == "carousel" and carousel_urls:
+        return publish_facebook_carousel(page_id, page_access_token, caption, carousel_urls, location_id)
+
     if media_url and media_type == "video":
         # Si el cliente cargo una foto manual especifica para Facebook (capturada
         # a mano en vez de depender del frame auto-extraido), la usamos directo y
@@ -458,7 +494,55 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
         return r.json().get("id") or r.json().get("post_id") or r.json().get("video_id")
 
 
-def publish_instagram(ig_business_id, page_access_token, caption, media_url, media_type="image", location_id=None):
+def publish_instagram_carousel(ig_business_id, page_access_token, caption, image_urls, location_id=None):
+    """
+    Publica un carrusel de imagenes en Instagram. Flujo oficial:
+      1) Crear un contenedor "hijo" por cada imagen, marcado como
+         is_carousel_item=true (NO se publica solo, queda a la espera).
+      2) Crear el contenedor "padre" de tipo CAROUSEL, apuntando a esos
+         hijos via 'children'.
+      3) Publicar el contenedor padre normalmente (media_publish).
+    Instagram exige entre 2 y 10 items para un carrusel.
+    """
+    if len(image_urls) < 2:
+        raise ValueError("Instagram requiere al menos 2 imagenes para un carrusel.")
+    if len(image_urls) > 10:
+        image_urls = image_urls[:10]
+
+    child_ids = []
+    for url in image_urls:
+        r = requests.post(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/media",
+            data={"image_url": url, "is_carousel_item": "true", "access_token": page_access_token},
+            timeout=60,
+        )
+        r.raise_for_status()
+        child_ids.append(r.json()["id"])
+
+    create_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/media"
+    payload = {
+        "caption": caption,
+        "media_type": "CAROUSEL",
+        "children": ",".join(child_ids),
+        "access_token": page_access_token,
+    }
+    if location_id:
+        payload["location_id"] = location_id
+
+    r = requests.post(create_url, data=payload, timeout=60)
+    r.raise_for_status()
+    creation_id = r.json()["id"]
+
+    publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/media_publish"
+    r2 = requests.post(publish_url, data={"creation_id": creation_id, "access_token": page_access_token}, timeout=60)
+    r2.raise_for_status()
+    return r2.json()["id"]
+
+
+def publish_instagram(ig_business_id, page_access_token, caption, media_url, media_type="image", location_id=None, carousel_urls=None):
+    if media_type == "carousel" and carousel_urls:
+        return publish_instagram_carousel(ig_business_id, page_access_token, caption, carousel_urls, location_id)
+
     if not media_url:
         raise ValueError("Instagram requiere si o si una imagen o video (media_url).")
 
@@ -501,12 +585,18 @@ def pick_media(client_id):
     return assets[0]
 
 
+def get_carousel_urls(media_asset_id):
+    items = sb_get("socialbot_carousel_items", {"media_asset_id": f"eq.{media_asset_id}", "order": "position.asc"})
+    return [it["url"] for it in items]
+
+
 def publish_approved_pending_posts():
     """
     Busca posts que quedaron en status='pending' (generados pero no
     publicados porque el cliente tenia require_approval=true) y cuyo
     approval_status ya paso a 'approved' desde el portal de cliente
-    (frontend/cliente.html), y los publica ahora. Los rechazados
+    (frontend/cliente.html) -- donde ademas pudo haber editado el texto
+    del caption antes de aprobar -- y los publica ahora. Los rechazados
     (approval_status='rejected') se ignoran para siempre: quedan como
     registro historico, sin publicarse nunca.
 
@@ -525,16 +615,16 @@ def publish_approved_pending_posts():
             continue
         account = accounts[0]
 
+        # Reconstruimos el media (si tiene) por referencia directa al
+        # media_asset_id guardado en el post -- ya no adivinamos por 'url',
+        # que ademas no alcanza para carruseles (no tienen una unica url).
         media = None
-        if post.get("media_url"):
-            # Reconstruimos el media_type/fb_photo_url original si el asset sigue
-            # existiendo, para no perder el comportamiento de fallback de video
-            # en Facebook (ver publish_facebook).
-            assets = sb_get(
-                "socialbot_media_assets",
-                {"url": f"eq.{post['media_url']}", "client_id": f"eq.{post['client_id']}", "limit": "1"},
-            )
+        if post.get("media_asset_id"):
+            assets = sb_get("socialbot_media_assets", {"id": f"eq.{post['media_asset_id']}"})
             media = assets[0] if assets else None
+
+        media_type = post.get("media_type") or (media.get("media_type") if media else "image") or "image"
+        carousel_urls = get_carousel_urls(media["id"]) if (media and media_type == "carousel") else None
 
         try:
             if account["platform"] == "facebook":
@@ -544,8 +634,9 @@ def publish_approved_pending_posts():
                     post["caption"],
                     post.get("media_url"),
                     media.get("location_id_override") if media else None,
-                    (media.get("media_type") if media else "image") or "image",
+                    media_type,
                     media.get("fb_photo_url") if media else None,
+                    carousel_urls,
                 )
             else:
                 external_id = publish_instagram(
@@ -553,8 +644,9 @@ def publish_approved_pending_posts():
                     account["page_access_token"],
                     post["caption"],
                     post.get("media_url"),
-                    (media.get("media_type") if media else "image") or "image",
+                    media_type,
                     media.get("location_id_override") if media else None,
+                    carousel_urls,
                 )
             sb_update(
                 "socialbot_posts",
@@ -646,6 +738,13 @@ def process_client(client_id):
     media_type = media["media_type"] if media else None
     media_published_ok = False
 
+    carousel_urls = None
+    if media and media_type == "carousel":
+        carousel_urls = get_carousel_urls(media["id"])
+        if len(carousel_urls) < 2:
+            print(f"Cliente {client['name']}: el carrusel elegido tiene menos de 2 imagenes cargadas, se salta esta corrida.")
+            return
+
     # Si el media tiene un caption_override cargado (texto fijo escrito a mano,
     # con hashtags y CTA incluidos), lo usamos tal cual y NO llamamos a la IA.
     # Si no, generamos un caption nuevo automaticamente como antes.
@@ -655,9 +754,10 @@ def process_client(client_id):
         caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
 
     # Si el cliente tiene aprobacion manual activada, el post se genera y se
-    # guarda esperando su decision, pero NO se publica en este momento.
-    # publish_approved_pending_posts() se encarga de publicarlo mas adelante,
-    # en la corrida en la que ya este aprobado.
+    # guarda esperando su decision (y puede editar el texto desde su portal),
+    # pero NO se publica en este momento. publish_approved_pending_posts() se
+    # encarga de publicarlo mas adelante, en la corrida en la que ya este
+    # aprobado.
     require_approval = client.get("require_approval", False)
 
     for account in accounts:
@@ -668,6 +768,8 @@ def process_client(client_id):
             "social_account_id": account["id"],
             "caption": caption,
             "media_url": media_url,
+            "media_asset_id": media["id"] if media else None,
+            "media_type": media_type,
             "status": "pending" if require_approval else "publishing",
             "approval_status": "pending" if require_approval else "approved",
             "scheduled_at": datetime.now(timezone.utc).isoformat(),
@@ -689,6 +791,7 @@ def process_client(client_id):
                     location_id,
                     media_type or "image",
                     fb_photo_override,
+                    carousel_urls,
                 )
             else:
                 external_id = publish_instagram(
@@ -698,6 +801,7 @@ def process_client(client_id):
                     media_url,
                     media_type or "image",
                     location_id,
+                    carousel_urls,
                 )
 
             sb_update(
