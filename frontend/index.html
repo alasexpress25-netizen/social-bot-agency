@@ -325,6 +325,8 @@ async function loadClients(){
             <input name="tone" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
           </div>
           <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
+          <label style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</label>
+          <textarea name="knowledge_base" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
           <textarea name="system_prompt" placeholder="Instrucciones para la IA">${ai.system_prompt||''}</textarea>
           <button type="submit">Guardar configuración</button>
         </form>
@@ -492,6 +494,7 @@ async function saveAi(e, clientId){
     provider: f.get('provider'),
     tone: f.get('tone'),
     topics: f.get('topics'),
+    knowledge_base: f.get('knowledge_base'),
     system_prompt: f.get('system_prompt'),
   }, { onConflict: 'client_id' });
   loadClients();
