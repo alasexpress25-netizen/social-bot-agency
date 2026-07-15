@@ -559,7 +559,7 @@ async function loadClients(){
 
       <details>
         <summary>Medios para publicar (${(media||[]).length})</summary>
-        <div>${(media||[]).map(m => `${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x${m.caption_override ? ' · caption fijo' : ' · caption con IA'}`).join('<br>') || 'sin medios cargados'}</div>
+        <div>${(media||[]).map(m => `${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x${m.caption_override ? ' · caption fijo' : ' · caption con IA'}${m.hashtags_override ? ' · hashtags fijos' : ''}`).join('<br>') || 'sin medios cargados'}</div>
         <form class="inline" onsubmit="addMedia(event, '${c.id}')">
           <select name="media_type" onchange="toggleMediaTypeFields(this)">
             <option value="video">Video / Reel</option>
@@ -569,7 +569,9 @@ async function loadClients(){
           <input name="url" placeholder="URL pública del video/imagen (https://...)" />
           <textarea name="carousel_urls" placeholder="Solo para carrusel: una URL de imagen por línea (entre 2 y 10)" style="display:none;"></textarea>
           <input name="fb_photo_url" placeholder="URL de foto para Facebook (opcional, solo si el medio de arriba es un video). Si la cargás, en Facebook se publica esta foto en vez del video." />
-          <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez. Incluí acá los hashtags si querés."></textarea>
+          <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez."></textarea>
+          <input name="hashtags_override" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta). Se agregan al final del caption fijo de arriba." />
+          <label class="meta-row" style="margin-top:0;">Si el cliente cargó su propio texto/hashtags fijos desde su portal, los del cliente tienen prioridad sobre estos.</label>
           <button type="submit">Agregar medio</button>
         </form>
       </details>
@@ -733,6 +735,7 @@ async function addMedia(e, clientId){
       url: null,
       media_type: 'carousel',
       caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
     }).select();
     if(error){ alert(error.message); return; }
     const assetId = createdAsset[0].id;
@@ -746,6 +749,7 @@ async function addMedia(e, clientId){
       url,
       media_type: mediaType,
       caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
       fb_photo_url: f.get('fb_photo_url') || null,
     });
   }
