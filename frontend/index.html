@@ -683,10 +683,44 @@ async function toggleActive(clientId, current){
 async function saveClientPortalAccess(e, clientId){
   e.preventDefault();
   const f = new FormData(e.target);
-  await sb.from('socialbot_clients').update({
-    client_email: f.get('client_email') || null,
+  const clientEmail = f.get('client_email');
+  
+  // Guardar email y require_approval en la BD
+  const { data: client, error } = await sb.from('socialbot_clients').update({
+    client_email: clientEmail || null,
     require_approval: f.get('require_approval') === 'on',
-  }).eq('id', clientId);
+  }).eq('id', clientId).select().single();
+  
+  if(error){
+    alert('Error al guardar: ' + error.message);
+    return;
+  }
+
+  // Si hay email, enviar magic link automático
+  if(clientEmail && clientEmail.trim()){
+    try {
+      const res = await fetch('https://redaqqxoeciycqgjhpbv.supabase.co/functions/v1/send-client-magic-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_email: clientEmail,
+          agency_name: 'LaVisualMk'
+        })
+      });
+      
+      if(res.ok){
+        alert(`Acceso guardado. Magic link enviado a ${clientEmail}`);
+      } else {
+        const err = await res.json();
+        alert(`Acceso guardado, pero no se pudo enviar el link: ${err.error || 'Error desconocido'}`);
+      }
+    } catch(err){
+      alert(`Acceso guardado, pero error al enviar link: ${(err as Error).message}`);
+    }
+  } else {
+    alert('Acceso guardado (sin email de cliente).');
+  }
+  
   loadClients();
 }
 
