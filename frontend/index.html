@@ -78,6 +78,26 @@
   .card.pending{ border-color:#d8c7a8; background:#fdfaf3; }
   .btn-row{ display:flex; gap:8px; margin-top:10px; }
   button.reject{ background:var(--warn); }
+  .kpi-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
+  .kpi-card{ background:var(--accent-soft); border-radius:var(--radius); padding:12px 14px; text-align:center; }
+  .kpi-value{ font-size:24px; font-weight:700; color:var(--accent); line-height:1.1; }
+  .kpi-label{ font-size:11.5px; color:var(--muted); margin-top:4px; }
+  .period-toggle{ display:flex; gap:6px; margin-bottom:12px; }
+  .period-toggle button{ background:transparent; color:var(--muted); border:1px solid var(--line); padding:5px 12px; font-size:12px; }
+  .period-toggle button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .hashtag-row{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .hashtag-chip{
+    display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
+    border-radius:99px; padding:3px 6px 3px 12px; font-size:12.5px; font-weight:600;
+  }
+  .hashtag-chip button{
+    background:none; border:none; color:var(--accent); padding:0 6px; font-size:14px; font-weight:700;
+    cursor:pointer; line-height:1; border-radius:50%;
+  }
+  .hashtag-chip button:hover{ background:rgba(61,90,76,0.18); }
+  .hashtag-add-row{ display:flex; gap:6px; margin-top:8px; }
+  .hashtag-add-row input{ flex:1; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; }
+  .hashtag-add-row button{ padding:6px 12px; font-size:12.5px; }
 </style>
 </head>
 <body>
@@ -180,35 +200,51 @@ async function createClient(e){
 }
 
 // ---------------------------------------------------------------------------
-// FASE 4: Métricas — agrupa registros por semana (lunes a domingo, hora
-// local del navegador) y los renderiza como barras simples con CSS puro,
-// sin sumar ninguna libreria nueva. Mismo criterio que frontend/cliente.html.
+// Métricas — agrupa registros por semana (lunes a domingo) o por mes
+// calendario, según el toggle Semanal/Mensual que elige la agencia por
+// cliente, y los renderiza como barras simples con CSS puro. Mismo criterio
+// (funciones espejo) en frontend/cliente.html.
 // ---------------------------------------------------------------------------
-function bucketByWeek(rows, dateField, weeks = 8, replyField = null){
+function buildPeriodBuckets(period){
   const now = new Date();
   const buckets = [];
-  for(let i = weeks - 1; i >= 0; i--){
-    const start = new Date(now);
-    const dow = (start.getDay() + 6) % 7; // 0=lunes .. 6=domingo
-    start.setHours(0,0,0,0);
-    start.setDate(start.getDate() - dow - (i * 7));
-    const end = new Date(start);
-    end.setDate(start.getDate() + 7);
-    buckets.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}`, count: 0, total: 0, replied: 0 });
+  if(period === 'month'){
+    for(let i = 5; i >= 0; i--){
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+      buckets.push({ start, end, label: start.toLocaleDateString('es-AR', { month:'short' }) });
+    }
+  } else {
+    for(let i = 7; i >= 0; i--){
+      const start = new Date(now);
+      const dow = (start.getDay() + 6) % 7; // 0=lunes .. 6=domingo
+      start.setHours(0,0,0,0);
+      start.setDate(start.getDate() - dow - (i * 7));
+      const end = new Date(start);
+      end.setDate(start.getDate() + 7);
+      buckets.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}` });
+    }
   }
+  return buckets;
+}
+
+function fillBuckets(buckets, rows, dateField, { replyField = null, sumField = null, filterFn = null } = {}){
+  buckets.forEach(b => { b.count = 0; b.total = 0; b.replied = 0; b.sum = 0; });
   (rows||[]).forEach(r => {
     if(!r[dateField]) return;
+    if(filterFn && !filterFn(r)) return;
     const d = new Date(r[dateField]);
     const b = buckets.find(b => d >= b.start && d < b.end);
     if(!b) return;
     b.count++;
     if(replyField){ b.total++; if(r[replyField]) b.replied++; }
+    if(sumField){ b.sum += (r[sumField] || 0); }
   });
   return buckets;
 }
 
-function renderBarChart(containerEl, buckets, { rate = false } = {}){
-  const values = buckets.map(b => rate ? (b.total ? Math.round((b.replied / b.total) * 100) : 0) : b.count);
+function renderBarChart(containerEl, buckets, { rate = false, sum = false } = {}){
+  const values = buckets.map(b => rate ? (b.total ? Math.round((b.replied / b.total) * 100) : 0) : (sum ? b.sum : b.count));
   const max = Math.max(1, ...values);
   containerEl.innerHTML = `
     <div class="chart-wrap">
@@ -222,6 +258,130 @@ function renderBarChart(containerEl, buckets, { rate = false } = {}){
           </div>`;
       }).join('')}
     </div>`;
+}
+
+// clientId -> 'week' | 'month'. Por defecto semanal.
+const metricPeriod = {};
+
+function setMetricPeriod(clientId, period){
+  metricPeriod[clientId] = period;
+  renderMetrics(clientId);
+}
+
+// KPIs reales que la agencia mira de un vistazo: consultas recibidas
+// (leads), clientes nuevos (leads con status='convertido') y me gusta
+// totales (suma de socialbot_post_metrics.likes de los posts publicados),
+// mas los 3 graficos de siempre, todo dentro de la ventana elegida
+// (ultimas 8 semanas o ultimos 6 meses).
+async function renderMetrics(clientId){
+  const period = metricPeriod[clientId] || 'week';
+  const buckets = buildPeriodBuckets(period);
+  const windowStartIso = buckets[0].start.toISOString();
+
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }] = await Promise.all([
+    sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+  ]);
+
+  const leadsRows = leads || [];
+  const postsRows = (postsWithMetrics||[]).map(p => ({
+    published_at: p.published_at,
+    likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
+  }));
+
+  const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
+  const convertedBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at', { filterFn: r => r.status === 'convertido' });
+  const postsBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at');
+  const likesBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at', { sumField: 'likes' });
+  const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactions || [], 'created_at', { replyField: 'replied' });
+
+  const totalLeads = leadsRows.length;
+  const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
+  const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
+  const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
+
+  const el = document.getElementById(`metrics-${clientId}`);
+  if(!el) return;
+  el.innerHTML = `
+    <div class="period-toggle">
+      <button class="${period==='week'?'active':''}" onclick="setMetricPeriod('${clientId}','week')">Semanal</button>
+      <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('${clientId}','month')">Mensual</button>
+    </div>
+    <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
+    <div class="kpi-row">
+      <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+    </div>
+    <div class="metric-title">Consultas recibidas</div>
+    <div id="chartLeads-${clientId}"></div>
+    <div class="metric-title">Clientes nuevos (convertidos)</div>
+    <div id="chartConverted-${clientId}"></div>
+    <div class="metric-title">Me gusta en publicaciones</div>
+    <div id="chartLikes-${clientId}"></div>
+    <div class="metric-title">Posts publicados</div>
+    <div id="chartPosts-${clientId}"></div>
+    <div class="metric-title">Tasa de respuesta automática (%)</div>
+    <div id="chartReplyRate-${clientId}"></div>
+  `;
+  renderBarChart(document.getElementById(`chartLeads-${clientId}`), leadsBuckets);
+  renderBarChart(document.getElementById(`chartConverted-${clientId}`), convertedBuckets);
+  renderBarChart(document.getElementById(`chartLikes-${clientId}`), likesBuckets, { sum: true });
+  renderBarChart(document.getElementById(`chartPosts-${clientId}`), postsBuckets);
+  renderBarChart(document.getElementById(`chartReplyRate-${clientId}`), replyBuckets, { rate: true });
+}
+
+// ---------------------------------------------------------------------------
+// Editor de hashtags reutilizable (chips con boton de borrar + input para
+// agregar). Los hashtags se guardan como texto separado por espacios (mismo
+// formato que ya usa content_planner.py / socialbot_ai_settings.default_hashtags
+// / socialbot_content_plan_items.hashtags), en un <input type="hidden"> que
+// despues cada form/boton "Guardar" lee y persiste en Supabase.
+// ---------------------------------------------------------------------------
+function hashtagsToArray(str){
+  return (str||'').split(/\s+/).map(t => t.trim()).filter(Boolean).map(t => t.startsWith('#') ? t : '#'+t);
+}
+
+function hashtagEditorHtml(fieldId, hashtagsStr){
+  return `
+    <input type="hidden" name="default_hashtags" id="${fieldId}" value="${(hashtagsStr||'').replace(/"/g,'&quot;')}" />
+    <div class="hashtag-row" id="${fieldId}-chips"></div>
+    <div class="hashtag-add-row">
+      <input type="text" id="${fieldId}-input" placeholder="Agregar hashtag (ej: marketing)"
+        onkeydown="if(event.key==='Enter'){ event.preventDefault(); addHashtag('${fieldId}'); }" />
+      <button type="button" class="secondary" onclick="addHashtag('${fieldId}')">+ Agregar</button>
+    </div>`;
+}
+
+function renderHashtagChips(fieldId){
+  const hidden = document.getElementById(fieldId);
+  const chipsEl = document.getElementById(`${fieldId}-chips`);
+  if(!hidden || !chipsEl) return;
+  const tags = hashtagsToArray(hidden.value);
+  chipsEl.innerHTML = tags.map(t => `
+    <span class="hashtag-chip">${t}<button type="button" title="Quitar" onclick="removeHashtag('${fieldId}', '${t.replace(/'/g,"\\'")}')">&times;</button></span>
+  `).join('') || '<span class="meta-row" style="margin-top:0;">sin hashtags todavía</span>';
+}
+
+function addHashtag(fieldId){
+  const input = document.getElementById(`${fieldId}-input`);
+  let val = (input.value || '').trim();
+  if(!val) return;
+  if(!val.startsWith('#')) val = '#' + val;
+  val = val.replace(/\s+/g, '');
+  const hidden = document.getElementById(fieldId);
+  const tags = hashtagsToArray(hidden.value);
+  if(!tags.includes(val)) tags.push(val);
+  hidden.value = tags.join(' ');
+  input.value = '';
+  renderHashtagChips(fieldId);
+}
+
+function removeHashtag(fieldId, tag){
+  const hidden = document.getElementById(fieldId);
+  hidden.value = hashtagsToArray(hidden.value).filter(t => t !== tag).join(' ');
+  renderHashtagChips(fieldId);
 }
 
 async function loadClients(){
@@ -302,13 +462,17 @@ async function loadClients(){
             </div>
             ${item.based_on ? `<div class="meta-row" style="font-style:italic; margin-bottom:8px;">${item.based_on}</div>` : ''}
             <textarea id="plan-caption-${item.id}" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
+            <label style="font-size:12px; color:var(--muted); display:block; margin-top:8px;">Hashtags de este post (los propuso la IA — editalos, borralos, o agregá los tuyos antes de aprobar)</label>
+            ${item.status === 'approved'
+              ? `<div class="hashtag-row">${hashtagsToArray(item.hashtags).map(t => `<span class="hashtag-chip" style="padding:3px 12px;">${t}</span>`).join('') || '<span class="meta-row" style="margin-top:0;">sin hashtags</span>'}</div>`
+              : hashtagEditorHtml(`plan-hashtags-${item.id}`, item.hashtags)}
             <div class="btn-row">
               ${item.status === 'approved' ? `
                 <button class="secondary" onclick="reviewContentPlanItem('${item.id}', 'proposed')">Volver a editar</button>
                 <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
               ` : `
-                <button class="secondary" onclick="saveContentPlanCaption('${item.id}')">Guardar texto</button>
-                <button onclick="reviewContentPlanItem('${item.id}', 'approved')">Aprobar</button>
+                <button class="secondary" onclick="saveContentPlanItem('${item.id}')">Guardar cambios</button>
+                <button onclick="reviewContentPlanItem('${item.id}', 'approved')">Aprobar (se publica con este texto y estos hashtags)</button>
                 <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
               `}
             </div>
@@ -362,6 +526,8 @@ async function loadClients(){
             <option value="claude" ${ai.content_plan_provider==='claude'?'selected':''}>Claude</option>
           </select>
           <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
+          <label style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando 2-4 propios del tema del día</label>
+          ${hashtagEditorHtml(`hashtags-${c.id}`, ai.default_hashtags)}
           <label style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</label>
           <textarea name="knowledge_base" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
           <textarea name="system_prompt" placeholder="Instrucciones para la IA">${ai.system_prompt||''}</textarea>
@@ -444,14 +610,9 @@ async function loadClients(){
         <div>${(posts||[]).map(p => `<div class="status-${p.status}">[${p.status}] ${(p.caption||'').slice(0,80)}...</div>`).join('') || 'todavía no hay publicaciones'}</div>
       </details>
 
-      <details>
-        <summary>Métricas (últimas 8 semanas)</summary>
-        <div class="metric-title">Leads por semana</div>
-        <div id="chartLeads-${c.id}"></div>
-        <div class="metric-title">Posts publicados por semana</div>
-        <div id="chartPosts-${c.id}"></div>
-        <div class="metric-title">Tasa de respuesta automática (%)</div>
-        <div id="chartReplyRate-${c.id}"></div>
+      <details open>
+        <summary>Métricas</summary>
+        <div id="metrics-${c.id}"></div>
       </details>
 
       <details>
@@ -478,19 +639,15 @@ async function loadClients(){
     `;
     container.appendChild(div);
 
-    // Metricas: se cargan aparte porque necesitan una tabla mas
-    // (interactions_log) que no se pidio arriba junto con el resto.
-    const { data: interactions } = await sb.from('socialbot_interactions_log')
-      .select('created_at, replied').eq('client_id', c.id);
-    const publishedPosts = (posts||[]).filter(p => p.status === 'published');
-    // posts de arriba viene limitado a 5 (para el listado); para el grafico
-    // de 8 semanas conviene traer el historial completo del cliente.
-    const { data: allPosts } = await sb.from('socialbot_posts')
-      .select('published_at').eq('client_id', c.id).eq('status', 'published');
+    // Los chips de hashtags se pintan despues de insertar el HTML (necesitan
+    // que el <input type="hidden"> ya exista en el DOM).
+    renderHashtagChips(`hashtags-${c.id}`);
+    (planItems||[]).filter(item => item.status !== 'approved').forEach(item => renderHashtagChips(`plan-hashtags-${item.id}`));
 
-    renderBarChart(document.getElementById(`chartLeads-${c.id}`), bucketByWeek(leads, 'created_at'));
-    renderBarChart(document.getElementById(`chartPosts-${c.id}`), bucketByWeek(allPosts, 'published_at'));
-    renderBarChart(document.getElementById(`chartReplyRate-${c.id}`), bucketByWeek(interactions, 'created_at', 8, 'replied'), { rate: true });
+    // Metricas: se cargan aparte (funcion propia) porque tienen su propio
+    // toggle semanal/mensual y se re-renderizan solas sin recargar toda
+    // la tarjeta del cliente cuando se cambia el periodo.
+    renderMetrics(c.id);
   }
 }
 
@@ -531,6 +688,7 @@ async function saveAi(e, clientId){
     provider: f.get('provider'),
     content_plan_provider: f.get('content_plan_provider'),
     tone: f.get('tone'),
+    default_hashtags: f.get('default_hashtags'),
     topics: f.get('topics'),
     knowledge_base: f.get('knowledge_base'),
     system_prompt: f.get('system_prompt'),
@@ -656,11 +814,13 @@ async function saveCaptionAsAgency(postId){
 // content_plan_items" (0013_content_plan.sql) le da UPDATE directo, sin
 // necesitar ninguna función RPC.
 // ---------------------------------------------------------------------------
-async function saveContentPlanCaption(itemId){
-  const value = document.getElementById(`plan-caption-${itemId}`).value;
-  const { error } = await sb.from('socialbot_content_plan_items').update({ caption: value }).eq('id', itemId);
+async function saveContentPlanItem(itemId){
+  const caption = document.getElementById(`plan-caption-${itemId}`).value;
+  const hashtagsField = document.getElementById(`plan-hashtags-${itemId}`);
+  const hashtags = hashtagsField ? hashtagsField.value : undefined;
+  const { error } = await sb.from('socialbot_content_plan_items').update({ caption, hashtags }).eq('id', itemId);
   if(error){ alert(error.message); return; }
-  alert('Texto guardado.');
+  alert('Texto y hashtags guardados.');
 }
 
 async function reviewContentPlanItem(itemId, status){

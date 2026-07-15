@@ -59,6 +59,26 @@
   .chart-bar{ background:var(--accent); border-radius:3px 3px 0 0; margin:0 auto; width:70%; }
   .chart-label{ font-size:10px; color:var(--muted); margin-top:4px; }
   .metric-title{ font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .kpi-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
+  .kpi-card{ background:var(--accent-soft); border-radius:var(--radius); padding:12px 14px; text-align:center; }
+  .kpi-value{ font-size:22px; font-weight:700; color:var(--accent); line-height:1.1; }
+  .kpi-label{ font-size:11px; color:var(--muted); margin-top:4px; }
+  .period-toggle{ display:flex; gap:6px; margin-bottom:12px; }
+  .period-toggle button{ background:transparent; color:var(--muted); border:1px solid var(--line); padding:5px 12px; font-size:12px; }
+  .period-toggle button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .hashtag-row{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .hashtag-chip{
+    display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
+    border-radius:99px; padding:3px 6px 3px 12px; font-size:12.5px; font-weight:600;
+  }
+  .hashtag-chip button{
+    background:none; border:none; color:var(--accent); padding:0 6px; font-size:14px; font-weight:700;
+    cursor:pointer; line-height:1; border-radius:50%;
+  }
+  .hashtag-chip button:hover{ background:rgba(61,90,76,0.18); }
+  .hashtag-add-row{ display:flex; gap:6px; margin-top:8px; }
+  .hashtag-add-row input{ flex:1; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; }
+  .hashtag-add-row button{ padding:6px 12px; font-size:12.5px; }
 </style>
 </head>
 <body>
@@ -109,19 +129,8 @@
 
     <section>
       <h2>Métricas</h2>
-      <p class="section-hint">Últimas 8 semanas: contactos interesados que llegaron, publicaciones que salieron bien, y qué tan seguido el sistema respondió automáticamente a comentarios/DMs.</p>
-      <div class="card">
-        <div class="metric-title">Contactos interesados por semana</div>
-        <div id="chartLeads"></div>
-      </div>
-      <div class="card">
-        <div class="metric-title">Publicaciones por semana</div>
-        <div id="chartPosts"></div>
-      </div>
-      <div class="card">
-        <div class="metric-title">Tasa de respuesta automática (%)</div>
-        <div id="chartReplyRate"></div>
-      </div>
+      <p class="section-hint">Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.</p>
+      <div id="metricsBox"></div>
     </section>
 
     <section>
@@ -139,6 +148,14 @@
           <input id="toneInput" placeholder="ej: cercano y profesional" />
           <label style="font-size:13px; color:var(--muted);">Temas / palabras clave del negocio</label>
           <textarea id="topicsInput" placeholder="ej: cursos online, marketing digital"></textarea>
+          <label style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando algunos propios del tema del día</label>
+          <input type="hidden" id="hashtagsField" />
+          <div class="hashtag-row" id="hashtagsField-chips"></div>
+          <div class="hashtag-add-row">
+            <input type="text" id="hashtagsField-input" placeholder="Agregar hashtag (ej: marketing)"
+              onkeydown="if(event.key==='Enter'){ event.preventDefault(); addHashtag(); }" />
+            <button type="button" class="secondary" onclick="addHashtag()">+ Agregar</button>
+          </div>
           <button type="submit">Guardar preferencias</button>
         </form>
       </div>
@@ -236,6 +253,44 @@ async function boot(){
 
 async function loadAll(){
   await Promise.all([loadPending(), loadPosts(), loadLeads(), loadAiPrefs(), loadMetrics()]);
+}
+
+// ---------------------------------------------------------------------------
+// Editor de hashtags de marca (chips + agregar/quitar). Se guardan como
+// texto separado por espacios en un <input type="hidden">, y se persisten
+// via RPC client_update_hashtags cuando se envía el form de preferencias
+// (mismo patrón que frontend/index.html, pero acá solo hay un campo).
+// ---------------------------------------------------------------------------
+function hashtagsToArray(str){
+  return (str||'').split(/\s+/).map(t => t.trim()).filter(Boolean).map(t => t.startsWith('#') ? t : '#'+t);
+}
+
+function renderHashtagChips(){
+  const hidden = document.getElementById('hashtagsField');
+  const tags = hashtagsToArray(hidden.value);
+  document.getElementById('hashtagsField-chips').innerHTML = tags.map(t => `
+    <span class="hashtag-chip">${t}<button type="button" title="Quitar" onclick="removeHashtag('${t.replace(/'/g,"\\'")}')">&times;</button></span>
+  `).join('') || '<span class="empty" style="padding:0;">sin hashtags todavía</span>';
+}
+
+function addHashtag(){
+  const input = document.getElementById('hashtagsField-input');
+  let val = (input.value || '').trim();
+  if(!val) return;
+  if(!val.startsWith('#')) val = '#' + val;
+  val = val.replace(/\s+/g, '');
+  const hidden = document.getElementById('hashtagsField');
+  const tags = hashtagsToArray(hidden.value);
+  if(!tags.includes(val)) tags.push(val);
+  hidden.value = tags.join(' ');
+  input.value = '';
+  renderHashtagChips();
+}
+
+function removeHashtag(tag){
+  const hidden = document.getElementById('hashtagsField');
+  hidden.value = hashtagsToArray(hidden.value).filter(t => t !== tag).join(' ');
+  renderHashtagChips();
 }
 
 function escapeHtml(str){
@@ -355,48 +410,70 @@ async function loadAiPrefs(){
   const ai = (rows && rows[0]) || {};
   document.getElementById('toneInput').value = ai.tone || '';
   document.getElementById('topicsInput').value = ai.topics || '';
+  document.getElementById('hashtagsField').value = ai.default_hashtags || '';
+  renderHashtagChips();
 }
 
 async function saveAiPrefs(e){
   e.preventDefault();
-  const { error } = await sb.rpc('client_update_ai_prefs', {
+  const { error: prefsError } = await sb.rpc('client_update_ai_prefs', {
     p_tone: document.getElementById('toneInput').value,
     p_topics: document.getElementById('topicsInput').value,
   });
-  if(error){ alert(error.message); return; }
+  if(prefsError){ alert(prefsError.message); return; }
+  const { error: hashtagsError } = await sb.rpc('client_update_hashtags', {
+    p_hashtags: document.getElementById('hashtagsField').value,
+  });
+  if(hashtagsError){ alert(hashtagsError.message); return; }
   alert('Preferencias guardadas.');
 }
 
 // ---------------------------------------------------------------------------
-// FASE 4: Métricas — agrupa registros por semana (lunes a domingo, hora
-// local del navegador) y los renderiza como barras simples con CSS puro,
-// sin sumar ninguna libreria nueva.
+// Métricas — agrupa registros por semana (lunes a domingo) o por mes
+// calendario, segun el toggle Semanal/Mensual, y los renderiza como barras
+// simples con CSS puro. Mismo criterio (funciones espejo) que
+// frontend/index.html.
 // ---------------------------------------------------------------------------
-function bucketByWeek(rows, dateField, weeks = 8, replyField = null){
+function buildPeriodBuckets(period){
   const now = new Date();
   const buckets = [];
-  for(let i = weeks - 1; i >= 0; i--){
-    const start = new Date(now);
-    const dow = (start.getDay() + 6) % 7; // 0=lunes .. 6=domingo
-    start.setHours(0,0,0,0);
-    start.setDate(start.getDate() - dow - (i * 7));
-    const end = new Date(start);
-    end.setDate(start.getDate() + 7);
-    buckets.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}`, count: 0, total: 0, replied: 0 });
+  if(period === 'month'){
+    for(let i = 5; i >= 0; i--){
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+      buckets.push({ start, end, label: start.toLocaleDateString('es-AR', { month:'short' }) });
+    }
+  } else {
+    for(let i = 7; i >= 0; i--){
+      const start = new Date(now);
+      const dow = (start.getDay() + 6) % 7; // 0=lunes .. 6=domingo
+      start.setHours(0,0,0,0);
+      start.setDate(start.getDate() - dow - (i * 7));
+      const end = new Date(start);
+      end.setDate(start.getDate() + 7);
+      buckets.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}` });
+    }
   }
+  return buckets;
+}
+
+function fillBuckets(buckets, rows, dateField, { replyField = null, sumField = null, filterFn = null } = {}){
+  buckets.forEach(b => { b.count = 0; b.total = 0; b.replied = 0; b.sum = 0; });
   (rows||[]).forEach(r => {
     if(!r[dateField]) return;
+    if(filterFn && !filterFn(r)) return;
     const d = new Date(r[dateField]);
     const b = buckets.find(b => d >= b.start && d < b.end);
     if(!b) return;
     b.count++;
     if(replyField){ b.total++; if(r[replyField]) b.replied++; }
+    if(sumField){ b.sum += (r[sumField] || 0); }
   });
   return buckets;
 }
 
-function renderBarChart(containerEl, buckets, { rate = false } = {}){
-  const values = buckets.map(b => rate ? (b.total ? Math.round((b.replied / b.total) * 100) : 0) : b.count);
+function renderBarChart(containerEl, buckets, { rate = false, sum = false } = {}){
+  const values = buckets.map(b => rate ? (b.total ? Math.round((b.replied / b.total) * 100) : 0) : (sum ? b.sum : b.count));
   const max = Math.max(1, ...values);
   containerEl.innerHTML = `
     <div class="chart-wrap">
@@ -412,17 +489,82 @@ function renderBarChart(containerEl, buckets, { rate = false } = {}){
     </div>`;
 }
 
-async function loadMetrics(){
-  const { data: leads } = await sb.from('socialbot_leads')
-    .select('created_at').eq('client_id', currentClient.id);
-  const { data: posts } = await sb.from('socialbot_posts')
-    .select('published_at').eq('client_id', currentClient.id).eq('status', 'published');
-  const { data: interactions } = await sb.from('socialbot_interactions_log')
-    .select('created_at, replied').eq('client_id', currentClient.id);
+let metricPeriod = 'week';
 
-  renderBarChart(document.getElementById('chartLeads'), bucketByWeek(leads, 'created_at'));
-  renderBarChart(document.getElementById('chartPosts'), bucketByWeek(posts, 'published_at'));
-  renderBarChart(document.getElementById('chartReplyRate'), bucketByWeek(interactions, 'created_at', 8, 'replied'), { rate: true });
+function setMetricPeriod(period){
+  metricPeriod = period;
+  loadMetrics();
+}
+
+// KPIs reales: consultas recibidas (leads), clientes nuevos (leads con
+// status='convertido') y me gusta totales de los posts publicados, mas los
+// graficos, todo dentro de la ventana elegida (8 semanas o 6 meses).
+async function loadMetrics(){
+  const period = metricPeriod;
+  const buckets = buildPeriodBuckets(period);
+  const windowStartIso = buckets[0].start.toISOString();
+
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }] = await Promise.all([
+    sb.from('socialbot_leads').select('created_at, status').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
+  ]);
+
+  const leadsRows = leads || [];
+  const postsRows = (postsWithMetrics||[]).map(p => ({
+    published_at: p.published_at,
+    likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
+  }));
+
+  const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
+  const convertedBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at', { filterFn: r => r.status === 'convertido' });
+  const postsBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at');
+  const likesBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at', { sumField: 'likes' });
+  const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactions || [], 'created_at', { replyField: 'replied' });
+
+  const totalLeads = leadsRows.length;
+  const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
+  const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
+  const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
+
+  const el = document.getElementById('metricsBox');
+  el.innerHTML = `
+    <div class="period-toggle">
+      <button class="${period==='week'?'active':''}" onclick="setMetricPeriod('week')">Semanal</button>
+      <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('month')">Mensual</button>
+    </div>
+    <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
+    <div class="kpi-row">
+      <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+    </div>
+    <div class="card">
+      <div class="metric-title">Consultas recibidas</div>
+      <div id="chartLeads"></div>
+    </div>
+    <div class="card">
+      <div class="metric-title">Clientes nuevos (convertidos)</div>
+      <div id="chartConverted"></div>
+    </div>
+    <div class="card">
+      <div class="metric-title">Me gusta en publicaciones</div>
+      <div id="chartLikes"></div>
+    </div>
+    <div class="card">
+      <div class="metric-title">Publicaciones</div>
+      <div id="chartPosts"></div>
+    </div>
+    <div class="card">
+      <div class="metric-title">Tasa de respuesta automática (%)</div>
+      <div id="chartReplyRate"></div>
+    </div>
+  `;
+  renderBarChart(document.getElementById('chartLeads'), leadsBuckets);
+  renderBarChart(document.getElementById('chartConverted'), convertedBuckets);
+  renderBarChart(document.getElementById('chartLikes'), likesBuckets, { sum: true });
+  renderBarChart(document.getElementById('chartPosts'), postsBuckets);
+  renderBarChart(document.getElementById('chartReplyRate'), replyBuckets, { rate: true });
 }
 
 boot();
