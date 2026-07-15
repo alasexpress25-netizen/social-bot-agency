@@ -91,4 +91,32 @@ async function reviewContentPlanItem(itemId, status){
   loadClients();
 }
 
-boot();
+--------------------------------------------------------------------------
+INSERCIÓN 4 — selector del provider separado para el plan semanal, dentro
+del <details> "Configurar IA" que ya existe, al lado del selector de
+`provider`. Así la agencia puede elegir, por ejemplo, comentarios en Groq
+pero plan semanal en OpenAI, sin que compitan por la misma cuota.
+--------------------------------------------------------------------------
+
+BUSCAR (ya existe, dentro de saveAi):
+          <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
+
+AGREGAR ANTES de esa línea:
+          <label style="font-size:13px; color:var(--muted);">Modelo para el plan semanal de contenido (Fase 6) — independiente del de arriba, para no compartir cuota gratuita con las respuestas automáticas</label>
+          <select name="content_plan_provider">
+            <option value="groq" ${ai.content_plan_provider==='groq'?'selected':''}>Groq (gratis)</option>
+            <option value="openai" ${ai.content_plan_provider==='openai'?'selected':''}>OpenAI</option>
+            <option value="claude" ${ai.content_plan_provider==='claude'?'selected':''}>Claude</option>
+          </select>
+          <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
+
+Y en la función saveAi(e, clientId), donde arma el objeto para el upsert:
+
+BUSCAR:
+  await sb.from('socialbot_ai_settings').upsert({
+    client_id: clientId,
+    provider: f.get('provider'),
+    tone: f.get('tone'),
+
+AGREGAR (una línea, justo después de "provider: f.get('provider'),"):
+    content_plan_provider: f.get('content_plan_provider'),
