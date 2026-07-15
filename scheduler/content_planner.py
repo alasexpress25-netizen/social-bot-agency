@@ -289,23 +289,24 @@ def build_prompt(client, ai_settings, context, num_days):
 
     if default_hashtags:
         parts.append(
-            f"Hashtags de marca fijos que la agencia ya tiene cargados (usalos como base en TODAS las ideas, sumando 2-4 propios del tema del dia): {default_hashtags}. "
-            "El campo \"hashtags\" de CADA idea es OBLIGATORIO, nunca lo dejes vacio: incluí ahí los de marca mas los 2-4 del tema del dia."
+            f"Hashtags de marca fijos que la agencia ya tiene cargados (usalos como base en TODAS las ideas, sumando 2-4 propios del tema del dia): {default_hashtags}."
         )
     else:
         parts.append(
-            "Todavia no hay hashtags de marca cargados -- el campo \"hashtags\" de CADA idea es OBLIGATORIO, nunca lo dejes vacio: "
-            "proponé vos 5-8 hashtags relevantes en español para esa idea puntual, mezclando genericos del rubro con algo puntual del tema del dia "
-            "(ej: \"#marketingdigital #redessociales #pymes\")."
+            "Todavia no hay hashtags de marca cargados -- proponé vos 5-8 hashtags relevantes en español para cada idea, "
+            "mezclando genericos del rubro con algo puntual del tema del dia."
         )
 
     parts.append(
         f"Generá exactamente {num_days} ideas de post, una por cada dia sugerido (day_offset de 0 a {num_days - 1}, "
         f"0 = el primer dia de publicacion de esta semana, en orden creciente, sin repetir offset). "
-        f"Cada caption debe tener como maximo {max_chars} caracteres, sin markdown ni asteriscos, sin hashtags adentro (van aparte), "
+        f"Cada caption debe tener como maximo {max_chars} caracteres SIN CONTAR los hashtags, sin markdown ni asteriscos, "
         f"con un cierre que invite EXPLICITAMENTE a comentar UNA palabra clave concreta y corta (una sola palabra, en mayusculas, ej: "
         f"\"Comentá INFO y te paso el link 💬\") para recibir el link de compra, sin poner el link directo en el texto. "
-        f"Esa misma palabra (en minuscula, sin tildes ni signos) va tambien en el campo \"keyword\" del JSON, EXACTAMENTE la que aparece en el caption. "
+        f"IMPORTANTE: los hashtags van DENTRO del mismo campo \"caption\" (no en un campo aparte), como el ultimo renglon del texto, "
+        f"separados del resto por un salto de linea en blanco. Ejemplo de como debe terminar el campo \"caption\" completo: "
+        f"\"...Comentá INFO y te paso el link 💬\\n\\n#hashtag1 #hashtag2 #hashtag3\". Esto es obligatorio en TODAS las ideas, sin excepcion. "
+        f"Esa misma palabra clave (en minuscula, sin tildes ni signos) va tambien en el campo \"keyword\" del JSON, EXACTAMENTE la que aparece en el caption. "
         f"Variá la palabra clave entre ideas de la semana si tiene sentido (no hace falta que sea siempre la misma). "
         f"Variá el angulo entre ideas (no repitas el mismo gancho dos veces en la misma semana)."
     )
@@ -320,10 +321,10 @@ def build_prompt(client, ai_settings, context, num_days):
         'Respondé EXCLUSIVAMENTE con un JSON valido (sin texto antes ni despues, sin markdown, sin ```), con esta forma exacta: '
         '{"ideas": [{"day_offset": 0, "angle": "<angulo/pilar en pocas palabras>", '
         '"based_on": "<por que se sugiere esto, en una frase corta y concreta, citando el dato real: lead, metrica o vacio de contenido>", '
-        '"caption": "<texto final del post, con el cierre que invita a comentar la palabra clave>", '
+        '"caption": "<texto final del post, terminando con los hashtags en el ultimo renglon>", '
         '"keyword": "<la palabra clave del cierre, en minuscula, una sola palabra>", '
         '"reply_template": "<respuesta automatica para esa palabra clave, con {{sales_link}} donde va el link>", '
-        '"hashtags": "<OBLIGATORIO, nunca vacio: hashtags de este post, separados por espacio, cada uno con #, minimo 3>"}]}'
+        '"hashtags": "<opcional -- dejalo vacio si ya pusiste los hashtags al final del caption, que es lo esperado>"}]}'
     )
 
     return system_prompt, " ".join(parts)
@@ -352,6 +353,27 @@ def fallback_hashtags(default_hashtags, topics):
             if tag and tag not in tags:
                 tags.append(tag)
     return " ".join(tags[:8])
+
+
+# Hashtags como ultimo renglon del propio "caption" (ver instruccion en
+# build_prompt): mas confiable que un campo JSON aparte porque es parte del
+# contenido principal que el modelo SI redacta siempre, en vez de un campo
+# secundario que se salta con facilidad (ver charla 15/07/2026 -- con Groq
+# quedaba vacio en las 7 ideas de la semana). Reconoce el(los) ultimo(s)
+# renglon(es) compuestos SOLO por tokens que empiezan con #, y los separa
+# del texto del post.
+_HASHTAG_LINE_RE = re.compile(r"(?:\n[ \t]*)+((?:#\S+)(?:\s+#\S+)*)\s*$")
+
+
+def split_caption_and_hashtags(raw_caption):
+    raw_caption = (raw_caption or "").strip()
+    match = _HASHTAG_LINE_RE.search(raw_caption)
+    if match:
+        hashtags = match.group(1).strip()
+        caption = raw_caption[: match.start()].strip()
+        if caption:
+            return caption, hashtags
+    return raw_caption, ""
 
 
 def generate_plan_for_client(client):
@@ -411,7 +433,8 @@ def generate_plan_for_client(client):
         # despues, al aprobar el item, coincida exactamente con la palabra
         # que el caption invita a comentar y con lo que matchea meta-webhook.
         keyword = (idea.get("keyword") or "").strip().lower() or None
-        hashtags_val = (idea.get("hashtags") or "").strip()
+        clean_caption, extracted_hashtags = split_caption_and_hashtags(idea["caption"])
+        hashtags_val = extracted_hashtags or (idea.get("hashtags") or "").strip()
         if not hashtags_val:
             hashtags_val = fallback_hashtags(ai_settings.get("default_hashtags") or "", ai_settings.get("topics") or "")
         rows.append(
@@ -421,7 +444,7 @@ def generate_plan_for_client(client):
                 "target_date": target_date.isoformat(),
                 "angle": (idea.get("angle") or "")[:200] or None,
                 "based_on": (idea.get("based_on") or "")[:400] or None,
-                "caption": idea["caption"].strip(),
+                "caption": clean_caption,
                 "keyword": keyword,
                 "reply_template": (idea.get("reply_template") or "").strip() or None,
                 "hashtags": hashtags_val or None,
