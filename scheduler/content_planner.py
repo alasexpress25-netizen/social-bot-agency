@@ -37,7 +37,9 @@ primero.
 
 import os
 import json
+import re
 import socket
+import unicodedata
 import requests
 from datetime import datetime, timezone, timedelta
 
@@ -286,9 +288,16 @@ def build_prompt(client, ai_settings, context, num_days):
         parts.append("No hay posts publicados en los ultimos 30 dias con metricas disponibles todavia -- proponé variedad de angulos sin depender de datos de performance.")
 
     if default_hashtags:
-        parts.append(f"Hashtags de marca fijos que la agencia ya tiene cargados (usalos como base en TODAS las ideas, sumando 2-4 propios del tema del dia): {default_hashtags}.")
+        parts.append(
+            f"Hashtags de marca fijos que la agencia ya tiene cargados (usalos como base en TODAS las ideas, sumando 2-4 propios del tema del dia): {default_hashtags}. "
+            "El campo \"hashtags\" de CADA idea es OBLIGATORIO, nunca lo dejes vacio: incluí ahí los de marca mas los 2-4 del tema del dia."
+        )
     else:
-        parts.append("Todavia no hay hashtags de marca cargados -- proponé vos 5-8 hashtags relevantes en español, mezclando genericos del rubro con algo puntual del tema del dia.")
+        parts.append(
+            "Todavia no hay hashtags de marca cargados -- el campo \"hashtags\" de CADA idea es OBLIGATORIO, nunca lo dejes vacio: "
+            "proponé vos 5-8 hashtags relevantes en español para esa idea puntual, mezclando genericos del rubro con algo puntual del tema del dia "
+            "(ej: \"#marketingdigital #redessociales #pymes\")."
+        )
 
     parts.append(
         f"Generá exactamente {num_days} ideas de post, una por cada dia sugerido (day_offset de 0 a {num_days - 1}, "
@@ -314,10 +323,35 @@ def build_prompt(client, ai_settings, context, num_days):
         '"caption": "<texto final del post, con el cierre que invita a comentar la palabra clave>", '
         '"keyword": "<la palabra clave del cierre, en minuscula, una sola palabra>", '
         '"reply_template": "<respuesta automatica para esa palabra clave, con {{sales_link}} donde va el link>", '
-        '"hashtags": "<hashtags de este post, separados por espacio, cada uno con #>"}]}'
+        '"hashtags": "<OBLIGATORIO, nunca vacio: hashtags de este post, separados por espacio, cada uno con #, minimo 3>"}]}'
     )
 
     return system_prompt, " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Respaldo si la IA ignora el campo "hashtags" (pasa mas seguido de lo que
+# deberia con modelos sin JSON schema estricto, como Groq/llama). En vez de
+# dejarlo vacio -- que obliga a la agencia a cargarlo a mano en cada idea --
+# armamos algo razonable: los hashtags de marca ya cargados, o si no hay,
+# derivamos 2-3 de los "topics" del cliente. Nunca se llama si la IA SI
+# devolvio hashtags (ver generate_plan_for_client).
+# ---------------------------------------------------------------------------
+def _slugify_tag(word):
+    word = unicodedata.normalize("NFKD", word).encode("ascii", "ignore").decode("ascii")
+    word = re.sub(r"[^a-zA-Z0-9]", "", word)
+    return f"#{word}" if word else ""
+
+
+def fallback_hashtags(default_hashtags, topics):
+    tags = [t for t in (default_hashtags or "").split() if t.startswith("#")]
+    if not tags and topics:
+        for chunk in re.split(r"[,\n]", topics)[:5]:
+            first_word = chunk.strip().split(" ")[0] if chunk.strip() else ""
+            tag = _slugify_tag(first_word)
+            if tag and tag not in tags:
+                tags.append(tag)
+    return " ".join(tags[:8])
 
 
 def generate_plan_for_client(client):
@@ -377,6 +411,9 @@ def generate_plan_for_client(client):
         # despues, al aprobar el item, coincida exactamente con la palabra
         # que el caption invita a comentar y con lo que matchea meta-webhook.
         keyword = (idea.get("keyword") or "").strip().lower() or None
+        hashtags_val = (idea.get("hashtags") or "").strip()
+        if not hashtags_val:
+            hashtags_val = fallback_hashtags(ai_settings.get("default_hashtags") or "", ai_settings.get("topics") or "")
         rows.append(
             {
                 "client_id": client_id,
@@ -387,7 +424,7 @@ def generate_plan_for_client(client):
                 "caption": idea["caption"].strip(),
                 "keyword": keyword,
                 "reply_template": (idea.get("reply_template") or "").strip() or None,
-                "hashtags": (idea.get("hashtags") or "").strip() or None,
+                "hashtags": hashtags_val or None,
                 "status": "proposed",
             }
         )
