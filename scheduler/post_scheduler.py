@@ -110,9 +110,20 @@ def generate_caption(ai_settings, client_name, sales_link):
     topics = ai_settings.get("topics") or ""
     tone = ai_settings.get("tone") or "cercano y profesional"
     max_chars = ai_settings.get("max_chars") or 400
+    knowledge_base = ai_settings.get("knowledge_base") or ""
+
+    # Base de conocimiento del negocio (servicios, precios reales, FAQ,
+    # politicas): si esta cargada, se la damos a la IA como fuente de verdad,
+    # asi los posts que genera son consistentes con lo que el negocio
+    # realmente ofrece, en vez de inventar generalidades.
+    knowledge_line = (
+        f"Informacion real del negocio (usala como fuente de verdad para no inventar precios/datos): {knowledge_base}. "
+        if knowledge_base else ""
+    )
 
     user_prompt = (
         f"Negocio: {client_name}. Temas/keywords: {topics}. Tono: {tone}. "
+        f"{knowledge_line}"
         f"Escribi UNA publicacion nueva y distinta para Instagram/Facebook, maximo {max_chars} caracteres, "
         f"con un cierre que invite a comentar la palabra clave para recibir el link de compra. "
         f"No incluyas el link directamente en el texto. No repitas frases genericas."
