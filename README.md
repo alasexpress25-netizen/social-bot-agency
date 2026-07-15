@@ -194,6 +194,28 @@ contexto del cliente (`topics`, `tone`, `sales\_link`). Suma control de
 límite diario de uso por cliente con fallback a plantilla fija.
 *Archivos: `supabase/migrations/0003\_ai\_usage\_log.sql`,
 `supabase/functions/meta-webhook/index.ts`.*
+
+  > **Actualización 15/07/2026 — corrección + base de conocimiento.** Se
+  > detectó que la versión desplegada en producción de `meta-webhook` había
+  > quedado desactualizada: en algún momento se le agregó el "private
+  > reply" (mensaje privado con el link, para que salga clickeable) pero se
+  > perdió toda la lógica de IA de esta fase — el sistema llevaba tiempo
+  > respondiendo *solo* por palabra clave, sin llamar nunca a Groq
+  > (`socialbot_ai_usage_log` estaba vacía). Se restauró la lógica de IA +
+  > detección de leads, manteniendo el private reply.
+  >
+  > De paso se agregó `socialbot_ai_settings.knowledge_base`: un texto
+  > libre por cliente (servicios, precios reales, FAQ, políticas — un
+  > "mini-README del negocio") que se inyecta en el prompt como fuente de
+  > verdad, para que la IA responda con precisión en vez de improvisar
+  > sobre `topics`/`tone` solamente. Se usa tanto al responder
+  > comentarios/DMs (`meta-webhook`) como al generar el texto de los posts
+  > (`post_scheduler.py`), y se edita desde el mismo `<details>` de
+  > "Configurar IA" en `frontend/index.html`.
+  > *Archivos: `supabase/migrations/0011_ai_knowledge_base.sql`,
+  > `supabase/functions/meta-webhook/index.ts`, `scheduler/post_scheduler.py`,
+  > `frontend/index.html`. También `supabase/migrations/0010_ai_debug_log.sql`
+  > (tabla temporal de diagnóstico usada para encontrar el problema).*
 * [x] **Fase 2 — Calificación y guardado de leads.**
 La misma llamada de IA de la Fase 1 devuelve, además de la respuesta,
 si el contacto es un lead caliente y sus datos (nombre, contacto,
