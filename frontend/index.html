@@ -447,8 +447,17 @@ async function loadClients(){
       </div>
       ` : ''}
 
+      <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
+        <input name="client_email" placeholder="Email del cliente (portal)" value="${c.client_email || ''}" />
+        <label style="font-size:13px; color:var(--muted);">
+          <input type="checkbox" name="require_approval" ${c.require_approval ? 'checked' : ''} style="width:auto; vertical-align:middle;" />
+          El cliente debe aprobar cada post antes de publicarse
+        </label>
+        <button type="submit" class="secondary">Guardar acceso</button>
+      </form>
+
       ${(planItems||[]).length ? `
-      <details open>
+      <details>
         <summary>📅 Plan semanal de contenido (IA) — ${planItems.length} idea(s)</summary>
         <div class="meta-row" style="margin-bottom:8px;">
           POST DE PUBLICACION (texto que va debajo del video, junto con los hashtags), generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá/rechaza o edita cada uno — el que quede aprobado se publica solo el día sugerido, con este texto y ese Hashtag.
@@ -480,15 +489,6 @@ async function loadClients(){
         `).join('')}
       </details>
       ` : ''}
-
-      <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
-        <input name="client_email" placeholder="Email del cliente (portal)" value="${c.client_email || ''}" />
-        <label style="font-size:13px; color:var(--muted);">
-          <input type="checkbox" name="require_approval" ${c.require_approval ? 'checked' : ''} style="width:auto; vertical-align:middle;" />
-          El cliente debe aprobar cada post antes de publicarse
-        </label>
-        <button type="submit" class="secondary">Guardar acceso</button>
-      </form>
 
       <details>
         <summary>Conectar cuenta de Facebook / Instagram</summary>
@@ -537,8 +537,30 @@ async function loadClients(){
 
       <details>
         <summary>Horarios de publicación (${(slots||[]).length})</summary>
-        <div>${(slots||[]).map(s => `${s.day_of_week ? ['','Lun','Mar','Mié','Jue','Vie','Sáb','Dom'][s.day_of_week]+' ' : 'Todos los días '}${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')}${s.active ? '' : ' (inactivo)'}`).join(' · ') || 'sin horarios'}</div>
-        <form class="inline" onsubmit="addSlot(event, '${c.id}')">
+        ${(slots||[]).map(s => `
+          <form class="inline" onsubmit="updateSlot(event, '${s.id}', '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+            <div class="grid2">
+              <input name="hour" type="number" min="0" max="23" value="${s.hour}" placeholder="Hora (0-23)" required />
+              <input name="minute" type="number" min="0" max="59" value="${s.minute}" placeholder="Minuto" />
+            </div>
+            <select name="day_of_week">
+              <option value="" ${!s.day_of_week ? 'selected' : ''}>Todos los días</option>
+              <option value="1" ${s.day_of_week===1?'selected':''}>Lunes</option>
+              <option value="2" ${s.day_of_week===2?'selected':''}>Martes</option>
+              <option value="3" ${s.day_of_week===3?'selected':''}>Miércoles</option>
+              <option value="4" ${s.day_of_week===4?'selected':''}>Jueves</option>
+              <option value="5" ${s.day_of_week===5?'selected':''}>Viernes</option>
+              <option value="6" ${s.day_of_week===6?'selected':''}>Sábado</option>
+              <option value="7" ${s.day_of_week===7?'selected':''}>Domingo</option>
+            </select>
+            <label class="meta-row" style="margin-top:0;"><input type="checkbox" name="active" ${s.active ? 'checked' : ''} style="width:auto; vertical-align:middle;" /> Activo</label>
+            <div class="grid2">
+              <button type="submit">Guardar cambios</button>
+              <button type="button" class="secondary" onclick="deleteSlot('${s.id}', '${c.id}')">Eliminar</button>
+            </div>
+          </form>
+        `).join('') || '<div>sin horarios</div>'}
+        <form class="inline" onsubmit="addSlot(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
           <div class="grid2">
             <input name="hour" type="number" min="0" max="23" placeholder="Hora (0-23)" required />
             <input name="minute" type="number" min="0" max="59" placeholder="Minuto" value="0" />
@@ -708,6 +730,25 @@ async function addSlot(e, clientId){
     minute: parseInt(f.get('minute') || 0),
     day_of_week: dow ? parseInt(dow) : null,
   });
+  loadClients();
+}
+
+async function updateSlot(e, slotId, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const dow = f.get('day_of_week');
+  await sb.from('socialbot_schedule_slots').update({
+    hour: parseInt(f.get('hour')),
+    minute: parseInt(f.get('minute') || 0),
+    day_of_week: dow ? parseInt(dow) : null,
+    active: f.get('active') === 'on',
+  }).eq('id', slotId);
+  loadClients();
+}
+
+async function deleteSlot(slotId, clientId){
+  if(!confirm('¿Eliminar este horario?')) return;
+  await sb.from('socialbot_schedule_slots').delete().eq('id', slotId);
   loadClients();
 }
 
