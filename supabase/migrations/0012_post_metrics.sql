@@ -10,6 +10,9 @@
 -- para "que tan bien le fue a este post" sin complicar el esquema. Si el
 -- dia de mañana hace falta ver evolucion en el tiempo, se puede sacar el
 -- unique y pasar a insert-only con created_at.
+--
+-- Ya aplicada en producción (redaqqxoeciycqgjhpbv), 15/07/2026. Este
+-- archivo es solo para que el repo quede fiel a lo que ya está corriendo.
 -- =========================================================
 
 create table if not exists socialbot_post_metrics (

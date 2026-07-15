@@ -19,6 +19,9 @@
 -- marca 'used'. Si nadie lo aprueba antes de esa fecha, no pasa nada: el
 -- scheduler sigue con su logica de siempre (caption_override del media, o
 -- generacion en el momento).
+--
+-- Ya aplicada en producción (redaqqxoeciycqgjhpbv), 15/07/2026. Este
+-- archivo es solo para que el repo quede fiel a lo que ya está corriendo.
 -- =========================================================
 
 create table if not exists socialbot_content_plan_items (
