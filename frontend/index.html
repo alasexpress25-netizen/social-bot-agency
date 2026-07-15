@@ -98,6 +98,37 @@
   .hashtag-add-row{ display:flex; gap:6px; margin-top:8px; }
   .hashtag-add-row input{ flex:1; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; }
   .hashtag-add-row button{ padding:6px 12px; font-size:12.5px; }
+
+  /* Selector de cliente + botón "nuevo cliente" arriba del dash */
+  .client-switch-bar{
+    display:flex; align-items:center; gap:10px; margin-bottom:28px;
+    flex-wrap:wrap;
+  }
+  .client-switch-bar select{
+    padding:9px 12px; border:1px solid var(--line); border-radius:var(--radius);
+    font-size:14px; background:#fff; font-family:inherit; min-width:220px;
+  }
+  .client-switch-bar .add-client-btn{
+    width:38px; height:38px; padding:0; font-size:20px; line-height:1;
+    display:flex; align-items:center; justify-content:center; flex:none;
+  }
+
+  /* Modal genérico */
+  .modal-overlay{
+    display:none; position:fixed; inset:0; background:rgba(26,29,35,0.45);
+    align-items:center; justify-content:center; padding:20px; z-index:100;
+  }
+  .modal-overlay.open{ display:flex; }
+  .modal-box{
+    background:#fff; border-radius:var(--radius); padding:24px 26px;
+    max-width:440px; width:100%; max-height:90vh; overflow-y:auto;
+    box-shadow:0 12px 32px rgba(0,0,0,0.18);
+  }
+  .modal-box .card-row{ margin-bottom:16px; }
+  .modal-close{
+    background:transparent; color:var(--muted); border:none; padding:2px 6px;
+    font-size:18px; cursor:pointer; line-height:1;
+  }
 </style>
 </head>
 <body>
@@ -121,16 +152,10 @@
   <!-- APP -->
   <div id="app" style="display:none;">
 
-    <section>
-      <h2>Nuevo cliente</h2>
-      <div class="card">
-        <form class="inline" onsubmit="createClient(event)">
-          <input id="newClientName" placeholder="Nombre del cliente / negocio" required />
-          <input id="newClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
-          <button type="submit">Agregar cliente</button>
-        </form>
-      </div>
-    </section>
+    <div class="client-switch-bar">
+      <select id="clientSelector" onchange="onClientSelectorChange()"></select>
+      <button type="button" class="add-client-btn" title="Nuevo cliente" onclick="openNewClientModal()">+</button>
+    </div>
 
     <section>
       <h2>Clientes</h2>
@@ -140,13 +165,58 @@
   </div>
 </main>
 
+<!-- Modal: Nuevo cliente -->
+<div class="modal-overlay" id="newClientModal" onclick="if(event.target===this) closeNewClientModal()">
+  <div class="modal-box">
+    <div class="card-row">
+      <h2 style="margin:0;">Nuevo cliente</h2>
+      <button type="button" class="modal-close" onclick="closeNewClientModal()">✕</button>
+    </div>
+    <form class="inline" onsubmit="createClient(event)">
+      <input id="newClientName" placeholder="Nombre del cliente / negocio" required />
+      <input id="newClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
+      <button type="submit">Agregar cliente</button>
+    </form>
+  </div>
+</div>
+
 <script>
 // ⚠️ Completá con los datos de tu proyecto Supabase (Settings > API)
 const SUPABASE_URL = "https://redaqqxoeciycqgjhpbv.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlZGFxcXhvZWNpeWNxZ2pocGJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxMDcyMjEsImV4cCI6MjA5MzY4MzIyMX0.HqpOrWPtbYImgy57TafbaB4qriqmq4FI9GIa4Vg9FhI";
+// ⚠️ URL pública donde vive frontend/cliente.html. Tiene que ser EXACTA
+// (con o sin barra final, según cómo la tengas publicada) y estar agregada
+// en Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
+// o el magic link no va a poder volver a la página.
+const CLIENT_PORTAL_URL = "https://lavisualmk.alastecno.com/cliente/";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let currentAgencyId = null;
+let selectedClientId = 'all'; // 'all' = ver todos los clientes en el dash
+
+function openNewClientModal(){
+  document.getElementById('newClientModal').classList.add('open');
+}
+function closeNewClientModal(){
+  document.getElementById('newClientModal').classList.remove('open');
+  document.getElementById('newClientName').value = '';
+  document.getElementById('newClientLink').value = '';
+}
+
+function onClientSelectorChange(){
+  selectedClientId = document.getElementById('clientSelector').value;
+  applyClientFilter();
+}
+
+// Muestra sólo la tarjeta del cliente elegido en el selector (o todas si
+// está en "Todos los clientes"). No vuelve a pedir datos a Supabase, sólo
+// oculta/muestra las tarjetas ya renderizadas por loadClients().
+function applyClientFilter(){
+  document.querySelectorAll('#clientsList > .client-card').forEach(card => {
+    const show = selectedClientId === 'all' || card.dataset.clientId === selectedClientId;
+    card.style.display = show ? '' : 'none';
+  });
+}
 
 async function login(){
   const email = document.getElementById('email').value;
@@ -193,9 +263,10 @@ async function createClient(e){
   e.preventDefault();
   const name = document.getElementById('newClientName').value;
   const sales_link = document.getElementById('newClientLink').value;
-  await sb.from('socialbot_clients').insert({ agency_id: currentAgencyId, name, sales_link });
-  document.getElementById('newClientName').value = '';
-  document.getElementById('newClientLink').value = '';
+  const { data: created } = await sb.from('socialbot_clients').insert({ agency_id: currentAgencyId, name, sales_link }).select();
+  closeNewClientModal();
+  // Seleccionamos automáticamente el cliente recién creado
+  if(created && created[0]) selectedClientId = created[0].id;
   loadClients();
 }
 
@@ -389,6 +460,17 @@ async function loadClients(){
   const container = document.getElementById('clientsList');
   container.innerHTML = '';
 
+  // Armamos el selector de clientes de arriba del dash, preservando la
+  // selección actual si ese cliente todavía existe.
+  const selector = document.getElementById('clientSelector');
+  const stillExists = selectedClientId === 'all' || (clients||[]).some(c => c.id === selectedClientId);
+  if(!stillExists) selectedClientId = 'all';
+  selector.innerHTML = `
+    <option value="all">— Todos los clientes —</option>
+    ${(clients||[]).map(c => `<option value="${c.id}" ${c.id === selectedClientId ? 'selected' : ''}>${c.name}</option>`).join('')}
+  `;
+  if(selectedClientId === 'all') selector.value = 'all';
+
   for(const c of (clients||[])){
     const { data: accounts } = await sb.from('socialbot_social_accounts').select('*').eq('client_id', c.id);
     const { data: aiRows } = await sb.from('socialbot_ai_settings').select('*').eq('client_id', c.id);
@@ -414,7 +496,8 @@ async function loadClients(){
     }
 
     const div = document.createElement('div');
-    div.className = 'card';
+    div.className = 'card client-card';
+    div.dataset.clientId = c.id;
     div.innerHTML = `
       <div class="card-row">
         <div>
@@ -673,6 +756,8 @@ async function loadClients(){
     // la tarjeta del cliente cuando se cambia el periodo.
     renderMetrics(c.id);
   }
+
+  applyClientFilter();
 }
 
 async function toggleActive(clientId, current){
@@ -696,26 +781,18 @@ async function saveClientPortalAccess(e, clientId){
     return;
   }
 
-  // Si hay email, enviar magic link automático
+  // Si hay email, enviar magic link automático (mismo método que usa
+  // cliente.html para el login del cliente: sb.auth.signInWithOtp).
+  // Ya no depende de la Edge Function send-client-magic-link.
   if(clientEmail && clientEmail.trim()){
-    try {
-      const res = await fetch('https://redaqqxoeciycqgjhpbv.supabase.co/functions/v1/send-client-magic-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_email: clientEmail,
-          agency_name: 'LaVisualMk'
-        })
-      });
-      
-      if(res.ok){
-        alert(`Acceso guardado. Magic link enviado a ${clientEmail}`);
-      } else {
-        const err = await res.json();
-        alert(`Acceso guardado, pero no se pudo enviar el link: ${err.error || 'Error desconocido'}`);
-      }
-    } catch(err){
-      alert(`Acceso guardado, pero error al enviar link: ${(err as Error).message}`);
+    const { error: otpError } = await sb.auth.signInWithOtp({
+      email: clientEmail.trim(),
+      options: { emailRedirectTo: CLIENT_PORTAL_URL }
+    });
+    if(otpError){
+      alert(`Acceso guardado, pero no se pudo enviar el link: ${otpError.message}`);
+    } else {
+      alert(`Acceso guardado. Magic link enviado a ${clientEmail}`);
     }
   } else {
     alert('Acceso guardado (sin email de cliente).');
