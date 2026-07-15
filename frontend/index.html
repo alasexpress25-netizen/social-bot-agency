@@ -526,7 +526,7 @@ async function loadClients(){
             <option value="claude" ${ai.content_plan_provider==='claude'?'selected':''}>Claude</option>
           </select>
           <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
-          <label style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando 2-4 propios del tema del día</label>
+          <label style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando 2-4 propios del tema del día. Si el cliente cargó sus propios hashtags desde su portal, los de él tienen prioridad sobre estos.</label>
           ${hashtagEditorHtml(`hashtags-${c.id}`, ai.default_hashtags)}
           <label style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</label>
           <textarea name="knowledge_base" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
