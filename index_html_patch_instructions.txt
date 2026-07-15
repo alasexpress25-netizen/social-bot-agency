@@ -1,0 +1,94 @@
+PARCHE PARA frontend/index.html — Fase 6: Plan semanal de contenido (IA)
+==========================================================================
+Son 3 inserciones. Buscá el texto EXACTO indicado como "BUSCAR" y agregá
+lo de "AGREGAR DESPUES" justo a continuación. No hace falta tocar nada
+más del archivo.
+
+--------------------------------------------------------------------------
+INSERCIÓN 1 — traer los items del plan junto con el resto de datos del
+cliente, dentro del for(const c of (clients||[])) de loadClients().
+--------------------------------------------------------------------------
+
+BUSCAR (ya existe, dentro del for):
+    const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
+
+AGREGAR DESPUÉS:
+    const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
+
+--------------------------------------------------------------------------
+INSERCIÓN 2 — el bloque HTML de la sección, dentro del template literal
+`div.innerHTML = `...`` de loadClients(). Va bien después del bloque de
+"pendingPosts" (los posts esperando aprobación) y antes del <form> de
+"Guardar acceso" del portal de cliente, pero el lugar exacto no importa
+mientras quede dentro del mismo template literal por cliente.
+--------------------------------------------------------------------------
+
+BUSCAR:
+      ` : ''}
+
+      <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
+
+AGREGAR ANTES de ese <form> (o sea, reemplazar el bloque de arriba por lo
+de abajo, que es lo mismo más la sección nueva pegada):
+
+      ` : ''}
+
+      ${(planItems||[]).length ? `
+      <details open>
+        <summary>📅 Plan semanal de contenido (IA) — ${planItems.length} idea(s)</summary>
+        <div class="meta-row" style="margin-bottom:8px;">
+          Generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá cada uno — el que quede aprobado se publica solo el día sugerido, con este texto tal cual (sin volver a pasar por la IA).
+        </div>
+        ${planItems.map(item => `
+          <div class="card ${item.status === 'approved' ? '' : 'pending'}" style="margin-top:8px;">
+            <div class="meta-row" style="margin-bottom:6px;">
+              <strong>${new Date(item.target_date + 'T00:00:00').toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'short' })}</strong>
+              ${item.angle ? ` · <span class="pill">${item.angle}</span>` : ''}
+              ${item.status === 'approved' ? ' · <span class="pill">aprobado, se publica solo</span>' : ''}
+            </div>
+            ${item.based_on ? `<div class="meta-row" style="font-style:italic; margin-bottom:8px;">${item.based_on}</div>` : ''}
+            <textarea id="plan-caption-${item.id}" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
+            <div class="btn-row">
+              ${item.status === 'approved' ? `
+                <button class="secondary" onclick="reviewContentPlanItem('${item.id}', 'proposed')">Volver a editar</button>
+                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
+              ` : `
+                <button class="secondary" onclick="saveContentPlanCaption('${item.id}')">Guardar texto</button>
+                <button onclick="reviewContentPlanItem('${item.id}', 'approved')">Aprobar</button>
+                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
+              `}
+            </div>
+          </div>
+        `).join('')}
+      </details>
+      ` : ''}
+
+      <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
+
+--------------------------------------------------------------------------
+INSERCIÓN 3 — funciones JS nuevas. Pegar antes de la línea "boot();" al
+final del <script>.
+--------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// FASE 6: revisar (editar/aprobar/rechazar) items del plan semanal de
+// contenido generado por IA (scheduler/content_planner.py). Mismo criterio
+// de RLS que el resto del panel de agencia: "owner sees own
+// content_plan_items" (0013_content_plan.sql) le da UPDATE directo, sin
+// necesitar ninguna función RPC.
+// ---------------------------------------------------------------------------
+async function saveContentPlanCaption(itemId){
+  const value = document.getElementById(`plan-caption-${itemId}`).value;
+  const { error } = await sb.from('socialbot_content_plan_items').update({ caption: value }).eq('id', itemId);
+  if(error){ alert(error.message); return; }
+  alert('Texto guardado.');
+}
+
+async function reviewContentPlanItem(itemId, status){
+  const patch = { status, reviewed_at: new Date().toISOString() };
+  const { error } = await sb.from('socialbot_content_plan_items').update(patch).eq('id', itemId);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+boot();
