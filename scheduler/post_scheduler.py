@@ -971,6 +971,12 @@ def process_client(client_id):
     plan_item = get_approved_plan_item_for_today(client_id)
     if plan_item:
         caption = plan_item["caption"]
+        # FASE 6.1: los hashtags del item (generados por la IA junto con el
+        # caption, y editables por la agencia antes de aprobar) no venian
+        # adentro del caption -- se guardaban aparte y nunca se usaban al
+        # publicar. Ahora se suman al final, en su propio parrafo.
+        if plan_item.get("hashtags"):
+            caption = f"{caption}\n\n{plan_item['hashtags'].strip()}"
         print(f"Cliente {client['name']}: usando item del plan semanal aprobado para hoy (angulo: {plan_item.get('angle') or '—'}).")
     elif media and media.get("caption_override"):
         # Si el media tiene un caption_override cargado (texto fijo escrito a
