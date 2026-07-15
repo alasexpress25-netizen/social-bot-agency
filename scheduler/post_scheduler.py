@@ -965,9 +965,11 @@ def process_client(client_id):
 
     # FASE 6: si hay un item del plan semanal ya aprobado por la agencia
     # para el dia de hoy, tiene prioridad absoluta -- es contenido revisado
-    # a mano, con criterio de performance real, asi que ni el caption_override
-    # del media ni la IA en el momento lo pisan. Si no hay plan aprobado para
-    # hoy, seguimos con la logica de siempre.
+    # a mano, con criterio de performance real, asi que ni el caption fijo
+    # del cliente, ni el caption_override del media, ni la IA lo pisan. Si no
+    # hay plan aprobado para hoy, seguimos con la logica de prioridad:
+    # cliente (caption + hashtags fijos) > agencia (caption_override del
+    # medio + sus hashtags) > IA genera todo en el momento.
     plan_item = get_approved_plan_item_for_today(client_id)
     if plan_item:
         caption = plan_item["caption"]
@@ -978,11 +980,18 @@ def process_client(client_id):
         if plan_item.get("hashtags"):
             caption = f"{caption}\n\n{plan_item['hashtags'].strip()}"
         print(f"Cliente {client['name']}: usando item del plan semanal aprobado para hoy (angulo: {plan_item.get('angle') or '—'}).")
+    elif ai_settings.get("client_fixed_caption"):
+        # El cliente cargo su propio caption fijo desde su portal -- tiene
+        # prioridad sobre el caption_override de la agencia y sobre la IA.
+        caption = ai_settings["client_fixed_caption"]
+        if ai_settings.get("client_hashtags"):
+            caption = f"{caption}\n\n{ai_settings['client_hashtags'].strip()}"
     elif media and media.get("caption_override"):
         # Si el media tiene un caption_override cargado (texto fijo escrito a
-        # mano, con hashtags y CTA incluidos), lo usamos tal cual y NO
-        # llamamos a la IA.
+        # mano por la agencia), lo usamos tal cual y NO llamamos a la IA.
         caption = media["caption_override"]
+        if media.get("hashtags_override"):
+            caption = f"{caption}\n\n{media['hashtags_override'].strip()}"
     else:
         # Si no, generamos un caption nuevo automaticamente como antes.
         caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
