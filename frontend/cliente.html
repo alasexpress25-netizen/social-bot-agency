@@ -164,10 +164,14 @@
 
     <section>
       <h2 data-i18n="prefsTitle">Posts</h2>
-      <p class="section-hint" data-i18n="prefsHint">Estos hashtags tienen prioridad sobre los que carga la agencia: la IA los usa primero como base en cada idea del plan semanal, sumando algunos propios del tema del día.</p>
+      <p class="section-hint" data-i18n="prefsHint">Lo que cargues acá tiene prioridad sobre lo que carga la agencia. Si lo dejás vacío, se usa lo de la agencia; si la agencia tampoco cargó nada, la IA lo genera sola.</p>
       <div class="card">
         <form class="inline" onsubmit="saveAiPrefs(event)">
-          <label style="font-size:13px; color:var(--muted);" data-i18n="hashtagsLabel">Hashtags de marca (fijos)</label>
+          <label style="font-size:13px; color:var(--muted);" data-i18n="captionFixedLabel">Texto fijo de tus posts (opcional)</label>
+          <p class="section-hint" style="margin-top:0;" data-i18n="captionFixedHint">Si lo completás, el sistema publica SIEMPRE este texto tal cual (no genera uno nuevo con IA). Dejalo vacío si preferís que el texto varíe en cada publicación.</p>
+          <textarea id="captionFixedField" rows="4" placeholder="Ej: ¡Nuevo producto disponible! Escribinos para más info." data-i18n-placeholder="captionFixedPlaceholder"></textarea>
+
+          <label style="font-size:13px; color:var(--muted); margin-top:14px; display:block;" data-i18n="hashtagsLabel">Hashtags de marca (fijos)</label>
           <input type="hidden" id="hashtagsField" />
           <div class="hashtag-row" id="hashtagsField-chips"></div>
           <div class="hashtag-add-row">
@@ -175,7 +179,7 @@
               onkeydown="if(event.key==='Enter'){ event.preventDefault(); addHashtag(); }" />
             <button type="button" class="secondary" onclick="addHashtag()" data-i18n="addHashtagBtn">+ Agregar</button>
           </div>
-          <button type="submit" data-i18n="savePrefsBtn">Guardar hashtags</button>
+          <button type="submit" data-i18n="savePrefsBtn">Guardar cambios</button>
         </form>
       </div>
     </section>
@@ -228,9 +232,12 @@ const I18N = {
     leadsTitle: 'Contactos interesados',
     leadsHint: 'Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Vos solo tenés que ir actualizando el estado a medida que los contactás.',
     prefsTitle: 'Sus Posts',
-    prefsHint: 'Estos hashtags tienen prioridad sobre los que carga la agencia: la IA los usa primero como base en cada idea del plan semanal, sumando algunos propios del tema del día.',
+    prefsHint: 'Lo que cargues acá tiene prioridad sobre lo que carga la agencia. Si lo dejás vacío, se usa lo de la agencia; si la agencia tampoco cargó nada, la IA lo genera sola.',
+    captionFixedLabel: 'Texto fijo de tus posts (opcional)',
+    captionFixedHint: 'Si lo completás, el sistema publica SIEMPRE este texto tal cual (no genera uno nuevo con IA). Dejalo vacío si preferís que el texto varíe en cada publicación.',
+    captionFixedPlaceholder: 'Ej: ¡Nuevo producto disponible! Escribinos para más info.',
     hashtagsLabel: 'Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando algunos propios del tema del día',
-    hashtagAddPlaceholder: 'Agregar hashtag (ej: marketing)', addHashtagBtn: '+ Agregar', savePrefsBtn: 'Guardar preferencias',
+    hashtagAddPlaceholder: 'Agregar hashtag (ej: marketing)', addHashtagBtn: '+ Agregar', savePrefsBtn: 'Guardar cambios',
     noHashtags: 'sin hashtags todavía', removeHashtag: 'Quitar',
     captionLabel: 'Texto del post (podés editarlo antes de aprobar)', saveCaptionBtn: 'Guardar texto',
     approveBtn: 'Aprobar', rejectBtn: 'Rechazar', savedMsg: 'Texto guardado.',
@@ -270,9 +277,12 @@ const I18N = {
     leadsTitle: 'Contatos interessados',
     leadsHint: 'Esta lista se preenche sozinha: quando alguém comenta ou escreve pelo Facebook/Instagram e a IA detecta interesse em comprar (pergunta preço, deixa telefone, etc.), é adicionado aqui com os dados. Você só precisa atualizar o status conforme for entrando em contato.',
     prefsTitle: 'Seus posts',
-    prefsHint: 'Esses hashtags têm prioridade sobre os que a agência cadastra: a IA os usa primeiro como base em cada ideia do plano semanal, somando alguns próprios do tema do dia.',
+    prefsHint: 'O que você cadastrar aqui tem prioridade sobre o que a agência cadastra. Se deixar em branco, usa o da agência; se a agência também não cadastrou nada, a IA gera sozinha.',
+    captionFixedLabel: 'Texto fixo dos seus posts (opcional)',
+    captionFixedHint: 'Se preencher, o sistema publica SEMPRE esse texto tal como está (não gera um novo com IA). Deixe em branco se preferir que o texto varie em cada publicação.',
+    captionFixedPlaceholder: 'Ex: Novo produto disponível! Fale conosco para mais informações.',
     hashtagsLabel: 'Hashtags da marca (fixas) — a IA as usa como base em cada ideia do plano semanal, somando algumas próprias do tema do dia',
-    hashtagAddPlaceholder: 'Adicionar hashtag (ex: marketing)', addHashtagBtn: '+ Adicionar', savePrefsBtn: 'Salvar preferências',
+    hashtagAddPlaceholder: 'Adicionar hashtag (ex: marketing)', addHashtagBtn: '+ Adicionar', savePrefsBtn: 'Salvar alterações',
     noHashtags: 'sem hashtags ainda', removeHashtag: 'Remover',
     captionLabel: 'Texto do post (você pode editar antes de aprovar)', saveCaptionBtn: 'Salvar texto',
     approveBtn: 'Aprovar', rejectBtn: 'Rejeitar', savedMsg: 'Texto salvo.',
@@ -566,12 +576,17 @@ async function updateLeadStatus(leadId, status){
 async function loadAiPrefs(){
   const { data: rows } = await sb.from('socialbot_ai_settings').select('*').eq('client_id', currentClient.id);
   const ai = (rows && rows[0]) || {};
+  document.getElementById('captionFixedField').value = ai.client_fixed_caption || '';
   document.getElementById('hashtagsField').value = ai.client_hashtags || '';
   renderHashtagChips();
 }
 
 async function saveAiPrefs(e){
   e.preventDefault();
+  const { error: captionError } = await sb.rpc('client_update_fixed_caption', {
+    p_caption: document.getElementById('captionFixedField').value || null,
+  });
+  if(captionError){ alert(captionError.message); return; }
   const { error: hashtagsError } = await sb.rpc('client_update_hashtags', {
     p_hashtags: document.getElementById('hashtagsField').value,
   });
