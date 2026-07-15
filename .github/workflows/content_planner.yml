@@ -26,4 +26,14 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Keys SEPARADAS para este cron (pedido 15/07/2026, ver
+          # README_ai_quota_separation_request.txt): asi el plan semanal no
+          # compite por la misma cuota gratuita que el webhook de
+          # comentarios/DMs ni el caption generado al publicar. Son
+          # opcionales -- content_planner.py cae de vuelta a la key
+          # compartida de arriba si estos secrets no estan cargados en el
+          # repo (Settings > Secrets and variables > Actions).
+          GROQ_API_KEY_CONTENT_PLAN: ${{ secrets.GROQ_API_KEY_CONTENT_PLAN }}
+          OPENAI_API_KEY_CONTENT_PLAN: ${{ secrets.OPENAI_API_KEY_CONTENT_PLAN }}
+          CLAUDE_API_KEY_CONTENT_PLAN: ${{ secrets.CLAUDE_API_KEY_CONTENT_PLAN }}
         run: python scheduler/content_planner.py
