@@ -238,6 +238,7 @@ async function loadClients(){
     const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(5);
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
+    const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
 
     const ai = (aiRows && aiRows[0]) || {};
     const leadsNuevos = (leads||[]).filter(l => l.status === 'nuevo').length;
@@ -286,6 +287,36 @@ async function loadClients(){
       </div>
       ` : ''}
 
+      ${(planItems||[]).length ? `
+      <details open>
+        <summary>📅 Plan semanal de contenido (IA) — ${planItems.length} idea(s)</summary>
+        <div class="meta-row" style="margin-bottom:8px;">
+          Generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá cada uno — el que quede aprobado se publica solo el día sugerido, con este texto tal cual (sin volver a pasar por la IA).
+        </div>
+        ${planItems.map(item => `
+          <div class="card ${item.status === 'approved' ? '' : 'pending'}" style="margin-top:8px;">
+            <div class="meta-row" style="margin-bottom:6px;">
+              <strong>${new Date(item.target_date + 'T00:00:00').toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'short' })}</strong>
+              ${item.angle ? ` · <span class="pill">${item.angle}</span>` : ''}
+              ${item.status === 'approved' ? ' · <span class="pill">aprobado, se publica solo</span>' : ''}
+            </div>
+            ${item.based_on ? `<div class="meta-row" style="font-style:italic; margin-bottom:8px;">${item.based_on}</div>` : ''}
+            <textarea id="plan-caption-${item.id}" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
+            <div class="btn-row">
+              ${item.status === 'approved' ? `
+                <button class="secondary" onclick="reviewContentPlanItem('${item.id}', 'proposed')">Volver a editar</button>
+                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
+              ` : `
+                <button class="secondary" onclick="saveContentPlanCaption('${item.id}')">Guardar texto</button>
+                <button onclick="reviewContentPlanItem('${item.id}', 'approved')">Aprobar</button>
+                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
+              `}
+            </div>
+          </div>
+        `).join('')}
+      </details>
+      ` : ''}
+
       <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
         <input name="client_email" placeholder="Email del cliente (portal)" value="${c.client_email || ''}" />
         <label style="font-size:13px; color:var(--muted);">
@@ -324,6 +355,12 @@ async function loadClients(){
             </select>
             <input name="tone" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
           </div>
+          <label style="font-size:13px; color:var(--muted);">Modelo para el plan semanal de contenido (Fase 6) — independiente del de arriba, para no compartir cuota gratuita con las respuestas automáticas</label>
+          <select name="content_plan_provider">
+            <option value="groq" ${ai.content_plan_provider==='groq'?'selected':''}>Groq (gratis)</option>
+            <option value="openai" ${ai.content_plan_provider==='openai'?'selected':''}>OpenAI</option>
+            <option value="claude" ${ai.content_plan_provider==='claude'?'selected':''}>Claude</option>
+          </select>
           <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
           <label style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</label>
           <textarea name="knowledge_base" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
@@ -492,6 +529,7 @@ async function saveAi(e, clientId){
   await sb.from('socialbot_ai_settings').upsert({
     client_id: clientId,
     provider: f.get('provider'),
+    content_plan_provider: f.get('content_plan_provider'),
     tone: f.get('tone'),
     topics: f.get('topics'),
     knowledge_base: f.get('knowledge_base'),
@@ -609,6 +647,27 @@ async function saveCaptionAsAgency(postId){
   const { error } = await sb.from('socialbot_posts').update({ caption: value }).eq('id', postId);
   if(error){ alert(error.message); return; }
   alert('Texto guardado.');
+}
+
+// ---------------------------------------------------------------------------
+// FASE 6: revisar (editar/aprobar/rechazar) items del plan semanal de
+// contenido generado por IA (scheduler/content_planner.py). Mismo criterio
+// de RLS que el resto del panel de agencia: "owner sees own
+// content_plan_items" (0013_content_plan.sql) le da UPDATE directo, sin
+// necesitar ninguna función RPC.
+// ---------------------------------------------------------------------------
+async function saveContentPlanCaption(itemId){
+  const value = document.getElementById(`plan-caption-${itemId}`).value;
+  const { error } = await sb.from('socialbot_content_plan_items').update({ caption: value }).eq('id', itemId);
+  if(error){ alert(error.message); return; }
+  alert('Texto guardado.');
+}
+
+async function reviewContentPlanItem(itemId, status){
+  const patch = { status, reviewed_at: new Date().toISOString() };
+  const { error } = await sb.from('socialbot_content_plan_items').update(patch).eq('id', itemId);
+  if(error){ alert(error.message); return; }
+  loadClients();
 }
 
 boot();
