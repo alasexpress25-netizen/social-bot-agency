@@ -245,7 +245,10 @@ def build_prompt(client, ai_settings, context, num_days):
     tone = ai_settings.get("tone") or "cercano y profesional"
     knowledge_base = ai_settings.get("knowledge_base") or ""
     max_chars = ai_settings.get("max_chars") or 400
-    default_hashtags = ai_settings.get("default_hashtags") or ""
+    # Prioridad: hashtags del cliente (cargados desde su portal) > hashtags
+    # de base de la agencia. Mismo criterio que post_scheduler.py usa para
+    # el caption (cliente > agencia > IA).
+    default_hashtags = ai_settings.get("client_hashtags") or ai_settings.get("default_hashtags") or ""
     sales_link = client.get("sales_link") or ""
 
     system_prompt = (
@@ -436,7 +439,8 @@ def generate_plan_for_client(client):
         clean_caption, extracted_hashtags = split_caption_and_hashtags(idea["caption"])
         hashtags_val = extracted_hashtags or (idea.get("hashtags") or "").strip()
         if not hashtags_val:
-            hashtags_val = fallback_hashtags(ai_settings.get("default_hashtags") or "", ai_settings.get("topics") or "")
+            base_hashtags = ai_settings.get("client_hashtags") or ai_settings.get("default_hashtags") or ""
+            hashtags_val = fallback_hashtags(base_hashtags, ai_settings.get("topics") or "")
         rows.append(
             {
                 "client_id": client_id,
