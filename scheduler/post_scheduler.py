@@ -4,7 +4,11 @@ post_scheduler.py
 Se ejecuta cada 15 minutos (via GitHub Actions cron) y para cada cliente
 activo que tenga un horario (schedule_slot) que coincida con la hora actual:
 
-  1. Genera un texto nuevo con IA (OpenAI o Claude, segun ai_settings.provider)
+  1. Si hay un item del plan semanal de contenido (Fase 6, generado por
+     content_planner.py) ya APROBADO por la agencia para el dia de hoy,
+     usa ese caption tal cual (sin volver a pasar por la IA). Si no, sigue
+     la logica de siempre: caption_override del media, o generacion con IA
+     en el momento (OpenAI/Claude/Groq, segun ai_settings.provider).
   2. Elige una imagen/video/carrusel de la biblioteca del cliente (media_assets)
   3. Si el cliente tiene require_approval=true, guarda el post como pendiente
      de aprobacion y NO publica todavia (el cliente lo aprueba/rechaza, y
@@ -13,9 +17,16 @@ activo que tenga un horario (schedule_slot) que coincida con la hora actual:
   4. Publica en Facebook y/o Instagram via Meta Graph API
   5. Guarda el resultado en la tabla `posts` de Supabase
 
-Ademas, en cada corrida, ANTES de generar posts nuevos, revisa si hay posts
-que ya estaban esperando aprobacion y el cliente ya aprobo desde su portal,
-y los publica.
+Ademas, en cada corrida:
+  - ANTES de generar posts nuevos, revisa si hay posts que ya estaban
+    esperando aprobacion y el cliente ya aprobo desde su portal, y los
+    publica (publish_approved_pending_posts()).
+  - Tambien ANTES de generar posts nuevos, actualiza en
+    socialbot_post_metrics (likes/comments/shares/reach/impressions) los
+    posts publicados en los ultimos 30 dias, trayendo los numeros reales
+    desde Meta Graph API (collect_post_metrics()). Esto es lo que despues
+    usa content_planner.py (Fase 6) para saber que angulo/formato funciono
+    mejor con cada cliente.
 
 No requiere servidor: corre como un job de GitHub Actions y termina.
 Todas las credenciales sensibles viven en Supabase (por cliente) o en
@@ -31,7 +42,7 @@ import socket
 import subprocess
 import tempfile
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------------------
@@ -99,6 +110,22 @@ def sb_update(table, match_params, patch):
         timeout=30,
     )
     r.raise_for_status()
+
+
+def sb_upsert(table, rows, on_conflict):
+    """
+    Insert-or-update por una clave unica (ej. post_id en
+    socialbot_post_metrics, que tiene "unique" sobre esa columna).
+    """
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/{table}",
+        headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
+        params={"on_conflict": on_conflict},
+        json=rows,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +218,178 @@ def _call_claude(system_prompt, user_prompt):
     )
     r.raise_for_status()
     return r.json()["content"][0]["text"].strip()
+
+
+# ---------------------------------------------------------------------------
+# FASE 6: uso del plan semanal de contenido ya aprobado
+# ---------------------------------------------------------------------------
+def get_approved_plan_item_for_today(client_id):
+    """
+    Busca, para este cliente, un item de socialbot_content_plan_items con
+    status='approved' cuyo target_date sea el dia de hoy (fecha UTC, mismo
+    criterio que usa content_planner.py al calcular week_start/target_date,
+    para que ambos scripts esten de acuerdo en que dia es "hoy"). Si existe,
+    ese caption se usa tal cual y NO se llama a la IA en el momento.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    items = sb_get(
+        "socialbot_content_plan_items",
+        {
+            "client_id": f"eq.{client_id}",
+            "target_date": f"eq.{today}",
+            "status": "eq.approved",
+            "limit": "1",
+        },
+    )
+    return items[0] if items else None
+
+
+def mark_plan_item_used(plan_item_id, used_post_id):
+    sb_update(
+        "socialbot_content_plan_items",
+        {"id": f"eq.{plan_item_id}"},
+        {"status": "used", "used_post_id": used_post_id},
+    )
+
+
+# ---------------------------------------------------------------------------
+# FASE 6: recoleccion de metricas de posts publicados (Meta Graph API)
+# ---------------------------------------------------------------------------
+def _clean_external_id(raw_id):
+    """
+    external_post_id a veces viene con un sufijo legible agregado por
+    publish_facebook() (ej. "12345 (foto manual)" o "12345 (fallback foto,
+    video no habilitado aun)") para que se entienda en el panel que paso.
+    Para pegarle a Graph API necesitamos solo el id real, antes del espacio.
+    """
+    if not raw_id:
+        return None
+    return raw_id.split(" ")[0]
+
+
+def _fetch_facebook_post_insights(post_id, access_token):
+    """Reach/impressions de un post de Pagina. Best-effort: si Meta no tiene
+    el dato todavia (posts muy recientes) o el permiso no alcanza, no rompe
+    nada -- simplemente esas columnas quedan en null."""
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{post_id}/insights",
+            params={"metric": "post_impressions,post_impressions_unique", "access_token": access_token},
+            timeout=30,
+        )
+        r.raise_for_status()
+        values = {d["name"]: d["values"][0]["value"] for d in r.json().get("data", []) if d.get("values")}
+        return values.get("post_impressions_unique"), values.get("post_impressions")
+    except Exception:
+        return None, None
+
+
+def _fetch_instagram_reach(media_id, access_token):
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
+            params={"metric": "reach", "access_token": access_token},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if data and data[0].get("values"):
+            return data[0]["values"][0]["value"]
+        return None
+    except Exception:
+        return None
+
+
+def fetch_post_metrics(platform, external_id, access_token):
+    """
+    Devuelve un dict {likes, comments, shares, reach, impressions} o None si
+    no se pudo traer nada (post borrado, token vencido, etc. -- se loguea y
+    se sigue con el resto, no corta la corrida).
+    """
+    try:
+        if platform == "facebook":
+            r = requests.get(
+                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{external_id}",
+                params={"fields": "likes.summary(true),comments.summary(true),shares", "access_token": access_token},
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+            likes = data.get("likes", {}).get("summary", {}).get("total_count", 0)
+            comments = data.get("comments", {}).get("summary", {}).get("total_count", 0)
+            shares = data.get("shares", {}).get("count", 0)
+            reach, impressions = _fetch_facebook_post_insights(external_id, access_token)
+            return {"likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions}
+        else:
+            r = requests.get(
+                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{external_id}",
+                params={"fields": "like_count,comments_count", "access_token": access_token},
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+            likes = data.get("like_count", 0)
+            comments = data.get("comments_count", 0)
+            reach = _fetch_instagram_reach(external_id, access_token)
+            return {"likes": likes, "comments": comments, "shares": 0, "reach": reach, "impressions": None}
+    except requests.HTTPError as e:
+        detail = e.response.text[:200] if e.response is not None else str(e)
+        print(f"No se pudieron traer metricas de {platform} {external_id}: {detail}")
+        return None
+    except Exception as e:
+        print(f"No se pudieron traer metricas de {platform} {external_id}: {e}")
+        return None
+
+
+def collect_post_metrics():
+    """
+    Recorre los posts publicados en los ultimos 30 dias, trae sus numeros
+    reales (likes/comments/shares/reach/impressions) desde Meta Graph API, y
+    los guarda (upsert por post_id) en socialbot_post_metrics. Se corre al
+    principio de cada ejecucion del scheduler, junto con
+    publish_approved_pending_posts(). Es lo que content_planner.py (Fase 6)
+    despues usa para saber que angulo/formato funciono mejor con cada
+    cliente -- sin esto, la tabla socialbot_post_metrics quedaba vacia para
+    siempre y el plan semanal no tenia datos reales de performance.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    posts = sb_get(
+        "socialbot_posts",
+        {
+            "status": "eq.published",
+            "published_at": f"gte.{since}",
+            "select": "id,external_post_id,social_account_id",
+        },
+    )
+    if not posts:
+        return
+
+    print(f"Actualizando metricas de {len(posts)} post(s) publicado(s) en los ultimos 30 dias...")
+    updated = 0
+    for post in posts:
+        clean_id = _clean_external_id(post.get("external_post_id"))
+        if not clean_id:
+            continue
+        try:
+            accounts = sb_get("socialbot_social_accounts", {"id": f"eq.{post['social_account_id']}"})
+            if not accounts:
+                continue
+            account = accounts[0]
+
+            metrics = fetch_post_metrics(account["platform"], clean_id, account["page_access_token"])
+            if metrics is None:
+                continue
+
+            sb_upsert(
+                "socialbot_post_metrics",
+                [{"post_id": post["id"], **metrics, "fetched_at": datetime.now(timezone.utc).isoformat()}],
+                on_conflict="post_id",
+            )
+            updated += 1
+        except Exception as e:
+            print(f"ERROR actualizando metricas del post {post['id']}: {e}")
+
+    print(f"Metricas actualizadas: {updated}/{len(posts)}.")
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +877,14 @@ def run():
     # aprobacion del cliente y fueron aprobados desde su portal.
     publish_approved_pending_posts()
 
+    # Y actualizamos las metricas reales (likes/comments/shares/reach) de lo
+    # publicado en los ultimos 30 dias -- esto es lo que content_planner.py
+    # (Fase 6) usa despues para armar el plan semanal con criterio real.
+    try:
+        collect_post_metrics()
+    except Exception as e:
+        print(f"ERROR actualizando metricas de posts (no se corta la corrida): {e}")
+
     # Los horarios (hour/minute/day_of_week) estan en la hora LOCAL de cada cliente,
     # no en UTC. Por eso no comparamos una unica "hora actual" global: convertimos
     # now_utc al timezone de CADA cliente antes de comparar contra sus slots.
@@ -756,12 +963,22 @@ def process_client(client_id):
             print(f"Cliente {client['name']}: el carrusel elegido tiene menos de 2 imagenes cargadas, se salta esta corrida.")
             return
 
-    # Si el media tiene un caption_override cargado (texto fijo escrito a mano,
-    # con hashtags y CTA incluidos), lo usamos tal cual y NO llamamos a la IA.
-    # Si no, generamos un caption nuevo automaticamente como antes.
-    if media and media.get("caption_override"):
+    # FASE 6: si hay un item del plan semanal ya aprobado por la agencia
+    # para el dia de hoy, tiene prioridad absoluta -- es contenido revisado
+    # a mano, con criterio de performance real, asi que ni el caption_override
+    # del media ni la IA en el momento lo pisan. Si no hay plan aprobado para
+    # hoy, seguimos con la logica de siempre.
+    plan_item = get_approved_plan_item_for_today(client_id)
+    if plan_item:
+        caption = plan_item["caption"]
+        print(f"Cliente {client['name']}: usando item del plan semanal aprobado para hoy (angulo: {plan_item.get('angle') or '—'}).")
+    elif media and media.get("caption_override"):
+        # Si el media tiene un caption_override cargado (texto fijo escrito a
+        # mano, con hashtags y CTA incluidos), lo usamos tal cual y NO
+        # llamamos a la IA.
         caption = media["caption_override"]
     else:
+        # Si no, generamos un caption nuevo automaticamente como antes.
         caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
 
     # Si el cliente tiene aprobacion manual activada, el post se genera y se
@@ -770,6 +987,8 @@ def process_client(client_id):
     # encarga de publicarlo mas adelante, en la corrida en la que ya este
     # aprobado.
     require_approval = client.get("require_approval", False)
+
+    created_post_ids = []
 
     for account in accounts:
         location_id = media.get("location_id_override") if media else None
@@ -786,6 +1005,7 @@ def process_client(client_id):
             "scheduled_at": datetime.now(timezone.utc).isoformat(),
         }
         created = sb_insert("socialbot_posts", post_row)[0]
+        created_post_ids.append(created["id"])
 
         if require_approval:
             print(f"ESPERA APROBACION -> {client['name']} / {account['platform']} (post {created['id']} generado, sin publicar)")
@@ -827,6 +1047,17 @@ def process_client(client_id):
             error_msg = e.response.text[:500] if e.response is not None else str(e)
             sb_update("socialbot_posts", {"id": f"eq.{created['id']}"}, {"status": "failed", "error_message": error_msg})
             print(f"FALLO -> {client['name']} / {account['platform']}: {error_msg}")
+
+    # Si se uso un item del plan semanal, lo marcamos como 'used' y lo
+    # linkeamos al primer post generado (references socialbot_posts, on
+    # delete set null) -- asi no vuelve a proponerse ni a reusarse, sin
+    # importar si termino publicado, en espera de aprobacion, o fallido.
+    if plan_item:
+        try:
+            mark_plan_item_used(plan_item["id"], created_post_ids[0] if created_post_ids else None)
+            print(f"Cliente {client['name']}: item del plan semanal (target_date {plan_item['target_date']}) marcado como 'used'.")
+        except Exception as e:
+            print(f"ERROR marcando como usado el item de plan {plan_item['id']}: {e}")
 
     # Solo contamos el media como "usado" si se publico de verdad en al menos
     # una cuenta. Si todo fallo (o quedo esperando aprobacion), el media sigue
