@@ -451,7 +451,7 @@ async function loadClients(){
       <details open>
         <summary>📅 Plan semanal de contenido (IA) — ${planItems.length} idea(s)</summary>
         <div class="meta-row" style="margin-bottom:8px;">
-          Generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá cada uno — el que quede aprobado se publica solo el día sugerido, con este texto tal cual (sin volver a pasar por la IA).
+          POST DE PUBLICACION (texto que va debajo del video, junto con los hashtags), generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá/rechaza o edita cada uno — el que quede aprobado se publica solo el día sugerido, con este texto y ese Hashtag.
         </div>
         ${planItems.map(item => `
           <div class="card ${item.status === 'approved' ? '' : 'pending'}" style="margin-top:8px;">
