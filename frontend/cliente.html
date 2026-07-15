@@ -111,7 +111,6 @@
   <div>
     <button onclick="toggleLang()" class="secondary" style="padding:6px 12px; font-size:13px;" id="langBtn">PT</button>
     <span class="tag" id="userTag"></span>
-    <button onclick="logout()" style="margin-left:12px; padding:6px 14px; font-size:13px; display:none;" id="logoutBtn" data-i18n="logout">Salir</button>
   </div>
 </header>
 <div id="notYouBar" style="display:none; background:var(--accent-soft); color:var(--accent); font-size:13px; padding:10px 28px; text-align:center;">
@@ -215,7 +214,10 @@
 const SUPABASE_URL = "https://redaqqxoeciycqgjhpbv.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlZGFxcXhvZWNpeWNxZ2pocGJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxMDcyMjEsImV4cCI6MjA5MzY4MzIyMX0.HqpOrWPtbYImgy57TafbaB4qriqmq4FI9GIa4Vg9FhI";
 
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { flowType: 'implicit' } // mismo motivo que en index.html: el link puede terminar
+                                  // abriéndose en un dispositivo distinto al que lo pidió
+});
 let currentClient = null;
 let pendingEmail = null;
 
@@ -411,7 +413,6 @@ async function boot(){
 
   document.getElementById('authBox').style.display = 'none';
   document.getElementById('app').style.display = 'block';
-  document.getElementById('logoutBtn').style.display = 'inline-block';
   document.getElementById('userTag').innerText = session.user.email;
 
   document.getElementById('notYouText').innerText = t('notYouText')(session.user.email);
