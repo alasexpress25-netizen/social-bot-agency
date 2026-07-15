@@ -243,6 +243,8 @@ def build_prompt(client, ai_settings, context, num_days):
     tone = ai_settings.get("tone") or "cercano y profesional"
     knowledge_base = ai_settings.get("knowledge_base") or ""
     max_chars = ai_settings.get("max_chars") or 400
+    default_hashtags = ai_settings.get("default_hashtags") or ""
+    sales_link = client.get("sales_link") or ""
 
     system_prompt = (
         "Sos un estratega de contenido para redes sociales de una agencia. "
@@ -283,19 +285,36 @@ def build_prompt(client, ai_settings, context, num_days):
     if context["posts_last_30_days"] == 0:
         parts.append("No hay posts publicados en los ultimos 30 dias con metricas disponibles todavia -- proponé variedad de angulos sin depender de datos de performance.")
 
+    if default_hashtags:
+        parts.append(f"Hashtags de marca fijos que la agencia ya tiene cargados (usalos como base en TODAS las ideas, sumando 2-4 propios del tema del dia): {default_hashtags}.")
+    else:
+        parts.append("Todavia no hay hashtags de marca cargados -- proponé vos 5-8 hashtags relevantes en español, mezclando genericos del rubro con algo puntual del tema del dia.")
+
     parts.append(
         f"Generá exactamente {num_days} ideas de post, una por cada dia sugerido (day_offset de 0 a {num_days - 1}, "
         f"0 = el primer dia de publicacion de esta semana, en orden creciente, sin repetir offset). "
-        f"Cada caption debe tener como maximo {max_chars} caracteres, sin markdown ni asteriscos, "
-        f"con un cierre que invite a comentar la palabra clave para recibir el link de compra, sin poner el link directo en el texto. "
+        f"Cada caption debe tener como maximo {max_chars} caracteres, sin markdown ni asteriscos, sin hashtags adentro (van aparte), "
+        f"con un cierre que invite EXPLICITAMENTE a comentar UNA palabra clave concreta y corta (una sola palabra, en mayusculas, ej: "
+        f"\"Comentá INFO y te paso el link 💬\") para recibir el link de compra, sin poner el link directo en el texto. "
+        f"Esa misma palabra (en minuscula, sin tildes ni signos) va tambien en el campo \"keyword\" del JSON, EXACTAMENTE la que aparece en el caption. "
+        f"Variá la palabra clave entre ideas de la semana si tiene sentido (no hace falta que sea siempre la misma). "
         f"Variá el angulo entre ideas (no repitas el mismo gancho dos veces en la misma semana)."
+    )
+
+    parts.append(
+        "Para cada idea generá tambien \"reply_template\": el mensaje automatico corto que el bot le va a responder a quien comente o escriba esa palabra clave "
+        "(tono cercano, confirma el interes y avisa que le llega el link), usando literalmente el texto {{sales_link}} donde deba ir el link "
+        f"(no inventes una URL). {(f'El link de venta de este cliente es: {sales_link}.' if sales_link else 'Este cliente todavia no tiene un link de venta cargado.')}"
     )
 
     parts.append(
         'Respondé EXCLUSIVAMENTE con un JSON valido (sin texto antes ni despues, sin markdown, sin ```), con esta forma exacta: '
         '{"ideas": [{"day_offset": 0, "angle": "<angulo/pilar en pocas palabras>", '
         '"based_on": "<por que se sugiere esto, en una frase corta y concreta, citando el dato real: lead, metrica o vacio de contenido>", '
-        '"caption": "<texto final del post>"}]}'
+        '"caption": "<texto final del post, con el cierre que invita a comentar la palabra clave>", '
+        '"keyword": "<la palabra clave del cierre, en minuscula, una sola palabra>", '
+        '"reply_template": "<respuesta automatica para esa palabra clave, con {{sales_link}} donde va el link>", '
+        '"hashtags": "<hashtags de este post, separados por espacio, cada uno con #>"}]}'
     )
 
     return system_prompt, " ".join(parts)
@@ -354,6 +373,10 @@ def generate_plan_for_client(client):
         if offset < 0 or offset >= len(days) or not idea.get("caption"):
             continue
         target_date = week_start + timedelta(days=days[offset] - 1)
+        # Normalizamos la keyword (minuscula, sin espacios de mas) para que
+        # despues, al aprobar el item, coincida exactamente con la palabra
+        # que el caption invita a comentar y con lo que matchea meta-webhook.
+        keyword = (idea.get("keyword") or "").strip().lower() or None
         rows.append(
             {
                 "client_id": client_id,
@@ -362,6 +385,9 @@ def generate_plan_for_client(client):
                 "angle": (idea.get("angle") or "")[:200] or None,
                 "based_on": (idea.get("based_on") or "")[:400] or None,
                 "caption": idea["caption"].strip(),
+                "keyword": keyword,
+                "reply_template": (idea.get("reply_template") or "").strip() or None,
+                "hashtags": (idea.get("hashtags") or "").strip() or None,
                 "status": "proposed",
             }
         )
