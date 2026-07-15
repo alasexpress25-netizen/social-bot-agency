@@ -49,6 +49,11 @@
   button:disabled{ opacity:0.5; cursor:default; }
   section{ margin-bottom:32px; }
   section h2{ font-size:14px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:12px; font-weight:600; }
+  section details{ margin-top:0; }
+  section summary{ font-size:14px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); font-weight:600; cursor:pointer; margin-bottom:12px; }
+  section summary::marker{ color:var(--accent); }
+  section details[open] summary{ margin-bottom:12px; }
+  section details > *:not(summary):first-of-type{ margin-top:0; }
   .card{ background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:10px; }
   .card.pending{ border-color:#d8c7a8; background:#fdfaf3; }
   .meta-row{ color:var(--muted); font-size:13px; margin-top:6px; }
@@ -139,49 +144,59 @@
   <div id="app" style="display:none;">
 
     <section id="pendingSection" style="display:none;">
-      <h2 data-i18n="pendingTitle">Posts esperando tu aprobación</h2>
-      <p class="section-hint" data-i18n="pendingHint">Estos posts ya fueron generados pero no se van a publicar hasta que vos los apruebes o rechaces. Podés editar el texto antes de aprobar. Si rechazás uno, se descarta para siempre (no se vuelve a intentar publicar).</p>
-      <div id="pendingList"></div>
+      <details open>
+        <summary data-i18n="pendingTitle">Posts esperando tu aprobación</summary>
+        <p class="section-hint" data-i18n="pendingHint">Estos posts ya fueron generados pero no se van a publicar hasta que vos los apruebes o rechaces. Podés editar el texto antes de aprobar. Si rechazás uno, se descarta para siempre (no se vuelve a intentar publicar).</p>
+        <div id="pendingList"></div>
+      </details>
     </section>
 
     <section>
-      <h2 data-i18n="postsTitle">Últimas publicaciones</h2>
-      <p class="section-hint" data-i18n="postsHint">Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.</p>
-      <div id="postsList"></div>
+      <details open>
+        <summary data-i18n="postsTitle">Últimas publicaciones</summary>
+        <p class="section-hint" data-i18n="postsHint">Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.</p>
+        <div id="postsList"></div>
+      </details>
     </section>
 
     <section>
-      <h2 data-i18n="metricsTitle">Métricas</h2>
-      <p class="section-hint" data-i18n="metricsHint">Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.</p>
-      <div id="metricsBox"></div>
+      <details open>
+        <summary data-i18n="metricsTitle">Métricas</summary>
+        <p class="section-hint" data-i18n="metricsHint">Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.</p>
+        <div id="metricsBox"></div>
+      </details>
     </section>
 
     <section>
-      <h2 data-i18n="leadsTitle">Contactos interesados</h2>
-      <p class="section-hint" data-i18n="leadsHint">Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Vos solo tenés que ir actualizando el estado a medida que los contactás.</p>
-      <div id="leadsList"></div>
+      <details open>
+        <summary data-i18n="leadsTitle">Contactos interesados</summary>
+        <p class="section-hint" data-i18n="leadsHint">Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Vos solo tenés que ir actualizando el estado a medida que los contactás.</p>
+        <div id="leadsList"></div>
+      </details>
     </section>
 
     <section>
-      <h2 data-i18n="prefsTitle">Posts</h2>
-      <p class="section-hint" data-i18n="prefsHint">Lo que cargues acá tiene prioridad sobre lo que carga la agencia. Si lo dejás vacío, se usa lo de la agencia; si la agencia tampoco cargó nada, la IA lo genera sola.</p>
-      <div class="card">
-        <form class="inline" onsubmit="saveAiPrefs(event)">
-          <label style="font-size:13px; color:var(--muted);" data-i18n="captionFixedLabel">Texto fijo de tus posts (opcional)</label>
-          <p class="section-hint" style="margin-top:0;" data-i18n="captionFixedHint">Si lo completás, el sistema publica SIEMPRE este texto tal cual (no genera uno nuevo con IA). Dejalo vacío si preferís que el texto varíe en cada publicación.</p>
-          <textarea id="captionFixedField" rows="4" placeholder="Ej: ¡Nuevo producto disponible! Escribinos para más info." data-i18n-placeholder="captionFixedPlaceholder"></textarea>
+      <details open>
+        <summary data-i18n="prefsTitle">Posts</summary>
+        <p class="section-hint" data-i18n="prefsHint">Lo que cargues acá tiene prioridad sobre lo que carga la agencia. Si lo dejás vacío, se usa lo de la agencia; si la agencia tampoco cargó nada, la IA lo genera sola.</p>
+        <div class="card">
+          <form class="inline" onsubmit="saveAiPrefs(event)">
+            <label style="font-size:13px; color:var(--muted);" data-i18n="captionFixedLabel">Texto fijo de tus posts (opcional)</label>
+            <p class="section-hint" style="margin-top:0;" data-i18n="captionFixedHint">Si lo completás, el sistema publica SIEMPRE este texto tal cual (no genera uno nuevo con IA). Dejalo vacío si preferís que el texto varíe en cada publicación.</p>
+            <textarea id="captionFixedField" rows="4" placeholder="Ej: ¡Nuevo producto disponible! Escribinos para más info." data-i18n-placeholder="captionFixedPlaceholder"></textarea>
 
-          <label style="font-size:13px; color:var(--muted); margin-top:14px; display:block;" data-i18n="hashtagsLabel">Hashtags de marca (fijos)</label>
-          <input type="hidden" id="hashtagsField" />
-          <div class="hashtag-row" id="hashtagsField-chips"></div>
-          <div class="hashtag-add-row">
-            <input type="text" id="hashtagsField-input" placeholder="Agregar hashtag (ej: marketing)" data-i18n-placeholder="hashtagAddPlaceholder"
-              onkeydown="if(event.key==='Enter'){ event.preventDefault(); addHashtag(); }" />
-            <button type="button" class="secondary" onclick="addHashtag()" data-i18n="addHashtagBtn">+ Agregar</button>
-          </div>
-          <button type="submit" data-i18n="savePrefsBtn">Guardar cambios</button>
-        </form>
-      </div>
+            <label style="font-size:13px; color:var(--muted); margin-top:14px; display:block;" data-i18n="hashtagsLabel">Hashtags de marca (fijos)</label>
+            <input type="hidden" id="hashtagsField" />
+            <div class="hashtag-row" id="hashtagsField-chips"></div>
+            <div class="hashtag-add-row">
+              <input type="text" id="hashtagsField-input" placeholder="Agregar hashtag (ej: marketing)" data-i18n-placeholder="hashtagAddPlaceholder"
+                onkeydown="if(event.key==='Enter'){ event.preventDefault(); addHashtag(); }" />
+              <button type="button" class="secondary" onclick="addHashtag()" data-i18n="addHashtagBtn">+ Agregar</button>
+            </div>
+            <button type="submit" data-i18n="savePrefsBtn">Guardar cambios</button>
+          </form>
+        </div>
+      </details>
     </section>
 
   </div>
