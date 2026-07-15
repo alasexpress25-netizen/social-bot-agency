@@ -216,6 +216,26 @@ límite diario de uso por cliente con fallback a plantilla fija.
   > `supabase/functions/meta-webhook/index.ts`, `scheduler/post_scheduler.py`,
   > `frontend/index.html`. También `supabase/migrations/0010_ai_debug_log.sql`
   > (tabla temporal de diagnóstico usada para encontrar el problema).*
+  > **Actualización 15/07/2026 (más tarde) — bucle de respuestas
+  > duplicadas.** Se detectó que el bot podía terminar respondiéndose a sí
+  > mismo: su propia respuesta a un comentario es, para Meta, un comentario
+  > nuevo, que puede volver a disparar el webhook de `comments` — el bot lo
+  > tomaba como un comentario más de un usuario real y volvía a responder,
+  > en cadena (se vio un caso real: 15 respuestas encadenadas en ~1 minuto
+  > a partir de un solo comentario). Se corrigió con dos protecciones en
+  > `meta-webhook`, sin cambios de esquema (se reusa la constraint
+  > `unique (platform, external_id)` ya existente desde 0001_init.sql):
+  > 1. Se ignora cualquier comentario/DM cuyo `senderId` sea la propia
+  >    cuenta (`page_id` / `ig_business_id`) — el bot nunca reacciona a
+  >    algo que publicó él mismo.
+  > 2. El comentario se "reserva" en `socialbot_interactions_log` **antes**
+  >    de generar la respuesta (insert que aprovecha la unique constraint
+  >    para fallar si ya estaba reservado), en vez de recién al final —
+  >    cierra una ventana de carrera donde dos entregas casi simultáneas
+  >    del mismo evento (algo común en webhooks) podían pasar ambas la
+  >    validación de "ya fue manejado" y las dos terminar respondiendo.
+  > *Archivo: `supabase/functions/meta-webhook/index.ts` (mismo archivo de
+  > la actualización anterior, sin migración nueva).*
 * [x] **Fase 2 — Calificación y guardado de leads.**
 La misma llamada de IA de la Fase 1 devuelve, además de la respuesta,
 si el contacto es un lead caliente y sus datos (nombre, contacto,
