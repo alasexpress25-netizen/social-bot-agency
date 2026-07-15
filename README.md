@@ -318,52 +318,75 @@ duplicados idénticos por una pregunta genérica repetida.
   (URL pública de `cliente.html`, para incluirla en el cuerpo del mail) y
   `SMTP_FROM` (si se quiere un remitente distinto a `SMTP_USER`).
 
-* [ ] **Fase 6 — La IA sugiere QUÉ publicar (calendario de ideas de contenido), no solo el texto.**
-  Hoy la IA solo redacta un caption suelto en el momento de publicar
-  (`generate_caption` en `post_scheduler.py`), sin ningún criterio de
-  variedad ni estrategia: no sabe qué se publicó antes, ni qué le interesa
-  a los leads reales del cliente, ni qué funcionó mejor. Esta fase agrega
-  una capa previa: la IA propone un **lote de ideas de contenido** (no el
-  post final) para que la agencia elija/edite antes de que se genere el
-  caption definitivo. Como hoy la publicación la seguís haciendo vos a
-  mano, el resultado principal es una lista de ideas concretas en el panel
-  de agencia — el enganche con el scheduler automático queda como paso
-  opcional, más adelante.
+* [x] **Fase 6 — Plan semanal de contenido con IA, basado en performance real.**
+  Se implementó con más alcance del que se había planeado originalmente:
+  en vez de solo sugerir temas sueltos, la IA arma un lote de posts YA
+  REDACTADOS para la semana (uno por cada día que el cliente publica),
+  usando como criterio real qué funcionó antes — no solo `topics`/`tone`.
 
-  **Contexto que le daríamos a la IA** (todo ya existe en la base, no hace
-  falta cargar nada nuevo):
-  * `socialbot_ai_settings` (topics, tone) — igual que hoy.
-  * Los últimos ~15 `caption` de `socialbot_posts` de ese cliente — para
-    que la IA evite repetir ángulos ya usados.
-  * `interest` de los últimos `socialbot_leads` — pistas reales de qué le
-    preguntan/interesa a la gente (ej. si todos preguntan por precio de
-    tal producto, sugerir un post que lo aclare).
-  * Cantidad de posts publicados por semana (ya calculado en la Fase 4,
-    `bucketByWeek`) — para detectar si hace tiempo no se toca un tema.
+  **Qué mira la IA antes de proponer:**
+  * Métricas de cada post publicado (likes, comentarios, shares, alcance),
+    traídas de Meta Graph API por `post_scheduler.py` en cada corrida y
+    guardadas en `socialbot_post_metrics` — antes esto no se guardaba en
+    ningún lado, solo se sabía *que* se había publicado, no *cómo le fue*.
+  * Los 3 posts que mejor engancharon y los 3 que peor, de los últimos 30
+    días (con su texto y sus números), para repetir ángulo/formato de lo
+    que funciona y evitar lo que no.
+  * El interés de los últimos `socialbot_leads` (qué pregunta la gente de
+    verdad) y los últimos ~15 captions publicados (para no repetir gancho).
+  * Cuántos días por semana publica el cliente (`socialbot_schedule_slots`
+    activos), para saber cuántas ideas generar.
 
-  **Cómo lo implementaríamos:**
-  1. Tabla nueva `socialbot_content_ideas` (`client_id`, `idea_text`,
-     `angle` o `pilar_de_contenido`, `status` [`nueva`/`usada`/`descartada`],
-     `created_at`) — igual patrón de RLS que el resto (`owner sees own...`).
-  2. Edge Function nueva `generate-content-ideas`, similar a
-     `meta-webhook`: recibe `client_id`, arma el contexto de arriba, le
-     pide a Groq/OpenAI/Claude (reusa `ai_settings.provider`) un JSON con
-     5-8 ideas (`{idea, angulo, por_que}`), y las guarda en
-     `socialbot_content_ideas`.
-  3. En `frontend/index.html`, un botón "💡 Sugerir ideas de contenido" por
-     cliente (nuevo `<details>`), que llama la función y muestra la lista;
-     cada idea con botones "Usar" (la marca `usada`, y opcionalmente
-     precarga un `media_asset.caption_override` a partir de esa idea) o
-     "Descartar".
-  4. Opcional / a futuro: exponer la misma lista en `frontend/cliente.html`
-     en modo solo-lectura, para que el cliente también pueda ver hacia
-     dónde va el contenido y dar feedback (ej. votar qué idea le gusta
-     más) antes de que se publique — encaja con el mismo espíritu del
-     portal de cliente de la Fase 3.
+  **Flujo:**
+  1. Cron nuevo, todos los lunes (`content_planner.py`, disparable también
+     a mano): genera el lote y lo guarda en `socialbot_content_plan_items`
+     con `status='proposed'`. Si ya existe un plan para esa semana, no
+     genera uno nuevo (evita duplicar si el cron corre dos veces).
+  2. La agencia lo revisa desde su panel (sección nueva "📅 Plan semanal de
+     contenido"), puede editar el texto, y aprueba o rechaza cada idea.
+  3. Un item **aprobado** queda reservado para su `target_date`: el día que
+     corresponde, `post_scheduler.py` lo detecta automáticamente y usa ese
+     texto tal cual para generar el post (sin volver a pasar por la IA en
+     el momento), y lo marca `used`. Si nadie lo aprueba antes de esa
+     fecha, el scheduler sigue con su lógica de siempre (caption_override
+     del media, o generación en el momento) — no rompe nada si la agencia
+     no llega a revisarlo.
 
-  *Archivos (a crear): `supabase/migrations/0010_content_ideas.sql`,
-  `supabase/functions/generate-content-ideas/index.ts`,
-  `frontend/index.html` (sección nueva por cliente).*
+  **Cuota de IA separada:** el plan semanal usa su propio provider
+  (`socialbot_ai_settings.content_plan_provider`, independiente del
+  `provider` que usan el webhook de comentarios/DMs y el caption al
+  momento de publicar) y, si ese provider es Groq, su propia API key
+  (`GROQ_API_KEY_CONTENT_PLAN`, secret separado en GitHub Actions) — así
+  un cliente con mucho movimiento de comentarios no le come la cuota
+  gratuita al cron semanal, ni al revés.
+
+  **Seguridad / alcance de esta primera versión:** por ahora solo la
+  agencia puede aprobar/editar el plan (mismo patrón de RLS `for all` que
+  ya tenía sobre `socialbot_posts`, sin necesitar RPC nueva). El cliente
+  puede *ver* su propio plan (policy de solo lectura) pero no actuar sobre
+  él todavía — si más adelante se quiere que también opine/apruebe desde
+  su portal, se agrega siguiendo el mismo patrón de funciones RPC
+  `SECURITY DEFINER` que ya usa el resto de acciones de cliente (ver
+  `0006_client_portal.sql`).
+
+  *Archivos: `supabase/migrations/0012_post_metrics.sql`,
+  `supabase/migrations/0013_content_plan.sql`,
+  `supabase/migrations/0014_content_plan_provider.sql`,
+  `scheduler/post_scheduler.py` (recolección de métricas + uso del plan
+  aprobado), `scheduler/content_planner.py` (nuevo),
+  `.github/workflows/content_planner.yml` (nuevo, cron semanal),
+  `frontend/index.html` (sección "Plan semanal de contenido" por cliente
+  + selector de `content_plan_provider`).*
+
+  **✅ Terminada y en producción (15/07/2026).** Las 3 migraciones están
+  aplicadas en `redaqqxoeciycqgjhpbv` (tablas `socialbot_post_metrics` y
+  `socialbot_content_plan_items` con sus policies, y la columna
+  `content_plan_provider`), `content_planner.py` y `post_scheduler.py`
+  están subidos, el workflow `.github/workflows/content_planner.yml` está
+  cargado, `frontend/index.html` tiene la sección del plan semanal
+  integrada, y el secret `GROQ_API_KEY_CONTENT_PLAN` ya está cargado en
+  GitHub (Settings → Secrets and variables → Actions). No queda nada
+  pendiente de esta fase.
 
 ### Backlog (más adelante, cuando haya 5+ clientes)
 
