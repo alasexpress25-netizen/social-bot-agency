@@ -1083,7 +1083,15 @@ def process_client(client_id, slot):
     # pero NO se publica en este momento. publish_approved_pending_posts() se
     # encarga de publicarlo mas adelante, en la corrida en la que ya este
     # aprobado.
-    require_approval = client.get("require_approval", False)
+    # Si esta corrida es manual (boton "Publicar ahora" o workflow_dispatch a
+    # mano), quien la dispara ya esta dando la orden directa de publicar --
+    # no tiene sentido pedirle aprobacion al cliente para algo que la agencia
+    # ya decidio ahora mismo. El require_approval del cliente solo aplica en
+    # la corrida automatica (cron), que es la que publica sin supervision.
+    es_corrida_automatica = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    require_approval = client.get("require_approval", False) and es_corrida_automatica
+    if client.get("require_approval", False) and not es_corrida_automatica:
+        print(f"Cliente {client['name']}: tiene aprobacion manual activada, pero esta corrida es manual -> se publica directo, sin pedir aprobacion.")
 
     created_post_ids = []
 
