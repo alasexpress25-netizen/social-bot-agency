@@ -175,7 +175,56 @@
     <form class="inline" onsubmit="createClient(event)">
       <input id="newClientName" placeholder="Nombre del cliente / negocio" required />
       <input id="newClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
+
+      <details>
+        <summary>Conectar cuenta de Facebook / Instagram</summary>
+        <small class="hint" style="display:block; margin-top:10px;">Opcional, podés cargarla ahora o más tarde desde "Editar cliente". Generá el Page Access Token de larga duración en Graph API Explorer (ver README).</small>
+        <div class="grid2">
+          <select id="newClientPlatform">
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+          </select>
+          <input id="newClientPageName" placeholder="Nombre de la página" />
+        </div>
+        <input id="newClientPageId" placeholder="Page ID" />
+        <input id="newClientIgId" placeholder="Instagram Business ID (solo si es Instagram)" />
+        <input id="newClientPageToken" placeholder="Page Access Token" />
+      </details>
+
       <button type="submit">Agregar cliente</button>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Editar cliente -->
+<div class="modal-overlay" id="editClientModal" onclick="if(event.target===this) closeEditClientModal()">
+  <div class="modal-box">
+    <div class="card-row">
+      <h2 style="margin:0;">Editar cliente</h2>
+      <button type="button" class="modal-close" onclick="closeEditClientModal()">✕</button>
+    </div>
+    <form class="inline" onsubmit="saveClientEdit(event)">
+      <input type="hidden" id="editClientId" />
+      <input type="hidden" id="editClientAccountId" />
+      <input id="editClientName" placeholder="Nombre del cliente / negocio" required />
+      <input id="editClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
+
+      <details>
+        <summary>Conectar cuenta de Facebook / Instagram</summary>
+        <small class="hint" style="display:block; margin-top:10px;">Generá el Page Access Token de larga duración en Graph API Explorer (ver README).</small>
+        <div class="grid2">
+          <select id="editClientPlatform">
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+          </select>
+          <input id="editClientPageName" placeholder="Nombre de la página" />
+        </div>
+        <input id="editClientPageId" placeholder="Page ID" />
+        <input id="editClientIgId" placeholder="Instagram Business ID (solo si es Instagram)" />
+        <input id="editClientPageToken" placeholder="Page Access Token" />
+      </details>
+
+      <button type="submit">Guardar cambios</button>
     </form>
   </div>
 </div>
@@ -197,6 +246,11 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 let currentAgencyId = null;
 let selectedClientId = 'all'; // 'all' = ver todos los clientes en el dash
 
+// Guarda, por clientId, el cliente y su primera cuenta conectada (si tiene),
+// para poder abrir el modal "Editar cliente" sin volver a pedirle nada a
+// Supabase. Se repuebla cada vez que loadClients() renderiza las tarjetas.
+let clientsCache = {};
+
 function openNewClientModal(){
   document.getElementById('newClientModal').classList.add('open');
 }
@@ -204,6 +258,64 @@ function closeNewClientModal(){
   document.getElementById('newClientModal').classList.remove('open');
   document.getElementById('newClientName').value = '';
   document.getElementById('newClientLink').value = '';
+  document.getElementById('newClientPlatform').value = 'facebook';
+  document.getElementById('newClientPageName').value = '';
+  document.getElementById('newClientPageId').value = '';
+  document.getElementById('newClientIgId').value = '';
+  document.getElementById('newClientPageToken').value = '';
+}
+
+function openEditClientModal(clientId){
+  const entry = clientsCache[clientId];
+  if(!entry){ alert('No se encontró el cliente. Probá recargar la página.'); return; }
+  const { client, account } = entry;
+
+  document.getElementById('editClientId').value = client.id;
+  document.getElementById('editClientAccountId').value = account ? account.id : '';
+  document.getElementById('editClientName').value = client.name || '';
+  document.getElementById('editClientLink').value = client.sales_link || '';
+  document.getElementById('editClientPlatform').value = account ? account.platform : 'facebook';
+  document.getElementById('editClientPageName').value = account ? (account.page_name || '') : '';
+  document.getElementById('editClientPageId').value = account ? (account.page_id || '') : '';
+  document.getElementById('editClientIgId').value = account ? (account.ig_business_id || '') : '';
+  document.getElementById('editClientPageToken').value = account ? (account.page_access_token || '') : '';
+
+  document.getElementById('editClientModal').classList.add('open');
+}
+function closeEditClientModal(){
+  document.getElementById('editClientModal').classList.remove('open');
+}
+
+async function saveClientEdit(e){
+  e.preventDefault();
+  const clientId = document.getElementById('editClientId').value;
+  const accountId = document.getElementById('editClientAccountId').value;
+  const name = document.getElementById('editClientName').value;
+  const sales_link = document.getElementById('editClientLink').value;
+
+  const { error } = await sb.from('socialbot_clients').update({ name, sales_link }).eq('id', clientId);
+  if(error){ alert(error.message); return; }
+
+  // Igual que en createClient: page_id y page_access_token son NOT NULL en
+  // la base, así que sólo tocamos la cuenta si ambos están cargados.
+  const pageId = document.getElementById('editClientPageId').value;
+  const pageToken = document.getElementById('editClientPageToken').value;
+  if(pageId && pageToken){
+    const accountPatch = {
+      platform: document.getElementById('editClientPlatform').value,
+      page_id: pageId,
+      ig_business_id: document.getElementById('editClientIgId').value || null,
+      page_name: document.getElementById('editClientPageName').value,
+      page_access_token: pageToken,
+    };
+    const { error: accError } = accountId
+      ? await sb.from('socialbot_social_accounts').update(accountPatch).eq('id', accountId)
+      : await sb.from('socialbot_social_accounts').insert({ ...accountPatch, client_id: clientId });
+    if(accError){ alert(`El cliente se guardó, pero la cuenta de FB/IG no se pudo guardar: ${accError.message}`); }
+  }
+
+  closeEditClientModal();
+  loadClients();
 }
 
 function onClientSelectorChange(){
@@ -284,7 +396,27 @@ async function createClient(e){
   e.preventDefault();
   const name = document.getElementById('newClientName').value;
   const sales_link = document.getElementById('newClientLink').value;
-  const { data: created } = await sb.from('socialbot_clients').insert({ agency_id: currentAgencyId, name, sales_link }).select();
+  const { data: created, error } = await sb.from('socialbot_clients').insert({ agency_id: currentAgencyId, name, sales_link }).select();
+  if(error){ alert(error.message); return; }
+
+  // La cuenta de FB/IG es opcional en este modal: page_id y page_access_token
+  // son NOT NULL en la base, así que solo la creamos si se cargaron los dos.
+  // Si se dejaron vacíos, el cliente queda creado igual y la cuenta se puede
+  // agregar más tarde desde su tarjeta ("Conectar cuenta nueva").
+  const pageId = document.getElementById('newClientPageId').value;
+  const pageToken = document.getElementById('newClientPageToken').value;
+  if(created && created[0] && pageId && pageToken){
+    const { error: accError } = await sb.from('socialbot_social_accounts').insert({
+      client_id: created[0].id,
+      platform: document.getElementById('newClientPlatform').value,
+      page_id: pageId,
+      ig_business_id: document.getElementById('newClientIgId').value || null,
+      page_name: document.getElementById('newClientPageName').value,
+      page_access_token: pageToken,
+    });
+    if(accError){ alert(`El cliente se creó, pero la cuenta de FB/IG no se pudo guardar: ${accError.message}`); }
+  }
+
   closeNewClientModal();
   // Seleccionamos automáticamente el cliente recién creado
   if(created && created[0]) selectedClientId = created[0].id;
@@ -506,6 +638,11 @@ async function loadClients(){
     const ai = (aiRows && aiRows[0]) || {};
     const leadsNuevos = (leads||[]).filter(l => l.status === 'nuevo').length;
 
+    // Guardamos cliente + primera cuenta conectada para poder abrir el
+    // modal "Editar cliente" sin volver a pedirle nada a Supabase.
+    clientsCache[c.id] = { client: c, account: (accounts && accounts[0]) || null };
+
+
     // Para los medios tipo 'carousel' no hay una unica url en el propio
     // media_asset; contamos cuantas imagenes tiene cada uno para mostrarlo
     // en el resumen (ver socialbot_carousel_items).
@@ -531,6 +668,7 @@ async function loadClients(){
         </div>
         <div>
           <button onclick="publishNow('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Publicar ahora</button>
+          <button class="secondary" onclick="openEditClientModal('${c.id}')">Editar</button>
           <button class="secondary" onclick="toggleActive('${c.id}', ${c.active})">${c.active ? 'Pausar' : 'Reactivar'}</button>
         </div>
       </div>
@@ -611,23 +749,13 @@ async function loadClients(){
       </details>
       ` : ''}
 
+      ${(accounts||[]).length > 1 ? `
       <details>
-        <summary>Conectar cuenta de Facebook / Instagram</summary>
-        <form class="inline" onsubmit="addAccount(event, '${c.id}')">
-          <small class="hint">Generá el Page Access Token de larga duración en Graph API Explorer (ver README) y pegalo acá.</small>
-          <div class="grid2">
-            <select name="platform" required>
-              <option value="facebook">Facebook</option>
-              <option value="instagram">Instagram</option>
-            </select>
-            <input name="page_name" placeholder="Nombre de la página" />
-          </div>
-          <input name="page_id" placeholder="Page ID" required />
-          <input name="ig_business_id" placeholder="Instagram Business ID (solo si es Instagram)" />
-          <input name="page_access_token" placeholder="Page Access Token" required />
-          <button type="submit">Guardar cuenta</button>
-        </form>
+        <summary>Otras cuentas conectadas (${accounts.length - 1})</summary>
+        <small class="hint">"Editar" en la tarjeta sólo edita la primera cuenta. Para más de una cuenta por cliente, escribinos y lo resolvemos por acá mientras se agrega soporte multi-cuenta al modal.</small>
+        ${accounts.slice(1).map(a => `<div class="meta-row" style="margin-top:6px;">${a.platform} · ${a.page_name || a.page_id}</div>`).join('')}
       </details>
+      ` : ''}
 
       <details>
         <summary>Configurar IA (${ai.provider || 'sin configurar'})</summary>
@@ -856,17 +984,23 @@ async function saveClientPortalAccess(e, clientId){
   loadClients();
 }
 
-async function addAccount(e, clientId){
+// Edita una cuenta ya conectada (UPDATE por id). Crear cuentas nuevas se
+// hace únicamente desde el modal "Nuevo cliente" (createClient), para que
+// cada sección tenga un solo trabajo: esta solo edita lo que ya existe.
+async function saveAccount(e, accountId){
   e.preventDefault();
   const f = new FormData(e.target);
-  await sb.from('socialbot_social_accounts').insert({
-    client_id: clientId,
+  const patch = {
     platform: f.get('platform'),
     page_id: f.get('page_id'),
     ig_business_id: f.get('ig_business_id') || null,
     page_name: f.get('page_name'),
     page_access_token: f.get('page_access_token'),
-  });
+  };
+
+  const { error } = await sb.from('socialbot_social_accounts').update(patch).eq('id', accountId);
+  if (error){ alert(error.message); return; }
+  alert('Cuenta actualizada.');
   loadClients();
 }
 
