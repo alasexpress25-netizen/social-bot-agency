@@ -262,6 +262,24 @@ async function boot(){
   loadClients();
 }
 
+async function publishNow(clientId, clientName){
+  if(!confirm(`¿Disparar una publicación manual para ${clientName} ahora mismo? Va a generar (o reintentar) un post para cada horario activo de este cliente, sin esperar su horario programado.`)) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Disparando...';
+  try {
+    const { data, error } = await sb.functions.invoke('trigger-manual-publish', { body: { client_id: clientId } });
+    if(error){ throw error; }
+    if(data && data.error){ throw new Error(data.error); }
+    alert(`Listo, se disparó el workflow para ${clientName}. Puede tardar 1-2 minutos en verse el resultado — revisá la pestaña Actions de GitHub, o volvé a entrar acá en un rato para ver el post nuevo.`);
+  } catch(err){
+    alert(`No se pudo disparar: ${err.message || err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Publicar ahora';
+  }
+}
+
 async function createClient(e){
   e.preventDefault();
   const name = document.getElementById('newClientName').value;
@@ -512,6 +530,7 @@ async function loadClients(){
           <span class="pill ${c.active ? '' : 'off'}">${c.active ? 'activo' : 'pausado'}</span>
         </div>
         <div>
+          <button onclick="publishNow('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Publicar ahora</button>
           <button class="secondary" onclick="toggleActive('${c.id}', ${c.active})">${c.active ? 'Pausar' : 'Reactivar'}</button>
         </div>
       </div>
