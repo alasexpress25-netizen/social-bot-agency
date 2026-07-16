@@ -899,7 +899,7 @@ def run():
         if rows:
             clients_by_id[client_id] = rows[0]
 
-    matching_client_ids = set()
+    matching = []  # lista de (client_id, slot) -- un cliente puede tener mas de un horario por dia
     for slot in slots:
         client = clients_by_id.get(slot["client_id"])
         if not client:
@@ -921,22 +921,22 @@ def run():
         slot_minutes = slot["hour"] * 60 + slot["minute"]
         now_minutes = local_now.hour * 60 + local_now.minute
         if abs(slot_minutes - now_minutes) <= 30:
-            matching_client_ids.add(slot["client_id"])
+            matching.append((slot["client_id"], slot))
 
-    if not matching_client_ids:
+    if not matching:
         print(f"[{now_utc.isoformat()}] Ningun horario coincide con la hora local de algun cliente. Nada que hacer.")
         return
 
-    print(f"Procesando {len(matching_client_ids)} cliente(s) para este horario...")
+    print(f"Procesando {len(matching)} horario(s) para esta corrida...")
 
-    for client_id in matching_client_ids:
+    for client_id, slot in matching:
         try:
-            process_client(client_id)
+            process_client(client_id, slot)
         except Exception as e:
-            print(f"ERROR procesando cliente {client_id}: {e}")
+            print(f"ERROR procesando cliente {client_id} (slot {slot['id']}): {e}")
 
 
-def process_client(client_id):
+def process_client(client_id, slot):
     clients = sb_get("socialbot_clients", {"id": f"eq.{client_id}", "active": "eq.true"})
     if not clients:
         print(f"Cliente {client_id} inactivo o no encontrado, se salta.")
@@ -944,28 +944,36 @@ def process_client(client_id):
     client = clients[0]
 
     # Evita duplicar posts si el scheduler corre mas de una vez dentro de la
-    # misma ventana horaria de un cliente (por ejemplo, si se lo dispara a
-    # mano ademas del cron, o el cron reintenta). Si ya existe un post de
-    # este cliente creado "hoy" (en SU horario local), no generamos otro.
+    # misma ventana horaria de UN MISMO horario (por ejemplo, si se lo
+    # dispara a mano ademas del cron). Ojo: un cliente puede tener varios
+    # horarios distintos en el dia (ej: 9am y 6pm) y cada uno debe poder
+    # generar su propio post -- por eso NO alcanza con "ya hubo un post hoy",
+    # hay que fijarse puntualmente si ya hubo uno CERCA DE ESTE horario.
     tz_name = client.get("timezone") or "America/Sao_Paulo"
     try:
         client_tz = ZoneInfo(tz_name)
     except Exception:
         client_tz = ZoneInfo("America/Sao_Paulo")
-    local_midnight = datetime.now(timezone.utc).astimezone(client_tz).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    local_now = datetime.now(timezone.utc).astimezone(client_tz)
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_start_utc = local_midnight.astimezone(timezone.utc).isoformat()
-    already_today = sb_get(
+    today_posts = sb_get(
         "socialbot_posts",
-        {"client_id": f"eq.{client_id}", "scheduled_at": f"gte.{day_start_utc}", "limit": "1"},
+        {"client_id": f"eq.{client_id}", "scheduled_at": f"gte.{day_start_utc}"},
     )
-    if already_today:
-        print(
-            f"Cliente {client['name']}: ya se genero un post hoy (id {already_today[0]['id']}), "
-            f"se salta esta corrida para no duplicar."
-        )
-        return
+    slot_minutes = slot["hour"] * 60 + slot["minute"]
+    for p in today_posts or []:
+        try:
+            p_local = datetime.fromisoformat(p["scheduled_at"].replace("Z", "+00:00")).astimezone(client_tz)
+        except Exception:
+            continue
+        p_minutes = p_local.hour * 60 + p_local.minute
+        if abs(p_minutes - slot_minutes) <= 30:
+            print(
+                f"Cliente {client['name']}: ya se genero un post para el horario "
+                f"{slot['hour']:02d}:{slot['minute']:02d} hoy (id {p['id']}), se salta para no duplicar."
+            )
+            return
 
     ai_rows = sb_get("socialbot_ai_settings", {"client_id": f"eq.{client_id}"})
     ai_settings = ai_rows[0] if ai_rows else {"provider": "groq"}
