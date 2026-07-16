@@ -543,16 +543,28 @@ async function loadClients(){
         <div class="meta-row" style="margin-bottom:6px;">
           <strong>${pendingPosts.length} post(s) esperando aprobación</strong> — normalmente los aprueba el cliente desde su portal, pero también podés hacerlo vos acá (ej. si el cliente todavía no tiene acceso, o hay apuro).
         </div>
-        ${pendingPosts.map(p => `
-          <div class="card pending" style="margin-top:8px;">
-            <textarea id="agency-caption-${p.id}" rows="3">${(p.caption||'').replace(/</g,'&lt;')}</textarea>
-            <div class="btn-row">
-              <button class="secondary" onclick="saveCaptionAsAgency('${p.id}')">Guardar texto</button>
-              <button onclick="reviewPostAsAgency('${p.id}', 'approved')">Aprobar</button>
-              <button class="reject" onclick="reviewPostAsAgency('${p.id}', 'rejected')">Rechazar</button>
+        <div class="btn-row" style="margin-bottom:10px;">
+          <button onclick="approveAllPending('${c.id}')">Aprobar todos (${pendingPosts.length})</button>
+          <button class="secondary" onclick="approveSelectedPending('${c.id}')">Aprobar selección</button>
+        </div>
+        <div data-client-pending="${c.id}">
+          ${pendingPosts.map(p => `
+            <div class="card pending" style="margin-top:8px;">
+              <div class="card-row" style="margin-bottom:6px;">
+                <label style="font-size:13px; color:var(--muted);">
+                  <input type="checkbox" class="pending-check" data-post-id="${p.id}" style="width:auto; vertical-align:middle;" />
+                  Seleccionar este post
+                </label>
+              </div>
+              <textarea id="agency-caption-${p.id}" rows="3">${(p.caption||'').replace(/</g,'&lt;')}</textarea>
+              <div class="btn-row">
+                <button class="secondary" onclick="saveCaptionAsAgency('${p.id}')">Guardar texto</button>
+                <button onclick="reviewPostAsAgency('${p.id}', 'approved')">Aprobar</button>
+                <button class="reject" onclick="reviewPostAsAgency('${p.id}', 'rejected')">Rechazar</button>
+              </div>
             </div>
-          </div>
-        `).join('')}
+          `).join('')}
+        </div>
       </div>
       ` : ''}
 
@@ -1033,6 +1045,25 @@ async function updateLeadStatus(leadId, status){
 // ---------------------------------------------------------------------------
 async function reviewPostAsAgency(postId, decision){
   const { error } = await sb.from('socialbot_posts').update({ approval_status: decision }).eq('id', postId);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+// Aprueba de una todos los posts pendientes de este cliente (sin tildar nada).
+async function approveAllPending(clientId){
+  const ids = Array.from(document.querySelectorAll(`[data-client-pending="${clientId}"] .pending-check`)).map(cb => cb.dataset.postId);
+  if(!ids.length) return;
+  if(!confirm(`¿Aprobar los ${ids.length} post(s) pendientes de este cliente?`)) return;
+  const { error } = await sb.from('socialbot_posts').update({ approval_status: 'approved' }).in('id', ids);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+// Aprueba solo los posts que el usuario tildó con el checkbox de cada tarjeta.
+async function approveSelectedPending(clientId){
+  const ids = Array.from(document.querySelectorAll(`[data-client-pending="${clientId}"] .pending-check:checked`)).map(cb => cb.dataset.postId);
+  if(!ids.length){ alert('No tildaste ningún post.'); return; }
+  const { error } = await sb.from('socialbot_posts').update({ approval_status: 'approved' }).in('id', ids);
   if(error){ alert(error.message); return; }
   loadClients();
 }
