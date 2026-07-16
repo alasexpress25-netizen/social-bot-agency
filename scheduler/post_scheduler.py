@@ -769,14 +769,27 @@ def publish_instagram(ig_business_id, page_access_token, caption, media_url, med
     r.raise_for_status()
     creation_id = r.json()["id"]
 
-    # Para video, Meta procesa async: esperamos a que el status sea FINISHED
+    # Para video, Meta procesa async: esperamos a que el status sea FINISHED.
+    # Videos mas pesados (como reels largos) pueden tardar varios minutos en
+    # procesarse del lado de Meta -- por eso esperamos hasta ~6 minutos en
+    # total antes de rendirnos, y cortamos antes si Meta ya avisa error.
     if media_type == "video":
         status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
-        for _ in range(20):
+        finished = False
+        for _ in range(70):
             time.sleep(5)
             s = requests.get(status_url, params={"fields": "status_code", "access_token": page_access_token}, timeout=30)
-            if s.json().get("status_code") == "FINISHED":
+            status_code = s.json().get("status_code")
+            if status_code == "FINISHED":
+                finished = True
                 break
+            if status_code in ("ERROR", "EXPIRED"):
+                raise RuntimeError(f"Instagram: el video quedo en estado '{status_code}' al procesarse (creation_id {creation_id}).")
+        if not finished:
+            raise RuntimeError(
+                f"Instagram: el video siguio sin terminar de procesarse despues de ~6 minutos "
+                f"(creation_id {creation_id}). Puede reintentarse mas tarde."
+            )
 
     # Paso 2: publicar el contenedor
     publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/media_publish"
@@ -864,8 +877,8 @@ def publish_approved_pending_posts():
                 {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id},
             )
             print(f"OK (aprobado por cliente) -> post {post['id']}")
-        except requests.HTTPError as e:
-            error_msg = e.response.text[:500] if e.response is not None else str(e)
+        except Exception as e:
+            error_msg = e.response.text[:500] if getattr(e, "response", None) is not None else str(e)
             sb_update("socialbot_posts", {"id": f"eq.{post['id']}"}, {"status": "failed", "error_message": error_msg})
             print(f"FALLO (aprobado por cliente) -> post {post['id']}: {error_msg}")
 
