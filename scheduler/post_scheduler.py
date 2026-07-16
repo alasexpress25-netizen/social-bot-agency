@@ -912,6 +912,8 @@ def run():
         if rows:
             clients_by_id[client_id] = rows[0]
 
+    es_corrida_automatica = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+
     matching = []  # lista de (client_id, slot) -- un cliente puede tener mas de un horario por dia
     for slot in slots:
         client = clients_by_id.get(slot["client_id"])
@@ -923,6 +925,14 @@ def run():
             local_now = now_utc.astimezone(ZoneInfo(tz_name))
         except Exception as e:
             print(f"Timezone invalido '{tz_name}' para cliente {slot['client_id']}: {e}. Se salta.")
+            continue
+
+        if not es_corrida_automatica:
+            # Corrida manual (workflow_dispatch o local): un humano la disparo
+            # a proposito, asi que no restringimos por dia de la semana ni por
+            # franja horaria -- se procesan todos los horarios activos del
+            # cliente, sin importar que hora sea ahora.
+            matching.append((slot["client_id"], slot))
             continue
 
         # day_of_week: 1=Lunes..7=Domingo (ISO). NULL = aplica todos los dias.
@@ -956,37 +966,53 @@ def process_client(client_id, slot):
         return
     client = clients[0]
 
-    # Evita duplicar posts si el scheduler corre mas de una vez dentro de la
-    # misma ventana horaria de UN MISMO horario (por ejemplo, si se lo
-    # dispara a mano ademas del cron). Ojo: un cliente puede tener varios
-    # horarios distintos en el dia (ej: 9am y 6pm) y cada uno debe poder
-    # generar su propio post -- por eso NO alcanza con "ya hubo un post hoy",
-    # hay que fijarse puntualmente si ya hubo uno CERCA DE ESTE horario.
-    tz_name = client.get("timezone") or "America/Sao_Paulo"
-    try:
-        client_tz = ZoneInfo(tz_name)
-    except Exception:
-        client_tz = ZoneInfo("America/Sao_Paulo")
-    local_now = datetime.now(timezone.utc).astimezone(client_tz)
-    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_start_utc = local_midnight.astimezone(timezone.utc).isoformat()
-    today_posts = sb_get(
-        "socialbot_posts",
-        {"client_id": f"eq.{client_id}", "scheduled_at": f"gte.{day_start_utc}"},
-    )
-    slot_minutes = slot["hour"] * 60 + slot["minute"]
-    for p in today_posts or []:
+    # GitHub Actions define automaticamente GITHUB_EVENT_NAME segun como se
+    # disparo la corrida: "schedule" = cron automatico, "workflow_dispatch" =
+    # alguien lo apreto a mano desde la pestaña Actions. Si se corre local
+    # (como "python scheduler/post_scheduler.py" en tu maquina) esta variable
+    # no existe, y tambien lo tratamos como manual.
+    #
+    # El chequeo anti-duplicado de abajo (que evita generar 2 veces el mismo
+    # horario del dia) SOLO tiene sentido para el cron automatico -- si sos
+    # vos ejecutandolo a mano, es porque QUERES forzar una publicacion de
+    # nuevo (por ejemplo, para reintentar despues de arreglar un permiso), asi
+    # que en ese caso lo dejamos pasar siempre, sin restriccion.
+    es_corrida_automatica = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+
+    if es_corrida_automatica:
+        # Evita duplicar posts si el scheduler corre mas de una vez dentro de la
+        # misma ventana horaria de UN MISMO horario (por ejemplo, si el cron
+        # reintenta). Ojo: un cliente puede tener varios horarios distintos en
+        # el dia (ej: 9am y 6pm) y cada uno debe poder generar su propio post --
+        # por eso NO alcanza con "ya hubo un post hoy", hay que fijarse
+        # puntualmente si ya hubo uno CERCA DE ESTE horario.
+        tz_name = client.get("timezone") or "America/Sao_Paulo"
         try:
-            p_local = datetime.fromisoformat(p["scheduled_at"].replace("Z", "+00:00")).astimezone(client_tz)
+            client_tz = ZoneInfo(tz_name)
         except Exception:
-            continue
-        p_minutes = p_local.hour * 60 + p_local.minute
-        if abs(p_minutes - slot_minutes) <= 30:
-            print(
-                f"Cliente {client['name']}: ya se genero un post para el horario "
-                f"{slot['hour']:02d}:{slot['minute']:02d} hoy (id {p['id']}), se salta para no duplicar."
-            )
-            return
+            client_tz = ZoneInfo("America/Sao_Paulo")
+        local_now = datetime.now(timezone.utc).astimezone(client_tz)
+        local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start_utc = local_midnight.astimezone(timezone.utc).isoformat()
+        today_posts = sb_get(
+            "socialbot_posts",
+            {"client_id": f"eq.{client_id}", "scheduled_at": f"gte.{day_start_utc}"},
+        )
+        slot_minutes = slot["hour"] * 60 + slot["minute"]
+        for p in today_posts or []:
+            try:
+                p_local = datetime.fromisoformat(p["scheduled_at"].replace("Z", "+00:00")).astimezone(client_tz)
+            except Exception:
+                continue
+            p_minutes = p_local.hour * 60 + p_local.minute
+            if abs(p_minutes - slot_minutes) <= 30:
+                print(
+                    f"Cliente {client['name']}: ya se genero un post para el horario "
+                    f"{slot['hour']:02d}:{slot['minute']:02d} hoy (id {p['id']}), se salta para no duplicar."
+                )
+                return
+    else:
+        print(f"Cliente {client['name']}: corrida manual (workflow_dispatch o local), sin chequeo anti-duplicado.")
 
     ai_rows = sb_get("socialbot_ai_settings", {"client_id": f"eq.{client_id}"})
     ai_settings = ai_rows[0] if ai_rows else {"provider": "groq"}
