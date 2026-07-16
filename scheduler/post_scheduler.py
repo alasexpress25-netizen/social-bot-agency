@@ -591,6 +591,15 @@ def _is_transient_media_fetch_error(exc):
         return True
     if "429" in text and ("too many requests" in text or "rate limit" in text):
         return True
+    # Meta a veces devuelve un error generico de procesamiento (code 6000,
+    # subcode 1363019, "Espera unos minutos y vuelve a intentarlo.") que no
+    # tiene nada que ver con permisos ni con el contenido del archivo -- es
+    # un hipo transitorio del lado de Meta al procesar el video subido. Lo
+    # tratamos igual que los demas errores transitorios: seguir con el
+    # siguiente intento (resumable upload / fallback de frame) en vez de
+    # abortar el post entero.
+    if "1363019" in text:
+        return True
     return False
 
 
