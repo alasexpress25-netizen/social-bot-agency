@@ -70,6 +70,13 @@ SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]  # service_role key (NUNCA la anon key acá)
 GRAPH_API_VERSION = os.environ.get("GRAPH_API_VERSION", "v21.0")
 
+# collect_post_metrics(): despues de esta cantidad de fallos consecutivos
+# trayendo metricas de un post (ej. el cliente lo borro, oculto los likes,
+# etc.), se deja de reintentar en cada corrida y pasa a reintentarse solo 1
+# vez cada RETRY_COOLDOWN_HOURS horas. Ver migracion 0017.
+MAX_METRICS_FETCH_FAILURES = 3
+RETRY_COOLDOWN_HOURS = 24
+
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
@@ -375,14 +382,30 @@ def collect_post_metrics():
     despues usa para saber que angulo/formato funciono mejor con cada
     cliente -- sin esto, la tabla socialbot_post_metrics quedaba vacia para
     siempre y el plan semanal no tenia datos reales de performance.
+
+    Algunos posts fallan siempre (el cliente borro el post desde Instagram/
+    Facebook, oculto los likes, cambiaron permisos de la Pagina, etc.) -- no
+    hay forma de distinguir esto de un fallo transitorio en el momento, asi
+    que en vez de reintentar para siempre en cada corrida (ruido en el log +
+    llamadas de API desperdiciadas sin beneficio), despues de
+    MAX_METRICS_FETCH_FAILURES fallos consecutivos el post pasa a
+    reintentarse solo 1 vez cada RETRY_COOLDOWN_HOURS horas -- por si el
+    problema se resolvio solo (ej. la Pagina recupero permisos), sin
+    machacar la API mientras tanto.
     """
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    retry_cutoff = (datetime.now(timezone.utc) - timedelta(hours=RETRY_COOLDOWN_HOURS)).isoformat()
     posts = sb_get(
         "socialbot_posts",
         {
             "status": "eq.published",
             "published_at": f"gte.{since}",
-            "select": "id,external_post_id,social_account_id",
+            "or": (
+                f"(metrics_fetch_failures.lt.{MAX_METRICS_FETCH_FAILURES},"
+                f"metrics_last_fetch_attempt.is.null,"
+                f"metrics_last_fetch_attempt.lt.{retry_cutoff})"
+            ),
+            "select": "id,external_post_id,social_account_id,metrics_fetch_failures",
         },
     )
     if not posts:
@@ -390,10 +413,26 @@ def collect_post_metrics():
 
     print(f"Actualizando metricas de {len(posts)} post(s) publicado(s) en los ultimos 30 dias...")
     updated = 0
+    skipped_in_cooldown = 0
     for post in posts:
         clean_id = _clean_external_id(post.get("external_post_id"))
         if not clean_id:
             continue
+
+        prior_failures = post.get("metrics_fetch_failures") or 0
+        if prior_failures >= MAX_METRICS_FETCH_FAILURES:
+            skipped_in_cooldown += 1
+
+        def _record_fetch_failure():
+            new_failures = prior_failures + 1
+            sb_update(
+                "socialbot_posts",
+                {"id": f"eq.{post['id']}"},
+                {"metrics_fetch_failures": new_failures, "metrics_last_fetch_attempt": datetime.now(timezone.utc).isoformat()},
+            )
+            if new_failures == MAX_METRICS_FETCH_FAILURES:
+                print(f"  Post {post['id']}: {MAX_METRICS_FETCH_FAILURES} fallos seguidos trayendo metricas, paso a reintentarse solo 1 vez cada {RETRY_COOLDOWN_HOURS}h en vez de en cada corrida.")
+
         try:
             accounts = sb_get("socialbot_social_accounts", {"id": f"eq.{post['social_account_id']}"})
             if not accounts:
@@ -402,6 +441,7 @@ def collect_post_metrics():
 
             metrics = fetch_post_metrics(account["platform"], clean_id, account["page_access_token"])
             if metrics is None:
+                _record_fetch_failure()
                 continue
 
             sb_upsert(
@@ -409,11 +449,22 @@ def collect_post_metrics():
                 [{"post_id": post["id"], **metrics, "fetched_at": datetime.now(timezone.utc).isoformat()}],
                 on_conflict="post_id",
             )
+            if prior_failures:
+                sb_update(
+                    "socialbot_posts",
+                    {"id": f"eq.{post['id']}"},
+                    {"metrics_fetch_failures": 0, "metrics_last_fetch_attempt": None},
+                )
             updated += 1
         except Exception as e:
             print(f"ERROR actualizando metricas del post {post['id']}: {e}")
+            try:
+                _record_fetch_failure()
+            except Exception as e2:
+                print(f"  (ademas, no se pudo registrar el fallo en socialbot_posts: {e2})")
 
-    print(f"Metricas actualizadas: {updated}/{len(posts)}.")
+    cooldown_note = f" ({skipped_in_cooldown} en cooldown, reintentados igual esta vez)" if skipped_in_cooldown else ""
+    print(f"Metricas actualizadas: {updated}/{len(posts)}.{cooldown_note}")
 
 
 # ---------------------------------------------------------------------------
