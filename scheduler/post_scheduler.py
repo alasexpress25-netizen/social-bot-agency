@@ -1103,8 +1103,8 @@ def process_client(client_id, slot):
             print(f"OK -> {client['name']} / {account['platform']} / post {external_id}")
             media_published_ok = True
 
-        except requests.HTTPError as e:
-            error_msg = e.response.text[:500] if e.response is not None else str(e)
+        except Exception as e:
+            error_msg = e.response.text[:500] if getattr(e, "response", None) is not None else str(e)
             sb_update("socialbot_posts", {"id": f"eq.{created['id']}"}, {"status": "failed", "error_message": error_msg})
             print(f"FALLO -> {client['name']} / {account['platform']}: {error_msg}")
 
