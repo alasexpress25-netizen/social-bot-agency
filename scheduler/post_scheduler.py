@@ -1095,7 +1095,23 @@ def process_client(client_id, slot):
 
     created_post_ids = []
 
-    for account in accounts:
+    # ---------------------------------------------------------------------------
+    # Serialización por plataforma para evitar 429 en Hostinger con videos.
+    # Cuando un cliente tiene Facebook + Instagram conectados, ambos crawlers
+    # de Meta le piden el video a Hostinger casi al mismo tiempo, y el hosting
+    # compartido responde 429 al segundo pedido. La solución es publicar en un
+    # orden fijo: Instagram primero (ya incluye su propio polling hasta que Meta
+    # termine de procesar el video), y recién cuando termina, Facebook.
+    # Así Hostinger solo recibe una descarga de video a la vez por cliente.
+    # Para imágenes y carruseles no hay riesgo real de 429 (son requests muy
+    # rápidas), pero aplicamos el mismo orden igualmente por consistencia.
+    # ---------------------------------------------------------------------------
+    def platform_order(account):
+        return 0 if account["platform"] == "instagram" else 1
+
+    accounts_ordered = sorted(accounts, key=platform_order)
+
+    for account in accounts_ordered:
         location_id = media.get("location_id_override") if media else None
 
         post_row = {
@@ -1147,6 +1163,18 @@ def process_client(client_id, slot):
             )
             print(f"OK -> {client['name']} / {account['platform']} / post {external_id}")
             media_published_ok = True
+
+            # Si hay más cuentas por procesar y el media es un video, esperamos
+            # antes de arrancar la siguiente plataforma. Instagram ya terminó de
+            # bajar el video de Hostinger (el polling de publish_instagram()
+            # confirma status FINISHED antes de retornar), así que ahora es
+            # seguro que Hostinger libere el rate-limit. 15 segundos es más que
+            # suficiente para eso; no agrega demora perceptible en imágenes
+            # (donde el request a Hostinger ya terminó instantáneamente).
+            remaining = accounts_ordered[accounts_ordered.index(account) + 1:]
+            if remaining and media_type == "video":
+                print(f"Esperando 15 s antes de publicar en la siguiente plataforma para no saturar Hostinger...")
+                time.sleep(15)
 
         except Exception as e:
             error_msg = e.response.text[:500] if getattr(e, "response", None) is not None else str(e)
