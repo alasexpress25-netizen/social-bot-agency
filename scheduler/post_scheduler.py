@@ -943,6 +943,30 @@ def process_client(client_id):
         return
     client = clients[0]
 
+    # Evita duplicar posts si el scheduler corre mas de una vez dentro de la
+    # misma ventana horaria de un cliente (por ejemplo, si se lo dispara a
+    # mano ademas del cron, o el cron reintenta). Si ya existe un post de
+    # este cliente creado "hoy" (en SU horario local), no generamos otro.
+    tz_name = client.get("timezone") or "America/Sao_Paulo"
+    try:
+        client_tz = ZoneInfo(tz_name)
+    except Exception:
+        client_tz = ZoneInfo("America/Sao_Paulo")
+    local_midnight = datetime.now(timezone.utc).astimezone(client_tz).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    day_start_utc = local_midnight.astimezone(timezone.utc).isoformat()
+    already_today = sb_get(
+        "socialbot_posts",
+        {"client_id": f"eq.{client_id}", "scheduled_at": f"gte.{day_start_utc}", "limit": "1"},
+    )
+    if already_today:
+        print(
+            f"Cliente {client['name']}: ya se genero un post hoy (id {already_today[0]['id']}), "
+            f"se salta esta corrida para no duplicar."
+        )
+        return
+
     ai_rows = sb_get("socialbot_ai_settings", {"client_id": f"eq.{client_id}"})
     ai_settings = ai_rows[0] if ai_rows else {"provider": "groq"}
 
