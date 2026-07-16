@@ -190,7 +190,10 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // o el magic link no va a poder volver a la página.
 const CLIENT_PORTAL_URL = "https://lavisualmk.alastecno.com/cliente/";
 
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { flowType: 'implicit' } // el link va por mail y lo abre OTRO dispositivo (el del cliente),
+                                  // así que no puede depender de una llave guardada en este navegador (PKCE)
+});
 let currentAgencyId = null;
 let selectedClientId = 'all'; // 'all' = ver todos los clientes en el dash
 
@@ -490,9 +493,13 @@ async function loadClients(){
     // en el resumen (ver socialbot_carousel_items).
     const carouselMediaIds = (media||[]).filter(m => m.media_type === 'carousel').map(m => m.id);
     let carouselCounts = {};
+    let carouselUrlsByAsset = {};
     if(carouselMediaIds.length){
-      const { data: items } = await sb.from('socialbot_carousel_items').select('media_asset_id').in('media_asset_id', carouselMediaIds);
-      (items||[]).forEach(it => { carouselCounts[it.media_asset_id] = (carouselCounts[it.media_asset_id]||0) + 1; });
+      const { data: items } = await sb.from('socialbot_carousel_items').select('media_asset_id, url, position').in('media_asset_id', carouselMediaIds).order('position');
+      (items||[]).forEach(it => {
+        carouselCounts[it.media_asset_id] = (carouselCounts[it.media_asset_id]||0) + 1;
+        (carouselUrlsByAsset[it.media_asset_id] = carouselUrlsByAsset[it.media_asset_id] || []).push(it.url);
+      });
     }
 
     const div = document.createElement('div');
@@ -664,8 +671,25 @@ async function loadClients(){
 
       <details>
         <summary>Medios para publicar (${(media||[]).length})</summary>
-        <div>${(media||[]).map(m => `${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x${m.caption_override ? ' · caption fijo' : ' · caption con IA'}${m.hashtags_override ? ' · hashtags fijos' : ''}`).join('<br>') || 'sin medios cargados'}</div>
-        <form class="inline" onsubmit="addMedia(event, '${c.id}')">
+        ${(media||[]).map(m => `
+          <form class="inline" onsubmit="updateMedia(event, '${m.id}', '${c.id}', '${m.media_type}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+            <div class="meta-row">${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x</div>
+            ${m.media_type === 'carousel' ? `
+            <textarea name="carousel_urls" placeholder="Una URL de imagen por línea (entre 2 y 10)">${(carouselUrlsByAsset[m.id]||[]).join('\n')}</textarea>
+            ` : `
+            <input name="url" value="${(m.url||'').replace(/"/g,'&quot;')}" placeholder="URL pública del video/imagen (https://...)" />
+            <input name="fb_photo_url" value="${(m.fb_photo_url||'').replace(/"/g,'&quot;')}" placeholder="URL de foto para Facebook (opcional, solo si es video)" />
+            `}
+            <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez.">${m.caption_override||''}</textarea>
+            <input name="hashtags_override" value="${(m.hashtags_override||'').replace(/"/g,'&quot;')}" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta)" />
+            <div class="btn-row">
+              <button type="submit" class="secondary">Guardar cambios</button>
+              <button type="button" class="reject" onclick="deleteMedia('${m.id}', '${c.id}')">Eliminar</button>
+            </div>
+          </form>
+        `).join('') || '<div class="meta-row">sin medios cargados</div>'}
+        <form class="inline" onsubmit="addMedia(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+          <div class="meta-row" style="font-weight:600;">Agregar medio nuevo</div>
           <select name="media_type" onchange="toggleMediaTypeFields(this)">
             <option value="video">Video / Reel</option>
             <option value="image">Imagen</option>
@@ -905,6 +929,44 @@ async function addMedia(e, clientId){
       fb_photo_url: f.get('fb_photo_url') || null,
     });
   }
+  loadClients();
+}
+
+async function updateMedia(e, mediaId, clientId, mediaType){
+  e.preventDefault();
+  const f = new FormData(e.target);
+
+  if(mediaType === 'carousel'){
+    const urls = (f.get('carousel_urls') || '').split('\n').map(u => u.trim()).filter(Boolean);
+    if(urls.length < 2 || urls.length > 10){
+      alert('Un carrusel necesita entre 2 y 10 imágenes (una URL por línea).');
+      return;
+    }
+    await sb.from('socialbot_media_assets').update({
+      caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
+    }).eq('id', mediaId);
+    // Reemplazamos todos los items del carrusel por la lista nueva (mas simple
+    // y confiable que tratar de "matchear" cuales cambiaron una por una).
+    await sb.from('socialbot_carousel_items').delete().eq('media_asset_id', mediaId);
+    const itemRows = urls.map((url, i) => ({ media_asset_id: mediaId, url, position: i }));
+    await sb.from('socialbot_carousel_items').insert(itemRows);
+  } else {
+    const url = f.get('url');
+    if(!url){ alert('Cargá la URL del medio.'); return; }
+    await sb.from('socialbot_media_assets').update({
+      url,
+      fb_photo_url: f.get('fb_photo_url') || null,
+      caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
+    }).eq('id', mediaId);
+  }
+  loadClients();
+}
+
+async function deleteMedia(mediaId, clientId){
+  if(!confirm('¿Eliminar este medio? Si tenía un post ya generado usándolo, ese post no se ve afectado, pero el medio ya no se va a poder volver a usar.')) return;
+  await sb.from('socialbot_media_assets').delete().eq('id', mediaId);
   loadClients();
 }
 
