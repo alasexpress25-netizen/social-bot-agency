@@ -154,6 +154,7 @@
 
     <div class="client-switch-bar">
       <select id="clientSelector" onchange="onClientSelectorChange()"></select>
+      <button type="button" class="secondary" id="topEditClientBtn" title="Editar cliente seleccionado" onclick="openEditClientModal(selectedClientId)">Editar</button>
       <button type="button" class="add-client-btn" title="Nuevo cliente" onclick="openNewClientModal()">+</button>
     </div>
 
@@ -213,7 +214,7 @@
         <summary>Conectar cuenta de Facebook / Instagram</summary>
         <small class="hint" style="display:block; margin-top:10px;">Generá el Page Access Token de larga duración en Graph API Explorer (ver README).</small>
         <div class="grid2">
-          <select id="editClientPlatform">
+          <select id="editClientPlatform" onchange="onEditClientPlatformChange()">
             <option value="facebook">Facebook</option>
             <option value="instagram">Instagram</option>
           </select>
@@ -266,21 +267,41 @@ function closeNewClientModal(){
 }
 
 function openEditClientModal(clientId){
+  if(!clientId || clientId === 'all'){ alert('Elegí primero un cliente puntual en el selector de arriba para poder editarlo.'); return; }
   const entry = clientsCache[clientId];
   if(!entry){ alert('No se encontró el cliente. Probá recargar la página.'); return; }
-  const { client, account } = entry;
+  const { client, accounts } = entry;
+  const account = (accounts && accounts[0]) || null;
 
   document.getElementById('editClientId').value = client.id;
-  document.getElementById('editClientAccountId').value = account ? account.id : '';
   document.getElementById('editClientName').value = client.name || '';
   document.getElementById('editClientLink').value = client.sales_link || '';
   document.getElementById('editClientPlatform').value = account ? account.platform : 'facebook';
+  fillEditAccountFields(account);
+
+  document.getElementById('editClientModal').classList.add('open');
+}
+
+// Cuando el usuario cambia la plataforma dentro del modal, buscamos si el
+// cliente ya tiene una cuenta conectada con esa plataforma (en clientsCache)
+// y la usamos para editar en vez de la que estaba antes. Así evitamos el
+// error de "duplicate key" que pasaba al intentar convertir, por ejemplo,
+// la cuenta de Facebook en una de Instagram cuando esa ya existía aparte.
+function onEditClientPlatformChange(){
+  const clientId = document.getElementById('editClientId').value;
+  const entry = clientsCache[clientId];
+  const platform = document.getElementById('editClientPlatform').value;
+  const accounts = (entry && entry.accounts) || [];
+  const match = accounts.find(a => a.platform === platform) || null;
+  fillEditAccountFields(match);
+}
+
+function fillEditAccountFields(account){
+  document.getElementById('editClientAccountId').value = account ? account.id : '';
   document.getElementById('editClientPageName').value = account ? (account.page_name || '') : '';
   document.getElementById('editClientPageId').value = account ? (account.page_id || '') : '';
   document.getElementById('editClientIgId').value = account ? (account.ig_business_id || '') : '';
   document.getElementById('editClientPageToken').value = account ? (account.page_access_token || '') : '';
-
-  document.getElementById('editClientModal').classList.add('open');
 }
 function closeEditClientModal(){
   document.getElementById('editClientModal').classList.remove('open');
@@ -638,9 +659,11 @@ async function loadClients(){
     const ai = (aiRows && aiRows[0]) || {};
     const leadsNuevos = (leads||[]).filter(l => l.status === 'nuevo').length;
 
-    // Guardamos cliente + primera cuenta conectada para poder abrir el
-    // modal "Editar cliente" sin volver a pedirle nada a Supabase.
-    clientsCache[c.id] = { client: c, account: (accounts && accounts[0]) || null };
+    // Guardamos cliente + todas sus cuentas conectadas para poder abrir el
+    // modal "Editar cliente" sin volver a pedirle nada a Supabase, y para
+    // poder ubicar la cuenta correcta según la plataforma elegida (ver
+    // openEditClientModal / onEditClientPlatformChange).
+    clientsCache[c.id] = { client: c, accounts: accounts || [] };
 
 
     // Para los medios tipo 'carousel' no hay una unica url en el propio
@@ -668,7 +691,6 @@ async function loadClients(){
         </div>
         <div>
           <button onclick="publishNow('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Publicar ahora</button>
-          <button class="secondary" onclick="openEditClientModal('${c.id}')">Editar</button>
           <button class="secondary" onclick="toggleActive('${c.id}', ${c.active})">${c.active ? 'Pausar' : 'Reactivar'}</button>
         </div>
       </div>
@@ -746,14 +768,6 @@ async function loadClients(){
             </div>
           </div>
         `).join('')}
-      </details>
-      ` : ''}
-
-      ${(accounts||[]).length > 1 ? `
-      <details>
-        <summary>Otras cuentas conectadas (${accounts.length - 1})</summary>
-        <small class="hint">"Editar" en la tarjeta sólo edita la primera cuenta. Para más de una cuenta por cliente, escribinos y lo resolvemos por acá mientras se agrega soporte multi-cuenta al modal.</small>
-        ${accounts.slice(1).map(a => `<div class="meta-row" style="margin-top:6px;">${a.platform} · ${a.page_name || a.page_id}</div>`).join('')}
       </details>
       ` : ''}
 
