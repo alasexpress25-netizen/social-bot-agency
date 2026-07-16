@@ -300,6 +300,30 @@ def _fetch_instagram_reach(media_id, access_token):
         return None
 
 
+def _fetch_facebook_shares(post_id, access_token):
+    """
+    'shares' se pide por separado del resto de los campos (likes, comments) a
+    proposito. Es un bug historico y documentado de la Graph API: cuando un
+    post de Facebook tiene 0 shares, el campo 'shares' directamente no existe
+    en el objeto, y pedirlo junto con otros campos en un mismo fields=...
+    tira "(#100) Tried accessing nonexistent field (shares)" -- y ese error
+    tumba TODA la respuesta, no solo el campo 'shares' (perdiendo tambien
+    likes/comments que si estaban disponibles). Por eso va aislado y
+    best-effort: si falla, asumimos 0 shares en vez de perder el resto de
+    las metricas del post.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{post_id}",
+            params={"fields": "shares", "access_token": access_token},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json().get("shares", {}).get("count", 0)
+    except Exception:
+        return 0
+
+
 def fetch_post_metrics(platform, external_id, access_token):
     """
     Devuelve un dict {likes, comments, shares, reach, impressions} o None si
@@ -310,14 +334,14 @@ def fetch_post_metrics(platform, external_id, access_token):
         if platform == "facebook":
             r = requests.get(
                 f"https://graph.facebook.com/{GRAPH_API_VERSION}/{external_id}",
-                params={"fields": "likes.summary(true),comments.summary(true),shares", "access_token": access_token},
+                params={"fields": "likes.summary(true),comments.summary(true)", "access_token": access_token},
                 timeout=30,
             )
             r.raise_for_status()
             data = r.json()
             likes = data.get("likes", {}).get("summary", {}).get("total_count", 0)
             comments = data.get("comments", {}).get("summary", {}).get("total_count", 0)
-            shares = data.get("shares", {}).get("count", 0)
+            shares = _fetch_facebook_shares(external_id, access_token)
             reach, impressions = _fetch_facebook_post_insights(external_id, access_token)
             return {"likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions}
         else:
@@ -419,14 +443,12 @@ def upload_video_resumable(app_id, access_token, video_url):
       2) Mandar los bytes del archivo a /upload:{session_id}
       3) Devolver el "file handle" (h) para usar al publicar el video
     """
-    head = requests.head(video_url, timeout=30, allow_redirects=True)
-    head.raise_for_status()
+    head = _request_with_retries("HEAD", video_url, timeout=30, allow_redirects=True)
     file_length = int(head.headers.get("Content-Length", 0))
     if not file_length:
         # Algunos servidores no devuelven Content-Length en HEAD; bajamos
         # el archivo entero para saber el tamano real si hace falta.
-        probe = requests.get(video_url, timeout=120)
-        probe.raise_for_status()
+        probe = _fetch_with_retries(video_url, timeout=120)
         file_length = len(probe.content)
     file_name = video_url.split("/")[-1].split("?")[0] or "video.mp4"
 
@@ -443,8 +465,7 @@ def upload_video_resumable(app_id, access_token, video_url):
     session_resp.raise_for_status()
     upload_session_id = session_resp.json()["id"]  # formato: "upload:XXXXXXXX"
 
-    video_resp = requests.get(video_url, timeout=180)
-    video_resp.raise_for_status()
+    video_resp = _fetch_with_retries(video_url, timeout=180)
 
     upload_resp = requests.post(
         f"https://graph.facebook.com/{GRAPH_API_VERSION}/{upload_session_id}",
@@ -489,25 +510,84 @@ def _is_video_permission_error(exc):
     return False
 
 
-def _fetch_with_retries(url, retries=3, backoff=5, **kwargs):
+def _is_transient_media_fetch_error(exc):
     """
-    GET con reintentos para las descargas de media desde Hostinger, que a
-    veces corta la conexion desde los runners de GitHub Actions (ya se vio
-    antes con HTTP 206 / webp). No soluciona el problema de fondo -- eso
-    esta previsto resolverlo migrando los assets a Cloudinary -- pero
-    absorbe los cortes intermitentes mientras tanto.
+    Detecta el caso visto en produccion: el crawler de Meta intenta bajar
+    el video desde Hostinger (file_url) y Hostinger le responde 429 Too
+    Many Requests -- normalmente porque Instagram y Facebook piden el
+    mismo archivo casi al mismo tiempo, o porque el hosting compartido
+    esta momentaneamente saturado. Es un error transitorio de red, no de
+    permisos ni de contenido, y el fix correcto es reintentar / cambiar de
+    estrategia de subida (ver publish_facebook()), nunca abortar el post.
+
+    Se busca sobre el texto crudo de la respuesta en vez de sobre una unica
+    key JSON porque Meta usa formatos distintos segun el endpoint que
+    devuelve el error: a veces envuelve todo en {"error": {...}}, y en el
+    endpoint de subida de /video_reels (rupload.facebook.com) el error real
+    viene directo en la raiz como {"debug_info": {"type": "FileUrlProcessingError", ...}}.
     """
+    if exc.response is None:
+        return False
+    text = (exc.response.text or "").lower()
+    if not text:
+        return False
+    if "fileurlprocessingerror" in text:
+        return True
+    if "unable to fetch media" in text:
+        return True
+    if exc.response.status_code == 429:
+        return True
+    if "429" in text and ("too many requests" in text or "rate limit" in text):
+        return True
+    return False
+
+
+def _request_with_retries(method, url, retries=3, backoff=5, **kwargs):
+    """
+    Request (GET/HEAD) con reintentos para las descargas de media desde
+    Hostinger, que a veces corta la conexion desde los runners de GitHub
+    Actions (ya se vio antes con HTTP 206 / webp) y que, bajo carga (dos
+    crawlers de Meta pidiendo el mismo archivo casi al mismo tiempo),
+    responde HTTP 429 Too Many Requests. No soluciona el problema de fondo
+    -- eso esta previsto resolverlo migrando los assets a Cloudinary --
+    pero absorbe los cortes/rate-limits intermitentes mientras tanto.
+    """
+    timeout = kwargs.pop("timeout", 120)
     last_exc = None
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(url, timeout=kwargs.pop("timeout", 120), **kwargs)
+            resp = requests.request(method, url, timeout=timeout, **kwargs)
+            if resp.status_code == 429 and attempt < retries:
+                wait = backoff * attempt
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait = max(wait, float(retry_after))
+                    except ValueError:
+                        pass
+                print(f"  (retry) 429 de {url[:80]}..., esperando {wait:.0f}s antes de reintentar (intento {attempt}/{retries})")
+                time.sleep(wait)
+                continue
             resp.raise_for_status()
             return resp
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             last_exc = e
             if attempt < retries:
                 time.sleep(backoff * attempt)
+        except requests.HTTPError as e:
+            last_exc = e
+            if attempt < retries and e.response is not None and e.response.status_code == 429:
+                wait = backoff * attempt
+                print(f"  (retry) 429 de {url[:80]}..., esperando {wait:.0f}s antes de reintentar (intento {attempt}/{retries})")
+                time.sleep(wait)
+                continue
+            raise
     raise last_exc
+
+
+def _fetch_with_retries(url, retries=3, backoff=5, **kwargs):
+    """GET con reintentos. Ver _request_with_retries (incluye manejo de 429)."""
+    return _request_with_retries("GET", url, retries=retries, backoff=backoff, **kwargs)
 
 
 def publish_facebook_reel(page_id, page_access_token, caption, video_url, location_id=None):
@@ -560,8 +640,7 @@ def extract_video_frame(video_url):
     """
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_video:
         video_path = tmp_video.name
-        resp = requests.get(video_url, timeout=120, stream=True)
-        resp.raise_for_status()
+        resp = _fetch_with_retries(video_url, timeout=120, stream=True)
         for chunk in resp.iter_content(chunk_size=1 << 20):
             tmp_video.write(chunk)
 
@@ -647,9 +726,19 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
             print("Facebook: intento 1 (video_reels)...")
             return publish_facebook_reel(page_id, page_access_token, caption, media_url, location_id)
         except requests.HTTPError as e:
-            if not _is_video_permission_error(e):
+            if _is_video_permission_error(e):
+                print(f"Facebook: intento 1 fallo por permiso de video ({e.response.text[:200]}), sigo con intento 2.")
+            elif _is_transient_media_fetch_error(e):
+                # El crawler de Meta no pudo bajar el video de Hostinger (429 /
+                # FileUrlProcessingError), tipicamente porque Instagram acaba
+                # de pedir el mismo archivo segundos antes. El intento 2 no
+                # depende de que Meta vuelva a golpear a Hostinger: es este
+                # propio script el que baja el archivo (con reintentos/backoff,
+                # ver upload_video_resumable) y le sube los bytes a Meta
+                # directamente, asi que evita el problema de raiz.
+                print(f"Facebook: intento 1 fallo por rate-limit/timeout de Hostinger al bajar el video ({e.response.text[:200]}), sigo con intento 2.")
+            else:
                 raise
-            print(f"Facebook: intento 1 fallo por permiso de video ({e.response.text[:200]}), sigo con intento 2.")
 
         # Intento 2: endpoint clasico de /videos (resumable upload), por si
         # el permiso se comporta distinto ahi. Si tambien falla por el mismo
@@ -670,9 +759,16 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
             r.raise_for_status()
             return r.json().get("id") or r.json().get("post_id") or r.json().get("video_id")
         except requests.HTTPError as e:
-            if not _is_video_permission_error(e):
+            if _is_video_permission_error(e):
+                print(f"Facebook: intento 2 fallo por permiso de video ({e.response.text[:200]}), sigo con intento 3 (foto auto).")
+            elif _is_transient_media_fetch_error(e):
+                # upload_video_resumable ya reintenta con backoff (incl. 429)
+                # al bajar el video; si aun asi se agotaron los reintentos,
+                # no tiene sentido reintentar de nuevo aca -- vamos directo al
+                # fallback de foto para no perder el post completo.
+                print(f"Facebook: intento 2 tambien fallo por rate-limit/timeout persistente de Hostinger ({e.response.text[:200]}), sigo con intento 3 (foto auto).")
+            else:
                 raise
-            print(f"Facebook: intento 2 fallo por permiso de video ({e.response.text[:200]}), sigo con intento 3 (foto auto).")
 
         # Intento 3 (fallback definitivo): publicar un frame del video como foto.
         # Cuando en el futuro se apruebe Advanced Access, los intentos 1/2 de
@@ -1168,13 +1264,18 @@ def process_client(client_id, slot):
             # antes de arrancar la siguiente plataforma. Instagram ya terminó de
             # bajar el video de Hostinger (el polling de publish_instagram()
             # confirma status FINISHED antes de retornar), así que ahora es
-            # seguro que Hostinger libere el rate-limit. 15 segundos es más que
-            # suficiente para eso; no agrega demora perceptible en imágenes
-            # (donde el request a Hostinger ya terminó instantáneamente).
+            # seguro que Hostinger libere el rate-limit. 25 segundos da un
+            # margen extra (antes eran 15s y a veces no alcanzaba, ver
+            # FALLO por FileUrlProcessingError/429 en publish_facebook); no
+            # agrega demora perceptible en imágenes (donde el request a
+            # Hostinger ya terminó instantáneamente). Esto es solo una
+            # mitigación adicional -- el fix real es que publish_facebook()
+            # ahora cae al intento 2 (descarga propia) ante un 429, en vez
+            # de abortar el post.
             remaining = accounts_ordered[accounts_ordered.index(account) + 1:]
             if remaining and media_type == "video":
-                print(f"Esperando 15 s antes de publicar en la siguiente plataforma para no saturar Hostinger...")
-                time.sleep(15)
+                print(f"Esperando 25 s antes de publicar en la siguiente plataforma para no saturar Hostinger...")
+                time.sleep(25)
 
         except Exception as e:
             error_msg = e.response.text[:500] if getattr(e, "response", None) is not None else str(e)
