@@ -1,8 +1,11 @@
 // supabase/functions/meta-webhook/index.ts
 //
 // Recibe los webhooks de Meta (comentarios en Facebook/Instagram y mensajes
-// directos) y responde automaticamente cuando el texto contiene una palabra
-// clave configurada para ese cliente en `auto_reply_rules`.
+// directos) y responde automaticamente: primero intenta con IA (Groq, con
+// cache y limite diario por cliente), despues cae a un fallback de palabra
+// clave con plantilla fija (auto_reply_rules), y si TAMPOCO matchea ninguna
+// keyword, cae a una respuesta de "piso" fija (sin costo de IA) para que
+// ningun comentario/DM quede en silencio total.
 //
 // Esta funcion necesita estar SIEMPRE disponible (no es un cron), por eso
 // vive en Supabase Edge Functions (gratis, siempre "escuchando").
@@ -10,6 +13,43 @@
 // Configurar en Meta App Dashboard > Webhooks:
 //   Callback URL: https://<tu-proyecto>.supabase.co/functions/v1/meta-webhook
 //   Verify Token: el mismo valor que pongas en META_WEBHOOK_VERIFY_TOKEN
+//
+// NOTA (15/07/2026): esta version restaura la logica de IA (Fase 1) y de
+// deteccion de leads (Fase 2), suma la "base de conocimiento" del negocio
+// (knowledge_base), y CORRIGE UN BUCLE DE RESPUESTAS DUPLICADAS: la propia
+// respuesta del bot es, para Meta, un comentario nuevo -- si no se filtra,
+// el webhook de "comments" puede volver a dispararse para ESE comentario
+// (hecho por la propia cuenta) y el bot termina respondiendose a si mismo
+// en cadena. Se agregan dos protecciones:
+//   1) Se ignora cualquier comentario/mensaje cuyo senderId sea la propia
+//      cuenta (page_id / ig_business_id) -- nunca se responde a si mismo.
+//   2) El comentario se "reserva" en socialbot_interactions_log ANTES de
+//      generar la respuesta (insert con unique constraint), no despues.
+//      Asi, si Meta reenvia el mismo evento casi al mismo tiempo (redelivery
+//      por timeout, comun en webhooks), la segunda llamada lo ve ya
+//      reservado y no dispara una segunda respuesta -- antes esta reserva
+//      ocurria recien al final, dejando una ventana en la que dos llamadas
+//      concurrentes podian pasar la validacion "ya fue manejado" y las dos
+//      terminar respondiendo.
+//
+// NOTA (15/07/2026, mas tarde) -- respuesta de "piso": se detecto que un
+// cliente real agoto su limite diario de IA (30/30) en unos minutos, y a
+// partir de ahi CUALQUIER comentario que no matcheara una keyword de
+// auto_reply_rules quedaba sin ninguna respuesta (silencio total) -- se vio
+// en una captura real: varios comentarios/leads sin contestar. Se agrega un
+// tercer nivel de fallback, sin costo de IA: socialbot_ai_settings.
+// fallback_reply_template (o un texto generico por defecto si esta vacio),
+// que se usa cuando no hay cuota de IA Y ninguna keyword matcheo. Asi ya no
+// puede quedar un mensaje sin ningun tipo de respuesta.
+//
+// NOTA (16/07/2026): el idioma de respuesta estaba fijo en portugues de
+// Brasil para TODOS los clientes (tenia sentido cuando el unico cliente con
+// IA activa era Impacto 3D, 100% Brasil). Al sumar clientes bilingues
+// (ej. Alas Tecno, que atiende Argentina y Brasil), se reemplaza por
+// socialbot_ai_settings.reply_language: "pt-BR" o "es" fuerzan ese idioma
+// siempre, "auto" hace que la IA detecte el idioma del mensaje entrante y
+// responda en el mismo. Default "pt-BR" para no cambiar el comportamiento
+// de clientes ya configurados antes de este campo.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -27,7 +67,21 @@ const GROQ_MODEL = "llama-3.1-8b-instant";
 // socialbot_ai_settings.daily_ai_reply_limit
 const DEFAULT_DAILY_AI_LIMIT = 30;
 
+// Texto generico usado como respuesta de "piso" cuando el cliente no cargo
+// su propio fallback_reply_template. En portugues de Brasil, igual que el
+// resto de las respuestas automaticas de este sistema.
+const DEFAULT_FALLBACK_REPLY =
+  "Obrigado pelo seu comentário! 🙌 Em breve alguém do nosso time te responde por aqui. Se quiser já ir adiantando, fala com a gente: {{sales_link}}";
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+async function debugLog(clientId: string | null, stage: string, detail: string) {
+  try {
+    await supabase.from("socialbot_ai_debug_log").insert({ client_id: clientId, stage, detail });
+  } catch (_e) {
+    // el debug log nunca debe romper el flujo principal
+  }
+}
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
@@ -86,6 +140,7 @@ Deno.serve(async (req: Request) => {
       }
     } catch (e) {
       console.error("Error procesando webhook:", e);
+      await debugLog(null, "top_level_error", String(e));
     }
 
     // Siempre responder 200 rapido para que Meta no reintente en loop
@@ -112,25 +167,47 @@ function matchKeyword(text: string, rules: any[]) {
   return rules.find((r) => r.active && lower.includes(r.keyword.toLowerCase()));
 }
 
-async function alreadyHandled(platform: string, externalId: string) {
-  const { data } = await supabase
-    .from("socialbot_interactions_log")
-    .select("id")
-    .eq("platform", platform)
-    .eq("external_id", externalId)
-    .maybeSingle();
-  return !!data;
+// Respuesta de piso: se usa cuando no matcheo ninguna keyword de
+// auto_reply_rules Y ademas no hubo respuesta de IA (sin cuota, sin
+// GROQ_API_KEY configurada, o error de Groq). No consume cuota de IA -- es
+// una plantilla fija, igual que las reglas de palabra clave, para que nunca
+// quede un mensaje sin ningun tipo de respuesta.
+function buildFallbackReply(aiSettings: any, salesLink: string | null): string {
+  const template = (aiSettings?.fallback_reply_template as string | null) || DEFAULT_FALLBACK_REPLY;
+  return template.replace("{{sales_link}}", salesLink ?? "");
 }
 
-async function logInteraction(clientId: string, platform: string, type: string, externalId: string, keyword: string | null, replied: boolean) {
-  await supabase.from("socialbot_interactions_log").insert({
+// Intenta "reservar" el comentario/mensaje ANTES de procesarlo (insert con
+// la unique constraint (platform, external_id) de 0001_init.sql). Si ya
+// existe (otra invocacion, ej. un reenvio del mismo evento por parte de
+// Meta, ya lo reservo antes), el insert falla por conflicto y devolvemos
+// false -- el caller debe cortar ahi, sin generar ni mandar otra respuesta.
+// Esto reemplaza el chequeo previo (SELECT primero, INSERT despues al
+// final), que dejaba una ventana de carrera entre dos invocaciones
+// concurrentes procesando el mismo evento.
+async function claimInteraction(clientId: string, platform: string, type: string, externalId: string): Promise<boolean> {
+  const { error } = await supabase.from("socialbot_interactions_log").insert({
     client_id: clientId,
     platform,
     type,
     external_id: externalId,
-    matched_keyword: keyword,
-    replied,
+    matched_keyword: null,
+    replied: false,
   });
+  // Codigo 23505 = unique_violation en Postgres -- ya estaba reservado.
+  if (error) {
+    if ((error as any).code === "23505") return false;
+    console.error("Error reservando interaccion (se continua igual):", error);
+  }
+  return true;
+}
+
+async function finishInteraction(platform: string, externalId: string, keyword: string | null, replied: boolean) {
+  await supabase
+    .from("socialbot_interactions_log")
+    .update({ matched_keyword: keyword, replied })
+    .eq("platform", platform)
+    .eq("external_id", externalId);
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +234,6 @@ async function getCachedReply(clientId: string, normalized: string): Promise<str
 
   if (!data) return null;
 
-  // Suma un hit, no cuenta como uso de cuota de IA (justamente para eso existe el cache).
   await supabase
     .from("socialbot_ai_reply_cache")
     .update({ hits: (data.hits ?? 0) + 1 })
@@ -167,7 +243,6 @@ async function getCachedReply(clientId: string, normalized: string): Promise<str
 }
 
 async function saveCachedReply(clientId: string, normalized: string, reply: string) {
-  // upsert: si dos eventos casi simultaneos generan la misma pregunta, no rompe por el unique(client_id, question_normalized)
   await supabase
     .from("socialbot_ai_reply_cache")
     .upsert(
@@ -177,7 +252,7 @@ async function saveCachedReply(clientId: string, normalized: string, reply: stri
 }
 
 async function getTodayUsage(clientId: string): Promise<number> {
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (fecha del servidor; ok para un limite prudente, no necesita ser exacto por TZ del cliente)
+  const today = new Date().toISOString().slice(0, 10);
   const { data } = await supabase
     .from("socialbot_ai_usage_log")
     .select("call_count")
@@ -208,8 +283,6 @@ async function incrementUsage(clientId: string) {
   }
 }
 
-// Datos de lead que puede devolver la IA en la misma llamada que genera la
-// respuesta (Fase 2). Todo opcional: si no hay indicio de lead, is_hot=false.
 interface LeadDetection {
   is_hot: boolean;
   name: string | null;
@@ -222,25 +295,41 @@ interface GroqReplyResult {
   lead: LeadDetection | null;
 }
 
-async function callGroq(aiSettings: any, salesLink: string | null, incomingText: string): Promise<GroqReplyResult | null> {
-  if (!GROQ_API_KEY) return null; // sin API key configurada, directo al fallback
+async function callGroq(aiSettings: any, salesLink: string | null, incomingText: string, clientId: string): Promise<GroqReplyResult | null> {
+  if (!GROQ_API_KEY) {
+    await debugLog(clientId, "callGroq", "GROQ_API_KEY no esta seteada en los secrets de esta funcion");
+    return null;
+  }
 
   const maxChars = aiSettings?.max_chars ?? 400;
   const basePrompt = aiSettings?.system_prompt ??
     "Sos un community manager. Escribí un post corto, atractivo, con emojis moderados y un llamado a la acción claro.";
 
-  // FASE 2: le pedimos a la IA que, en la misma respuesta, tambien califique
-  // si el contacto es un lead caliente (interesado en comprar/contratar,
-  // pidiendo precio, dejando telefono/email, etc.) y extraiga sus datos si
-  // los menciono. No es una llamada extra: es el mismo request de Fase 1,
-  // solo que ahora exigimos formato JSON con ambos campos.
+  const knowledgeBlock = aiSettings?.knowledge_base
+    ? `Informacion real del negocio (usala como fuente de verdad; si la pregunta no esta cubierta aca, respondé de forma general sin inventar precios ni datos que no esten en este texto):\n${aiSettings.knowledge_base}`
+    : null;
+
+  // Idioma de respuesta por cliente (columna reply_language en
+  // socialbot_ai_settings). "pt-BR"/"es" fuerzan ese idioma siempre
+  // (clientes de un solo mercado); "auto" hace que la IA responda en el
+  // mismo idioma en el que le escribieron (clientes bilingues, ej. Alas
+  // Tecno que atiende Argentina y Brasil). Default "pt-BR" para no romper
+  // el comportamiento de clientes ya configurados antes de este campo.
+  const replyLanguage = aiSettings?.reply_language ?? "pt-BR";
+  const languageInstruction = replyLanguage === "auto"
+    ? `Detectá el idioma del mensaje entrante y respondé en ese mismo idioma (si te escriben en español, respondé en español; si te escriben en portugués, respondé en portugués de Brasil), natural y cercano, como si fueras el dueno/a del negocio respondiendo personalmente.`
+    : replyLanguage === "es"
+    ? `Respondé en español, natural y cercano, como si fueras el dueno/a del negocio respondiendo personalmente.`
+    : `Respondé en portugués de Brasil, natural y cercano, como si fueras el dueno/a del negocio respondiendo personalmente.`;
+
   const systemPrompt = [
     basePrompt,
     aiSettings?.topics ? `Temas del negocio: ${aiSettings.topics}.` : null,
     aiSettings?.tone ? `Tono a usar: ${aiSettings.tone}.` : null,
     salesLink ? `Si tiene sentido, invitá a visitar: ${salesLink}.` : null,
+    knowledgeBlock,
     `Estás respondiendo un comentario o mensaje directo de un seguidor en redes sociales, no generando un post nuevo.`,
-    `Respondé en portugués de Brasil, natural y cercano, como si fueras una persona real del equipo.`,
+    languageInstruction,
     `Máximo ${maxChars} caracteres para la respuesta. No uses markdown ni asteriscos.`,
     ``,
     `Además, evaluá si este contacto es un lead caliente: alguien que muestra intención real de compra/contratación (pregunta precio, disponibilidad, quiere agendar, dejó teléfono/email/usuario de contacto, dice "quiero comprar/contratar", etc.). Una pregunta genérica o un comentario de cortesía NO cuenta como lead caliente.`,
@@ -270,27 +359,33 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     });
 
     if (!res.ok) {
-      console.error("Groq respondio con error:", res.status, await res.text());
+      const errText = await res.text();
+      console.error("Groq respondio con error:", res.status, errText);
+      await debugLog(clientId, "callGroq_http_error", `status=${res.status} body=${errText.slice(0, 500)}`);
       return null;
     }
 
     const json = await res.json();
     const rawContent: string | undefined = json?.choices?.[0]?.message?.content?.trim();
-    if (!rawContent) return null;
+    if (!rawContent) {
+      await debugLog(clientId, "callGroq_empty_content", JSON.stringify(json).slice(0, 500));
+      return null;
+    }
 
     let parsed: any;
     try {
       parsed = JSON.parse(rawContent);
     } catch {
-      // La IA no devolvio JSON valido (raro con response_format json_object,
-      // pero puede pasar). Usamos el texto crudo como respuesta y sin lead,
-      // en vez de tirar todo el intento a la basura.
       console.error("No se pudo parsear JSON de Groq, se usa texto crudo como reply:", rawContent);
+      await debugLog(clientId, "callGroq_json_parse_fallback", rawContent.slice(0, 500));
       return { reply: rawContent.length > maxChars ? rawContent.slice(0, maxChars).trim() : rawContent, lead: null };
     }
 
     const reply: string | undefined = parsed?.reply?.trim();
-    if (!reply) return null;
+    if (!reply) {
+      await debugLog(clientId, "callGroq_no_reply_field", rawContent.slice(0, 500));
+      return null;
+    }
 
     const leadRaw = parsed?.lead;
     const lead: LeadDetection | null = leadRaw && leadRaw.is_hot
@@ -302,22 +397,22 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
         }
       : null;
 
+    await debugLog(clientId, "callGroq_ok", reply.slice(0, 200));
+
     return {
       reply: reply.length > maxChars ? reply.slice(0, maxChars).trim() : reply,
       lead,
     };
   } catch (e) {
     console.error("Error llamando a Groq:", e);
+    await debugLog(clientId, "callGroq_exception", String(e));
     return null;
   }
 }
 
 async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection) {
-  if (!senderId) return; // sin sender_id no hay a quien contactar despues, no vale la pena guardarlo
+  if (!senderId) return;
 
-  // upsert: si el mismo contacto ya estaba guardado, actualizamos con los
-  // datos mas recientes (puede haber completado nombre/telefono en un
-  // mensaje posterior) sin duplicar filas.
   await supabase.from("socialbot_leads").upsert(
     {
       client_id: clientId,
@@ -334,14 +429,6 @@ async function saveLead(clientId: string, platform: string, senderId: string, ex
   );
 }
 
-// Intenta responder con IA. Devuelve null si hay que caer al fallback de
-// palabra clave (limite superado, sin API key, o error de Groq).
-//
-// FASE 2: el `lead` solo viaja en la llamada "fresca" a Groq (source: "ia").
-// Cuando la respuesta sale del cache (source: "ia-cache") no hay `lead`,
-// porque el cache de Fase 1 solo guarda el texto de la respuesta, no la
-// calificacion de lead -- y ademas no tendria sentido re-crear un lead
-// identico cada vez que alguien repite la misma pregunta generica.
 async function tryAiReply(account: any, incomingText: string): Promise<{ reply: string; source: "ia" | "ia-cache"; lead: LeadDetection | null } | null> {
   const clientId = account.client_id;
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
@@ -352,15 +439,17 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
   const normalized = normalizeQuestion(incomingText);
   if (!normalized) return null;
 
-  // El cache no cuenta contra el limite diario, se puede consultar siempre.
   const cached = await getCachedReply(clientId, normalized);
   if (cached) return { reply: cached, source: "ia-cache", lead: null };
 
   const usedToday = await getTodayUsage(clientId);
-  if (usedToday >= limit) return null; // se paso del limite -> fallback a plantilla fija
+  if (usedToday >= limit) {
+    await debugLog(clientId, "limite_diario_alcanzado", `usedToday=${usedToday} limit=${limit}`);
+    return null;
+  }
 
-  const aiReply = await callGroq(aiSettings, salesLink, incomingText);
-  if (!aiReply) return null; // Groq fallo o no esta configurado -> fallback
+  const aiReply = await callGroq(aiSettings, salesLink, incomingText, clientId);
+  if (!aiReply) return null;
 
   await incrementUsage(clientId);
   await saveCachedReply(clientId, normalized, aiReply.reply);
@@ -370,11 +459,27 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
 
 // ---------------------------------------------------------------------------
 async function handleComment(params: { platform: string; pageId: string; commentId: string; text: string; senderId?: string }) {
-  const { platform, pageId, commentId, text } = params;
-  if (!commentId || (await alreadyHandled(platform, commentId))) return;
+  const { platform, pageId, commentId, text, senderId } = params;
+  if (!commentId) return;
 
   const account = await findSocialAccountAndClient(platform, pageId);
   if (!account) return;
+
+  const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
+  const salesLink = account.socialbot_clients?.sales_link ?? null;
+
+  // Nunca responder a un comentario hecho por la propia cuenta (evita el
+  // bucle: la respuesta del bot es en si misma un comentario nuevo, que
+  // Meta puede volver a mandar como evento "comments").
+  if (senderId && (senderId === account.page_id || senderId === account.ig_business_id)) {
+    return;
+  }
+
+  // Reserva atomica: si ya estaba reservado (por un reenvio del mismo
+  // evento, o por esta misma pagina respondiendose en bucle a pesar del
+  // filtro de arriba), se corta aca sin generar ni mandar nada.
+  const claimed = await claimInteraction(account.client_id, platform, "comment", commentId);
+  if (!claimed) return;
 
   let replyText: string | null = null;
   let matchedLabel: string | null = null;
@@ -386,7 +491,7 @@ async function handleComment(params: { platform: string; pageId: string; comment
     matchedLabel = aiResult.source; // "ia" o "ia-cache"
 
     if (aiResult.lead?.is_hot) {
-      await saveLead(account.client_id, platform, params.senderId ?? "", commentId, text, aiResult.lead);
+      await saveLead(account.client_id, platform, senderId ?? "", commentId, text, aiResult.lead);
     }
   } else {
     // 2) Fallback: matching de palabra clave con plantilla fija de siempre
@@ -397,12 +502,16 @@ async function handleComment(params: { platform: string; pageId: string; comment
       .in("match_type", ["comment", "both"]);
 
     const rule = matchKeyword(text, rules ?? []);
-    if (!rule) {
-      await logInteraction(account.client_id, platform, "comment", commentId, null, false);
-      return;
+    if (rule) {
+      replyText = rule.reply_template.replace("{{sales_link}}", salesLink ?? "");
+      matchedLabel = rule.keyword;
+    } else {
+      // 3) Respuesta de piso: ninguna keyword matcheo y no hubo IA (sin
+      // cuota o sin configurar). Se manda igual una respuesta fija, sin
+      // costo de IA, para que el comentario nunca quede sin contestar.
+      replyText = buildFallbackReply(aiSettings, salesLink);
+      matchedLabel = "fallback-piso";
     }
-    replyText = rule.reply_template.replace("{{sales_link}}", account.socialbot_clients?.sales_link ?? "");
-    matchedLabel = rule.keyword;
   }
 
   const endpoint =
@@ -410,27 +519,57 @@ async function handleComment(params: { platform: string; pageId: string; comment
       ? `https://graph.facebook.com/${GRAPH_API_VERSION}/${commentId}/comments`
       : `https://graph.facebook.com/${GRAPH_API_VERSION}/${commentId}/replies`;
 
-  await fetch(endpoint, {
+  const replyResp = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ message: replyText, access_token: account.page_access_token }),
   });
 
-  await logInteraction(account.client_id, platform, "comment", commentId, matchedLabel, true);
+  // Ademas del reply publico (que en Instagram queda oculto como "reply" anidado
+  // y nunca tiene links/telefonos clickeables), mandamos el mismo mensaje como
+  // "private reply": esto abre un DM con la persona que comento, donde el link
+  // SI se ve clickeable. Es best-effort: si falla, no rompe el flujo principal.
+  if (replyResp.ok) {
+    try {
+      await fetch(
+        `https://graph.facebook.com/${GRAPH_API_VERSION}/${commentId}/private_replies`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ message: replyText, access_token: account.page_access_token }),
+        },
+      );
+    } catch (e) {
+      console.error("Error enviando private reply:", e);
+    }
+  }
+
+  await finishInteraction(platform, commentId, matchedLabel, replyResp.ok);
 }
 
 // ---------------------------------------------------------------------------
 async function handleDm(params: { platform: string; pageId: string; senderId: string; text: string }) {
   const { platform, pageId, senderId, text } = params;
-  const dmId = `${pageId}-${senderId}-${Date.now()}`; // los DMs no siempre traen un id unico util para dedupe estricto
 
   const account = await findSocialAccountAndClient(platform, pageId);
   if (!account) return;
 
+  const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
+  const salesLink = account.socialbot_clients?.sales_link ?? null;
+
+  // Nunca responder a un DM que en realidad mando la propia cuenta.
+  if (senderId && (senderId === account.page_id || senderId === account.ig_business_id)) {
+    return;
+  }
+
+  const dmId = `${pageId}-${senderId}-${Date.now()}`;
+
+  const claimed = await claimInteraction(account.client_id, platform, "dm", dmId);
+  if (!claimed) return;
+
   let replyText: string | null = null;
   let matchedLabel: string | null = null;
 
-  // 1) Primero se intenta con IA (si hay cuota y esta configurada)
   const aiResult = await tryAiReply(account, text);
   if (aiResult) {
     replyText = aiResult.reply;
@@ -440,7 +579,6 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
       await saveLead(account.client_id, platform, senderId, null, text, aiResult.lead);
     }
   } else {
-    // 2) Fallback: matching de palabra clave con plantilla fija de siempre
     const { data: rules } = await supabase
       .from("socialbot_auto_reply_rules")
       .select("*")
@@ -448,10 +586,14 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
       .in("match_type", ["dm", "both"]);
 
     const rule = matchKeyword(text, rules ?? []);
-    if (!rule) return;
-
-    replyText = rule.reply_template.replace("{{sales_link}}", account.socialbot_clients?.sales_link ?? "");
-    matchedLabel = rule.keyword;
+    if (rule) {
+      replyText = rule.reply_template.replace("{{sales_link}}", salesLink ?? "");
+      matchedLabel = rule.keyword;
+    } else {
+      // Respuesta de piso, igual que en handleComment.
+      replyText = buildFallbackReply(aiSettings, salesLink);
+      matchedLabel = "fallback-piso";
+    }
   }
 
   await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/me/messages?access_token=${account.page_access_token}`, {
@@ -463,5 +605,5 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
     }),
   });
 
-  await logInteraction(account.client_id, platform, "dm", dmId, matchedLabel, true);
+  await finishInteraction(platform, dmId, matchedLabel, true);
 }
