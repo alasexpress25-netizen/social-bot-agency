@@ -906,6 +906,17 @@ def run():
         print(f"[{now_utc.isoformat()}] No hay horarios activos configurados. Nada que hacer.")
         return
 
+    # Si la corrida viene de un disparo manual con un cliente puntual (por
+    # ejemplo, el boton "Publicar ahora" del panel via workflow_dispatch),
+    # MANUAL_CLIENT_ID viene seteado y filtramos para procesar solo ESE
+    # cliente, no todos los que tengan un horario activo.
+    manual_client_id = os.environ.get("MANUAL_CLIENT_ID") or None
+    if manual_client_id:
+        slots = [s for s in slots if s["client_id"] == manual_client_id]
+        if not slots:
+            print(f"Cliente {manual_client_id} no tiene horarios activos configurados. Nada que hacer.")
+            return
+
     clients_by_id = {}
     for client_id in {s["client_id"] for s in slots}:
         rows = sb_get("socialbot_clients", {"id": f"eq.{client_id}"})
