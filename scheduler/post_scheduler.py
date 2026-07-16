@@ -39,6 +39,7 @@ import time
 import json
 import random
 import socket
+import threading
 import subprocess
 import tempfile
 import requests
@@ -593,6 +594,44 @@ def _is_transient_media_fetch_error(exc):
     return False
 
 
+def _run_with_hard_timeout(fn, timeout_seconds):
+    """
+    Corre fn() con un limite de tiempo TOTAL real, a diferencia del
+    timeout=... de requests (que es por operacion de socket -- conectar o
+    leer -- no un limite de tiempo total del request). Si el servidor
+    mantiene la conexion viva con datos intermitentes (algo que Meta hace
+    en llamadas largas como el upload de /video_reels mientras su crawler
+    intenta bajar el archivo de origen), requests puede tardar mucho mas
+    que el timeout declarado sin nunca disparar una excepcion.
+
+    Visto en produccion: publish_facebook_reel() quedo colgado 15+ minutos
+    en la fase "upload" con Hostinger caido para ese cliente, muy por
+    encima de los 180s de timeout declarados, porque cada lectura individual
+    del socket entraba dentro del limite aunque el total no.
+
+    Si fn() no termina a tiempo, dejamos de esperarla (no se puede matar un
+    thread en Python a la fuerza; el request de fondo se abandona y termina
+    solo eventualmente) y tratamos esto como timeout real, para que el
+    caller pueda caer al siguiente intento en vez de quedarse colgado.
+    """
+    box = {}
+
+    def _target():
+        try:
+            box["value"] = fn()
+        except Exception as e:
+            box["error"] = e
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout_seconds)
+    if t.is_alive():
+        raise TimeoutError(f"la operacion no devolvio nada en {timeout_seconds}s (conexion probablemente colgada del lado del servidor)")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 def _request_with_retries(method, url, retries=3, backoff=5, **kwargs):
     """
     Request (GET/HEAD) con reintentos para las descargas de media desde
@@ -657,13 +696,23 @@ def publish_facebook_reel(page_id, page_access_token, caption, video_url, locati
     video_id = start_data["video_id"]
     upload_url = start_data["upload_url"]
 
-    upload = requests.post(
-        upload_url,
-        headers={
-            "Authorization": f"OAuth {page_access_token}",
-            "file_url": video_url,
-        },
-        timeout=180,
+    # timeout=180 de requests no alcanza aca: es un timeout por-lectura, no
+    # total. Si Meta mantiene la conexion viva con datos intermitentes
+    # mientras su crawler intenta (y no logra) bajar el video de Hostinger,
+    # esta llamada puede colgarse mucho mas alla de los 180s declarados (se
+    # vio en produccion, 15+ minutos). _run_with_hard_timeout pone un techo
+    # real: si no volvio en 90s, lo tratamos como fallo transitorio y
+    # dejamos que publish_facebook() caiga al intento 2.
+    upload = _run_with_hard_timeout(
+        lambda: requests.post(
+            upload_url,
+            headers={
+                "Authorization": f"OAuth {page_access_token}",
+                "file_url": video_url,
+            },
+            timeout=180,
+        ),
+        timeout_seconds=90,
     )
     upload.raise_for_status()
 
@@ -776,6 +825,13 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
         try:
             print("Facebook: intento 1 (video_reels)...")
             return publish_facebook_reel(page_id, page_access_token, caption, media_url, location_id)
+        except TimeoutError as e:
+            # Watchdog de _run_with_hard_timeout: la fase "upload" no volvio
+            # en 90s (Meta probablemente colgado esperando a un Hostinger
+            # que no responde). Mismo razonamiento que el resto de errores
+            # transitorios: el intento 2 baja el archivo el mismo script, no
+            # depende de que Meta pueda llegar a Hostinger.
+            print(f"Facebook: intento 1 se colgo ({e}), sigo con intento 2.")
         except requests.HTTPError as e:
             if _is_video_permission_error(e):
                 print(f"Facebook: intento 1 fallo por permiso de video ({e.response.text[:200]}), sigo con intento 2.")
