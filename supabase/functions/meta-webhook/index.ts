@@ -142,6 +142,7 @@ Deno.serve(async (req: Request) => {
               commentId: change.value.comment_id,
               text: change.value.message ?? "",
               senderId: change.value.from?.id,
+              postId: change.value.post_id ?? null,
             });
           }
           if (change.field === "comments") {
@@ -151,6 +152,7 @@ Deno.serve(async (req: Request) => {
               commentId: change.value.id,
               text: change.value.text ?? "",
               senderId: change.value.from?.id,
+              postId: change.value.media?.id ?? null,
             });
           }
         }
