@@ -629,6 +629,31 @@ function removeHashtag(fieldId, tag){
   renderHashtagChips(fieldId);
 }
 
+// Extrae la etiqueta de etapa (ej: "[listo_para_comprar]") que la IA
+// antepone al campo interest, y devuelve el texto limpio + metadata
+// visual para pintar el badge.
+const LEAD_STAGE_META = {
+  listo_para_comprar: { label: 'Listo para comprar', color: '#16a34a', order: 0 },
+  potencial:           { label: 'Potencial',          color: '#2563eb', order: 1 },
+  interesado:          { label: 'Interesado',         color: '#ca8a04', order: 2 },
+  cliente_existente:   { label: 'Cliente existente',  color: '#6b7280', order: 3 },
+};
+
+function parseLeadStage(interestRaw) {
+  const raw = interestRaw || '';
+  const match = raw.match(/^\s*\[([a-z_]+)\]\s*(.*)$/i);
+  if (match && LEAD_STAGE_META[match[1]]) {
+    return {
+      stageKey: match[1],
+      stageMeta: LEAD_STAGE_META[match[1]],
+      text: match[2] || '—',
+    };
+  }
+  // Leads viejos (sin etiqueta) o etiqueta desconocida: se muestran igual,
+  // sin badge, para no romper nada de lo histórico.
+  return { stageKey: null, stageMeta: null, text: raw || '—' };
+}
+
 async function loadClients(){
   const { data: clients } = await sb.from('socialbot_clients').select('*').order('created_at', { ascending:false });
   const container = document.getElementById('clientsList');
@@ -921,7 +946,19 @@ async function loadClients(){
 
       <details>
         <summary>Leads capturados (${(leads||[]).length}${leadsNuevos ? ` · ${leadsNuevos} sin contactar` : ''})</summary>
-        ${(leads||[]).map(l => `
+        ${(leads||[])
+          .slice()
+          .sort((a, b) => {
+            const oa = parseLeadStage(a.interest).stageMeta?.order ?? 99;
+            const ob = parseLeadStage(b.interest).stageMeta?.order ?? 99;
+            return oa - ob;
+          })
+          .map(l => {
+            const { stageMeta, text } = parseLeadStage(l.interest);
+            const badge = stageMeta
+              ? `<span style="display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; background:${stageMeta.color}; margin-bottom:4px;">${stageMeta.label}</span>`
+              : '';
+            return `
           <div class="card" style="margin-top:8px; padding:12px 14px;">
             <div class="card-row">
               <div>
@@ -935,10 +972,11 @@ async function loadClients(){
                 <option value="descartado" ${l.status==='descartado'?'selected':''}>Descartado</option>
               </select>
             </div>
-            <div class="meta-row">Interés: ${l.interest || '—'}</div>
+            <div>${badge}</div>
+            <div class="meta-row">Interés: ${text}</div>
             <div class="meta-row" style="font-style:italic;">"${(l.source_text||'').replace(/"/g,'&quot;').slice(0,140)}"</div>
           </div>
-        `).join('') || '<div class="meta-row">sin leads todavía</div>'}
+        `;}).join('') || '<div class="meta-row">sin leads todavía</div>'}
       </details>
     `;
     container.appendChild(div);
