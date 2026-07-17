@@ -50,6 +50,35 @@
 // siempre, "auto" hace que la IA detecte el idioma del mensaje entrante y
 // responda en el mismo. Default "pt-BR" para no cambiar el comportamiento
 // de clientes ya configurados antes de este campo.
+//
+// NOTA (17/07/2026): se detecto que Alas Tecno tenia comentarios reales
+// pidiendo directamente el producto ("quero um aplicativo") que la IA
+// respondia bien, pero NUNCA quedaban guardados en socialbot_leads -- el
+// criterio de is_hot que le pasabamos a Groq no cubria explicitamente "me
+// esta pidiendo el producto/servicio", solo daba ejemplos genericos
+// ("pregunta precio", "quiere agendar", etc.). Se reescribe ese criterio
+// para que sea mucho mas exhaustivo (buildLeadInstructions), y sobre todo
+// UNIVERSAL: vive aca, en el codigo compartido de la funcion, y usa
+// aiSettings.topics (que ya es un campo por cliente) para saber el rubro de
+// cada negocio sin hardcodear nada de un cliente puntual -- un cambio aca
+// aplica a todos los clientes actuales y a los que se agreguen despues, sin
+// tener que retocar el system_prompt de cada uno.
+//
+// Ademas se agregan dos redes de seguridad que NO dependen de que la IA
+// responda bien (ni de que este disponible):
+//   1) heuristicLeadDetection(): deteccion por palabras clave / regex de
+//      contacto, en codigo. Se usa como red de seguridad en dos casos: (a)
+//      cuando tryAiReply() devuelve null -- sin cuota diaria de IA o sin
+//      GROQ_API_KEY -- antes ahi se perdia CUALQUIER deteccion de lead por
+//      completo (se vio en los logs: dias con "limite_diario_alcanzado"
+//      repetido sin un solo lead guardado); y (b) como refuerzo cuando la
+//      IA SI respondio pero dijo is_hot=false y el texto igual tiene una
+//      señal de compra clara (para no depender 100% del criterio de un
+//      modelo chico/gratuito).
+//   2) Reincidencia: si el mismo sender_id ya tiene un lead guardado antes
+//      para este cliente, se anota (actualiza) el lead igual aunque el
+//      mensaje puntual no dispare ninguna señal por si solo -- volver a
+//      escribir ya es, en si mismo, señal de interes sostenido.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -283,16 +312,154 @@ async function incrementUsage(clientId: string) {
   }
 }
 
+// "stage" = etapa del embudo comercial (vocabulario estandar de agencia):
+//   "interesado"        -> mostro curiosidad / pregunta general, sin pedir precio.
+//   "potencial"         -> pidio precio/disponibilidad/detalles, o dejo contacto.
+//   "listo_para_comprar"-> intencion explicita de contratar/comprar YA.
+//   "cliente_existente" -> ya es cliente (pide soporte, renovar, ampliar).
+//   "no_lead"           -> sin señal de interes comercial (solo si is_hot=false).
+type LeadStage = "interesado" | "potencial" | "listo_para_comprar" | "cliente_existente" | "no_lead";
+
 interface LeadDetection {
   is_hot: boolean;
   name: string | null;
   contact: string | null;
   interest: string | null;
+  stage: LeadStage | null;
 }
 
 interface GroqReplyResult {
   reply: string;
   lead: LeadDetection | null;
+}
+
+// ---------------------------------------------------------------------------
+// Deteccion de leads (2026-07-17) -- ver nota extensa al principio del
+// archivo. Este bloque se arma UNA sola vez y se le agrega a la llamada de
+// Groq de TODOS los clientes por igual (usa aiSettings.topics, campo por
+// cliente, sin hardcodear ningun rubro puntual).
+// ---------------------------------------------------------------------------
+function buildLeadInstructions(topics: string | null): string {
+  const topicsLine = topics
+    ? `El rubro/los productos y servicios de este negocio son: ${topics}.`
+    : `No hay informacion de rubro cargada para este negocio -- usa el contexto del mensaje.`;
+
+  return [
+    `TAREA CRITICA - DETECCION DE LEADS (tan importante como la respuesta en si, no la trates como secundaria):`,
+    topicsLine,
+    `Marca is_hot=true si el mensaje muestra CUALQUIERA de estas señales de interes comercial real (alcanza con UNA sola, no hace falta que se cumplan todas):`,
+    `1) Pregunta si el negocio ofrece/tiene/hace/vende algo relacionado a su rubro (ej: "tienen apps?", "hacen paginas web?", "vocês fazem aplicativo?", "tem sistema pra restaurante?", "hacen envios a Cordoba?") -- estas preguntas SIEMPRE son lead, aunque sean cortas, informales o mal escritas.`,
+    `2) Pregunta precio, presupuesto, costo, planes, valores, "cuanto sale/cuesta", "quanto custa/sai", cotizacion.`,
+    `3) Pregunta disponibilidad, tiempos de entrega o de inicio, "en cuanto tiempo", "quando podem começar".`,
+    `4) Expresa que quiere, necesita, busca, precisa o le interesa el producto/servicio ("quiero un app", "necesito una web", "preciso de um sistema", "estou procurando", "me interesa").`,
+    `5) Deja espontaneamente un dato de contacto (telefono, email, usuario de otra red), aunque no se lo hayas pedido.`,
+    `6) Pide hablar con alguien del equipo, agendar una llamada o reunion, o que lo contacten.`,
+    `7) Dice que YA es cliente y quiere ampliar, renovar, agregar algo, o reporta un problema con algo que ya tiene contratado con este negocio -- esto TAMBIEN es lead (de tipo cliente existente), no lo descartes.`,
+    `8) Compara con la competencia o pregunta si el negocio es mejor o distinto a otro similar.`,
+    `9) Reacciona con intencion de avanzar frente a un post de producto/oferta ("sim, quero", "eu quero", "quiero saber mas", "me anoto").`,
+    `NO marques is_hot=true SOLO en estos casos: un saludo sin pregunta, un elogio generico sin pedir nada ("lindo!", "que legal", "top demais"), una queja sin relacion al negocio, spam/publicidad de un tercero, o un comentario sin ninguna relacion con lo que vende el negocio.`,
+    `Ante la duda entre lead y no-lead, marca is_hot=true: preferimos que un humano revise y descarte un lead de mas, antes que perder un cliente real por no haberlo marcado.`,
+    `Ademas de is_hot, clasifica el mensaje en "stage" (etapa del embudo comercial), usando EXACTAMENTE uno de estos valores:`,
+    `- "interesado": mostro curiosidad o hizo una pregunta general sobre el producto/servicio, sin pedir precio ni avanzar en la compra.`,
+    `- "potencial": pidio precio, disponibilidad, detalles concretos, o dejo datos de contacto -- esta calificado para que un vendedor humano lo contacte.`,
+    `- "listo_para_comprar": expreso intencion explicita de contratar/comprar YA, o pidio agendar/hablar con alguien.`,
+    `- "cliente_existente": el mensaje deja en claro que YA es cliente del negocio (habla de algo que ya tiene contratado, pide soporte, quiere renovar o ampliar).`,
+    `- "no_lead": no hay ninguna señal de interes comercial real (usar SOLO si is_hot es false).`,
+    `Regla de consistencia: si "stage" es distinto de "no_lead", is_hot DEBE ser true. Si is_hot es true, "stage" NO puede ser "no_lead" (usa "interesado" como piso).`,
+  ].join(" ");
+}
+
+// Frases de intencion de compra, en español y portugues (mercados de todos
+// los clientes actuales: Argentina y Brasil). Lista deliberadamente amplia
+// -- es una red de seguridad, no el criterio principal (ese lo hace la IA
+// con buildLeadInstructions), asi que preferimos algun falso positivo de
+// mas antes que dejar pasar un lead real.
+const BUYING_PHRASES = [
+  // Español
+  "precio", "presupuesto", "cotizacion", "cotización", "cuanto sale", "cuánto sale",
+  "cuanto cuesta", "cuánto cuesta", "quiero", "necesito", "busco", "me interesa",
+  "estoy interesado", "estoy interesada", "disponibilidad", "cuando pueden", "cuándo pueden",
+  "hablar con alguien", "agendar", "una llamada", "una reunion", "una reunión",
+  "contratar", "comprar", "ya soy cliente", "soy cliente", "tengo contratado", "soporte",
+  "renovar", "ampliar",
+  // Português
+  "preço", "preco", "orçamento", "orcamento", "cotação", "cotacao", "quanto custa",
+  "quanto sai", "quero", "preciso", "procuro", "interessado", "interessada",
+  "disponibilidade", "quando podem", "falar com alguem", "falar com alguém", "uma reuniao",
+  "uma reunião", "ja sou cliente", "já sou cliente", "tenho contratado", "suporte",
+];
+
+// Verbos/frases con las que alguien suele preguntar si el negocio ofrece
+// algo ("tienen apps?", "vocês fazem aplicativo?"). Combinados con una
+// palabra del rubro (topics), cuentan como lead aunque no haya ninguna
+// BUYING_PHRASE explicita.
+const OFFER_QUESTION_WORDS = [
+  "tienen", "tenes", "tenés", "hacen", "hacés", "haces", "venden", "vendes", "ofrecen",
+  "tem", "têm", "fazem", "vendem", "trabalham com",
+];
+
+const CONTACT_REGEX = /([\w.+-]+@[\w-]+\.[a-z]{2,})|(\+?\d[\d\s().-]{7,}\d)/i;
+
+function extractTopicWords(topics: string | null): string[] {
+  if (!topics) return [];
+  return topics
+    .toLowerCase()
+    .split(/[,;]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 2);
+}
+
+// Red de seguridad por palabras clave, independiente de la IA. Se usa (a)
+// cuando no hubo respuesta de IA (sin cuota diaria, sin GROQ_API_KEY, o
+// error de Groq), para que el lead no se pierda por completo, y (b) como
+// refuerzo cuando la IA SI respondio pero dijo is_hot=false y el texto
+// igual tiene una señal de compra clara.
+function heuristicLeadDetection(text: string, topics: string | null): LeadDetection | null {
+  const lower = text.toLowerCase();
+  const hasBuyingPhrase = BUYING_PHRASES.some((p) => lower.includes(p));
+  const hasContact = CONTACT_REGEX.test(text);
+
+  const topicWords = extractTopicWords(topics);
+  const mentionsTopic = topicWords.some((t) => lower.includes(t));
+  const asksAboutOffer = mentionsTopic && OFFER_QUESTION_WORDS.some((w) => lower.includes(w));
+
+  if (!hasBuyingPhrase && !hasContact && !asksAboutOffer) return null;
+
+  let stage: LeadStage = "interesado";
+  if (hasContact) stage = "potencial";
+  if (lower.includes("contratar") || lower.includes("comprar") || lower.includes("agendar")) {
+    stage = "listo_para_comprar";
+  }
+  if (
+    lower.includes("ya soy cliente") || lower.includes("soy cliente") ||
+    lower.includes("ja sou cliente") || lower.includes("já sou cliente") ||
+    lower.includes("tengo contratado") || lower.includes("tenho contratado")
+  ) {
+    stage = "cliente_existente";
+  }
+
+  return {
+    is_hot: true,
+    name: null,
+    contact: hasContact ? (text.match(CONTACT_REGEX)?.[0] ?? null) : null,
+    interest: text.slice(0, 200),
+    stage,
+  };
+}
+
+// Reincidencia: si este sender_id ya tiene un lead guardado antes para este
+// cliente, volver a escribir es en si mismo una señal de interes sostenido
+// -- lo anotamos igual, aunque el mensaje puntual no dispare ninguna señal
+// por si solo (ni de la IA ni de la heuristica).
+async function hasExistingLead(clientId: string, platform: string, senderId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from("socialbot_leads")
+    .select("id")
+    .eq("client_id", clientId)
+    .eq("platform", platform)
+    .eq("sender_id", senderId)
+    .maybeSingle();
+  return !!data;
 }
 
 async function callGroq(aiSettings: any, salesLink: string | null, incomingText: string, clientId: string): Promise<GroqReplyResult | null> {
@@ -332,9 +499,9 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     languageInstruction,
     `Máximo ${maxChars} caracteres para la respuesta. No uses markdown ni asteriscos.`,
     ``,
-    `Además, evaluá si este contacto es un lead caliente: alguien que muestra intención real de compra/contratación (pregunta precio, disponibilidad, quiere agendar, dejó teléfono/email/usuario de contacto, dice "quiero comprar/contratar", etc.). Una pregunta genérica o un comentario de cortesía NO cuenta como lead caliente.`,
+    buildLeadInstructions(aiSettings?.topics ?? null),
     `Respondé EXCLUSIVAMENTE con un JSON valido (sin texto antes ni despues, sin markdown, sin \`\`\`), con esta forma exacta:`,
-    `{"reply": "<tu respuesta al usuario>", "lead": {"is_hot": true|false, "name": "<nombre si lo menciono, o null>", "contact": "<telefono/email/usuario si lo menciono, o null>", "interest": "<en pocas palabras que le interesa, o null>"}}`,
+    `{"reply": "<tu respuesta al usuario>", "lead": {"is_hot": true|false, "stage": "interesado"|"potencial"|"listo_para_comprar"|"cliente_existente"|"no_lead", "name": "<nombre si lo menciono, o null>", "contact": "<telefono/email/usuario si lo menciono, o null>", "interest": "<en pocas palabras que le interesa, o null>"}}`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -388,12 +555,18 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     }
 
     const leadRaw = parsed?.lead;
-    const lead: LeadDetection | null = leadRaw && leadRaw.is_hot
+    const rawStage: string | null = leadRaw?.stage ?? null;
+    // Consistencia: si vino un stage distinto de "no_lead" lo tratamos como
+    // hot aunque is_hot haya venido mal seteado (el modelo a veces es
+    // inconsistente entre los dos campos).
+    const isHot = !!(leadRaw?.is_hot || (rawStage && rawStage !== "no_lead"));
+    const lead: LeadDetection | null = isHot
       ? {
           is_hot: true,
-          name: leadRaw.name ?? null,
-          contact: leadRaw.contact ?? null,
-          interest: leadRaw.interest ?? null,
+          name: leadRaw?.name ?? null,
+          contact: leadRaw?.contact ?? null,
+          interest: leadRaw?.interest ?? null,
+          stage: (rawStage && rawStage !== "no_lead" ? rawStage : "interesado") as LeadStage,
         }
       : null;
 
@@ -413,6 +586,14 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
 async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection) {
   if (!senderId) return;
 
+  // Guardamos el "stage" como tag al principio de interest (ej: "[potencial]
+  // pregunta por app de gestión") en vez de agregar una columna nueva -- asi
+  // el panel actual (que ya lee socialbot_leads.interest) no se rompe, y la
+  // agencia ve la etapa de un vistazo. status sigue siendo 100% manual (lo
+  // pone la agencia cuando cierra la venta) -- esto no lo toca.
+  const stageTag = lead.stage && lead.stage !== "no_lead" ? `[${lead.stage}] ` : "";
+  const interestText = lead.interest ? `${stageTag}${lead.interest}` : (stageTag || null);
+
   await supabase.from("socialbot_leads").upsert(
     {
       client_id: clientId,
@@ -421,7 +602,7 @@ async function saveLead(clientId: string, platform: string, senderId: string, ex
       external_id: externalId,
       name: lead.name,
       contact: lead.contact,
-      interest: lead.interest,
+      interest: interestText,
       source_text: sourceText,
       updated_at: new Date().toISOString(),
     },
@@ -483,16 +664,14 @@ async function handleComment(params: { platform: string; pageId: string; comment
 
   let replyText: string | null = null;
   let matchedLabel: string | null = null;
+  let leadToSave: LeadDetection | null = null;
 
   // 1) Primero se intenta con IA (si hay cuota y esta configurada)
   const aiResult = await tryAiReply(account, text);
   if (aiResult) {
     replyText = aiResult.reply;
     matchedLabel = aiResult.source; // "ia" o "ia-cache"
-
-    if (aiResult.lead?.is_hot) {
-      await saveLead(account.client_id, platform, senderId ?? "", commentId, text, aiResult.lead);
-    }
+    leadToSave = aiResult.lead;
   } else {
     // 2) Fallback: matching de palabra clave con plantilla fija de siempre
     const { data: rules } = await supabase
@@ -512,6 +691,28 @@ async function handleComment(params: { platform: string; pageId: string; comment
       replyText = buildFallbackReply(aiSettings, salesLink);
       matchedLabel = "fallback-piso";
     }
+  }
+
+  // Red de seguridad 1: si la IA no corrio (sin cuota / sin API key / error)
+  // o corrio pero dijo is_hot=false, probamos la deteccion por palabras
+  // clave antes de descartar el lead por completo.
+  if (!leadToSave) {
+    leadToSave = heuristicLeadDetection(text, aiSettings?.topics ?? null);
+  }
+
+  // Red de seguridad 2: reincidencia. Si este sender_id ya escribio antes y
+  // ya quedo guardado como lead para este cliente, anotamos igual el nuevo
+  // contacto (upsert), aunque este mensaje puntual no haya disparado ninguna
+  // señal por si solo.
+  if (!leadToSave && senderId) {
+    const isReturning = await hasExistingLead(account.client_id, platform, senderId);
+    if (isReturning) {
+      leadToSave = { is_hot: true, name: null, contact: null, interest: text.slice(0, 200), stage: "potencial" };
+    }
+  }
+
+  if (leadToSave?.is_hot) {
+    await saveLead(account.client_id, platform, senderId ?? "", commentId, text, leadToSave);
   }
 
   const endpoint =
@@ -569,15 +770,13 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
 
   let replyText: string | null = null;
   let matchedLabel: string | null = null;
+  let leadToSave: LeadDetection | null = null;
 
   const aiResult = await tryAiReply(account, text);
   if (aiResult) {
     replyText = aiResult.reply;
     matchedLabel = aiResult.source;
-
-    if (aiResult.lead?.is_hot) {
-      await saveLead(account.client_id, platform, senderId, null, text, aiResult.lead);
-    }
+    leadToSave = aiResult.lead;
   } else {
     const { data: rules } = await supabase
       .from("socialbot_auto_reply_rules")
@@ -594,6 +793,20 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
       replyText = buildFallbackReply(aiSettings, salesLink);
       matchedLabel = "fallback-piso";
     }
+  }
+
+  // Mismas dos redes de seguridad que en handleComment (ver notas ahi).
+  if (!leadToSave) {
+    leadToSave = heuristicLeadDetection(text, aiSettings?.topics ?? null);
+  }
+  if (!leadToSave && senderId) {
+    const isReturning = await hasExistingLead(account.client_id, platform, senderId);
+    if (isReturning) {
+      leadToSave = { is_hot: true, name: null, contact: null, interest: text.slice(0, 200), stage: "potencial" };
+    }
+  }
+  if (leadToSave?.is_hot) {
+    await saveLead(account.client_id, platform, senderId, null, text, leadToSave);
   }
 
   await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/me/messages?access_token=${account.page_access_token}`, {
