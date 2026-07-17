@@ -975,6 +975,8 @@ async function loadClients(){
             <div>${badge}</div>
             <div class="meta-row">Interés: ${text}</div>
             <div class="meta-row" style="font-style:italic;">"${(l.source_text||'').replace(/"/g,'&quot;').slice(0,140)}"</div>
+            <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${l.created_at ? new Date(l.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
+            ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${l.post_permalink ? `<a href="${l.post_permalink}" target="_blank" rel="noopener">Ver publicación de origen</a>` : `Post: ${l.post_id}`}</div>` : ''}
           </div>
         `;}).join('') || '<div class="meta-row">sin leads todavía</div>'}
       </details>
