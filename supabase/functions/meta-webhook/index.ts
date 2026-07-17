@@ -585,7 +585,7 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
   }
 }
 
-async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection) {
+async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection, postId: string | null = null) {
   if (!senderId) return;
 
   // Guardamos el "stage" como tag al principio de interest (ej: "[potencial]
@@ -606,6 +606,7 @@ async function saveLead(clientId: string, platform: string, senderId: string, ex
       contact: lead.contact,
       interest: interestText,
       source_text: sourceText,
+      post_id: postId,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "client_id,platform,sender_id" },
@@ -641,8 +642,8 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
 }
 
 // ---------------------------------------------------------------------------
-async function handleComment(params: { platform: string; pageId: string; commentId: string; text: string; senderId?: string }) {
-  const { platform, pageId, commentId, text, senderId } = params;
+async function handleComment(params: { platform: string; pageId: string; commentId: string; text: string; senderId?: string; postId?: string | null }) {
+  const { platform, pageId, commentId, text, senderId, postId } = params;
   if (!commentId) return;
 
   const account = await findSocialAccountAndClient(platform, pageId);
@@ -714,7 +715,7 @@ async function handleComment(params: { platform: string; pageId: string; comment
   }
 
   if (leadToSave?.is_hot) {
-    await saveLead(account.client_id, platform, senderId ?? "", commentId, text, leadToSave);
+    await saveLead(account.client_id, platform, senderId ?? "", commentId, text, leadToSave, postId ?? null);
   }
 
   const endpoint =
