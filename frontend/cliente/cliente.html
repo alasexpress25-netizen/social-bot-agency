@@ -154,6 +154,11 @@
       <details>
         <summary data-i18n="postsTitle">Últimas publicaciones</summary>
         <p class="section-hint" data-i18n="postsHint">Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.</p>
+        <div style="margin-bottom:10px;">
+          <select id="postsFilterDate" onchange="renderPostsList()" style="width:auto;">
+            <option value="all" data-i18n="postsFilterAllDates">Todas las fechas</option>
+          </select>
+        </div>
         <div id="postsList"></div>
       </details>
     </section>
@@ -256,6 +261,7 @@ const I18N = {
     pendingHint: 'Estos posts ya fueron generados pero no se van a publicar hasta que vos los apruebes o rechaces. Podés editar el texto antes de aprobar. Si rechazás uno, se descarta para siempre (no se vuelve a intentar publicar).',
     postsTitle: 'Últimas publicaciones',
     postsHint: 'Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.',
+    postsFilterAllDates: 'Todas las fechas',
     metricsTitle: 'Métricas',
     metricsHint: 'Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.',
     leadsTitle: 'Contactos interesados',
@@ -307,6 +313,7 @@ const I18N = {
     pendingHint: 'Esses posts já foram gerados mas não serão publicados até você aprová-los ou rejeitá-los. Você pode editar o texto antes de aprovar. Se rejeitar um, ele é descartado para sempre (não é publicado novamente).',
     postsTitle: 'Últimas publicações',
     postsHint: 'Histórico do que o sistema já publicou (ou tentou publicar) nas suas redes. É apenas para consulta — não pode ser editado aqui.',
+    postsFilterAllDates: 'Todas as datas',
     metricsTitle: 'Métricas',
     metricsHint: 'Contatos interessados que chegaram, quantos viraram clientes, quanto suas publicações foram curtidas, e com que frequência o sistema respondeu automaticamente. Escolha ver por semana ou por mês.',
     leadsTitle: 'Contatos interessados',
@@ -573,17 +580,52 @@ function formatPostDate(iso){
   return new Date(iso).toLocaleString(locale, { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
+function postDateKey(p){
+  const iso = p.published_at || p.created_at;
+  return iso ? iso.slice(0, 10) : null; // YYYY-MM-DD, agnostico a la hora
+}
+
+function populateDateFilterOptions(posts){
+  const selectEl = document.getElementById('postsFilterDate');
+  if(!selectEl) return;
+  const previousValue = selectEl.value || 'all';
+  const dates = [...new Set(posts.map(postDateKey).filter(Boolean))].sort().reverse();
+  const locale = (currentLang === 'pt') ? 'pt-BR' : 'es-AR';
+  selectEl.innerHTML = `<option value="all">${t('postsFilterAllDates')}</option>` +
+    dates.map(d => {
+      const label = new Date(d + 'T00:00:00').toLocaleDateString(locale, { day:'2-digit', month:'2-digit', year:'numeric' });
+      return `<option value="${d}">${label}</option>`;
+    }).join('');
+  if(dates.includes(previousValue) || previousValue === 'all'){
+    selectEl.value = previousValue;
+  }
+}
+
 async function loadPosts(){
   const { data: posts } = await sb.from('socialbot_posts')
     .select('*, socialbot_social_accounts(platform)').eq('client_id', currentClient.id).neq('approval_status', 'pending')
-    .order('created_at', { ascending:false }).limit(10);
+    .order('created_at', { ascending:false }).limit(20);
+
+  window.__myPosts = posts || [];
+  renderPostsList();
+}
+
+function renderPostsList(){
+  const posts = window.__myPosts || [];
+  populateDateFilterOptions(posts);
+  const dateFilter = document.getElementById('postsFilterDate')?.value || 'all';
+  const filtered = dateFilter === 'all' ? posts : posts.filter(p => postDateKey(p) === dateFilter);
 
   const list = document.getElementById('postsList');
   if(!posts || posts.length === 0){
     list.innerHTML = `<div class="empty">${t('noPostsYet')}</div>`;
     return;
   }
-  list.innerHTML = posts.map(p => {
+  if(filtered.length === 0){
+    list.innerHTML = `<div class="empty">${t('noPostsYet')}</div>`;
+    return;
+  }
+  list.innerHTML = filtered.map(p => {
     const platform = p.socialbot_social_accounts?.platform;
     const pMeta = PLATFORM_META[platform];
     const dateLabel = formatPostDate(p.published_at || p.created_at);
