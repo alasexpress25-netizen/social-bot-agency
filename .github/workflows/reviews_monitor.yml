@@ -1,0 +1,35 @@
+name: Monitoreo de reseñas (Google/Facebook)
+
+on:
+  schedule:
+    # Cada 6 horas -- las reseñas no son tan urgentes como un lead caliente,
+    # pero tampoco tiene sentido chequear más seguido que eso.
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}   # permite dispararlo manualmente desde GitHub para probar
+
+jobs:
+  chequear:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r scheduler/requirements.txt
+
+      - name: Buscar reseñas nuevas y generar respuesta sugerida
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Opcional: si no está seteado, se salta el monitoreo de Google y
+          # solo chequea Facebook. Se genera en Google Cloud Console
+          # habilitando "Places API" (no confundir con "Places API (New)").
+          GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+          # Mismos secrets de IA que ya usa content_planner.py, sin el
+          # sufijo _CONTENT_PLAN (este script no compite por esa cuota).
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: python scheduler/reviews_monitor.py
