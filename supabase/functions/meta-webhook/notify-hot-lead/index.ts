@@ -1,28 +1,35 @@
-// supabase/functions/notify-stale-leads/index.ts
+// supabase/functions/notify-hot-lead/index.ts
 //
-// PRIORIDAD 1, punto 2 del roadmap (PROPUESTAS-AGENCIA.md): a diferencia de
-// notify-hot-lead (que avisa AL INSTANTE cuando algo esta "listo para
-// comprar"), esta funcion corre de forma PERIODICA (via cron de GitHub
-// Actions, ver .github/workflows/stale-leads-check.yml) y junta en un solo
-// email todos los leads que siguen en status='nuevo' (nadie los marco como
-// contactado/convertido/descartado) hace mas de STALE_HOURS horas. Cubre
-// las etapas que no ameritan una alarma inmediata (interesado/potencial)
-// pero que igual se pueden estar enfriando sin que nadie se de cuenta.
+// PRIORIDAD 1 del roadmap (PROPUESTAS-AGENCIA.md): apenas se guarda un
+// lead en etapa "listo_para_comprar" (la mas caliente del embudo), le
+// manda un email inmediato a la agencia -- no al cliente -- para que lo
+// contacten antes de que se enfrie. Lo dispara un trigger de Postgres
+// (trg_notify_agency_hot_lead, en 0019_notify_hot_lead.sql) via pg_net,
+// mismo mecanismo que ya usa notify-pending-post para avisarle al cliente
+// que tiene un post esperando aprobacion.
 //
-// No depende de ningun trigger de Postgres -- es publica (verify_jwt=false,
-// igual que meta-webhook) y se dispara por HTTP desde afuera, con un GET o
-// POST simple, sin body.
+// verify_jwt=false por el mismo motivo que meta-webhook y
+// notify-pending-post: quien llama es el propio Postgres (via pg_net), no
+// un usuario autenticado.
 //
-// Requiere los mismos secrets SMTP que notify-hot-lead / notify-pending-post
-// (se pueden copiar tal cual):
-//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM (opcional)
-// Opcionales:
-//   STALE_HOURS (default 24) -- a partir de cuantas horas sin contactar se
-//     empieza a avisar.
-//   AGENCY_PANEL_URL -- se incluye en el cuerpo del mail si esta seteada.
+// Requiere estos secrets (Supabase Dashboard > Edge Functions >
+// notify-hot-lead > Secrets) -- los mismos valores que ya tiene cargados
+// notify-pending-post, se pueden copiar tal cual:
+//   SMTP_HOST = smtp.hostinger.com
+//   SMTP_PORT = 465
+//   SMTP_USER = lavisualmk@alastecno.com
+//   SMTP_PASS = <la contrasena de ese correo>
+//   SMTP_FROM = lavisualmk@alastecno.com   (opcional, si no se setea usa SMTP_USER)
+// Opcionalmente AGENCY_PANEL_URL con la URL publica del panel de la
+// agencia, para incluirla en el cuerpo del mail.
 //
-// Si un dia no hay ningun lead viejo sin contactar, no manda ningun email
-// (no hace falta "ruido" confirmando que no hay nada pendiente).
+// El destinatario del email es el email de login de la agencia
+// (auth.users.email de socialbot_agencies.owner_user_id) -- no hace falta
+// ninguna columna nueva, se resuelve con el admin client via service role.
+//
+// Si faltan las credenciales SMTP, no rompe nada: solo loguea y no manda
+// el email (mismo criterio de "fallback silencioso" que el resto del
+// proyecto).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
@@ -36,114 +43,100 @@ const SMTP_USER = Deno.env.get("SMTP_USER");
 const SMTP_PASS = Deno.env.get("SMTP_PASS");
 const SMTP_FROM = Deno.env.get("SMTP_FROM") || SMTP_USER;
 const AGENCY_PANEL_URL = Deno.env.get("AGENCY_PANEL_URL") || "";
-const STALE_HOURS = parseInt(Deno.env.get("STALE_HOURS") || "24");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-function cleanInterest(raw: string | null): string {
-  return (raw || "").replace(/^\s*\[[a-z_]+\]\s*/i, "") || "sin detalle";
-}
-
-function hoursSince(iso: string): number {
-  return Math.round((Date.now() - new Date(iso).getTime()) / 3600000);
-}
-
 Deno.serve(async (req: Request) => {
-  if (req.method !== "POST" && req.method !== "GET") {
+  if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
 
+  let body: { lead_id?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return new Response("body invalido", { status: 400 });
+  }
+
+  const leadId = body.lead_id;
+  if (!leadId) return new Response("falta lead_id", { status: 400 });
+
   if (!SMTP_USER || !SMTP_PASS) {
-    console.log("SMTP_USER/SMTP_PASS no configurados, se omite el chequeo de leads viejos.");
+    console.log(`SMTP_USER/SMTP_PASS no configurados, se omite el email para lead ${leadId}.`);
     return new Response("ok (sin email, faltan credenciales SMTP)", { status: 200 });
   }
 
-  const cutoffIso = new Date(Date.now() - STALE_HOURS * 3600000).toISOString();
-
-  const { data: staleLeads, error } = await supabase
+  const { data: lead, error } = await supabase
     .from("socialbot_leads")
-    .select("id, name, contact, platform, interest, created_at, client_id, socialbot_clients(name, agency_id)")
-    .eq("status", "nuevo")
-    .lt("created_at", cutoffIso)
-    .order("created_at", { ascending: true });
+    .select("id, name, contact, platform, interest, source_text, post_permalink, post_id, client_id, socialbot_clients(name, agency_id)")
+    .eq("id", leadId)
+    .maybeSingle();
 
-  if (error) {
-    console.error("Error consultando leads viejos:", error);
-    return new Response("error consultando leads", { status: 500 });
+  if (error || !lead) {
+    console.error("No se encontro el lead", leadId, error);
+    return new Response("lead no encontrado", { status: 200 });
   }
 
-  if (!staleLeads || staleLeads.length === 0) {
-    return new Response("ok (sin leads viejos sin contactar)", { status: 200 });
+  const client = (lead as any).socialbot_clients;
+  if (!client?.agency_id) {
+    return new Response("lead sin cliente/agencia asociada, se omite", { status: 200 });
   }
 
-  // Agrupamos por agencia (por si en el futuro hay mas de una), y dentro de
-  // cada agencia por cliente, para que el email quede prolijo.
-  const byAgency = new Map<string, Map<string, { clientName: string; leads: any[] }>>();
-  for (const lead of staleLeads) {
-    const client = (lead as any).socialbot_clients;
-    if (!client?.agency_id) continue;
-    if (!byAgency.has(client.agency_id)) byAgency.set(client.agency_id, new Map());
-    const byClient = byAgency.get(client.agency_id)!;
-    if (!byClient.has(lead.client_id)) byClient.set(lead.client_id, { clientName: client.name || "cliente", leads: [] });
-    byClient.get(lead.client_id)!.leads.push(lead);
+  const { data: agency } = await supabase
+    .from("socialbot_agencies")
+    .select("owner_user_id")
+    .eq("id", client.agency_id)
+    .maybeSingle();
+
+  if (!agency?.owner_user_id) {
+    return new Response("agencia sin owner, se omite", { status: 200 });
   }
 
-  let agenciesNotified = 0;
+  const { data: ownerUser, error: ownerError } = await supabase.auth.admin.getUserById(agency.owner_user_id);
+  const ownerEmail = ownerUser?.user?.email;
+  if (ownerError || !ownerEmail) {
+    console.error("No se pudo resolver el email de la agencia", ownerError);
+    return new Response("sin email de agencia, se omite", { status: 200 });
+  }
 
-  for (const [agencyId, byClient] of byAgency) {
-    const { data: agency } = await supabase
-      .from("socialbot_agencies")
-      .select("owner_user_id")
-      .eq("id", agencyId)
-      .maybeSingle();
-    if (!agency?.owner_user_id) continue;
+  // El interest ya viene con el tag de etapa al principio (ej:
+  // "[listo_para_comprar] quiero un app"), lo sacamos para el asunto/cuerpo.
+  const cleanInterest = (lead.interest || "").replace(/^\s*\[[a-z_]+\]\s*/i, "") || "sin detalle";
+  const panelLine = AGENCY_PANEL_URL
+    ? `Entrá a contactarlo desde el panel: ${AGENCY_PANEL_URL}`
+    : "Entrá a tu panel de siempre para contactarlo.";
 
-    const { data: ownerUser } = await supabase.auth.admin.getUserById(agency.owner_user_id);
-    const ownerEmail = ownerUser?.user?.email;
-    if (!ownerEmail) continue;
+  const client_smtp = new SMTPClient({
+    connection: {
+      hostname: SMTP_HOST,
+      port: SMTP_PORT,
+      tls: true,
+      auth: { username: SMTP_USER, password: SMTP_PASS },
+    },
+  });
 
-    let totalLeads = 0;
-    const blocks: string[] = [];
-    for (const { clientName, leads } of byClient.values()) {
-      totalLeads += leads.length;
-      const lines = leads.map((l: any) =>
-        `  - ${l.name || "sin nombre"} (${l.platform}, ${l.contact || "sin contacto"}) -- "${cleanInterest(l.interest)}" -- hace ${hoursSince(l.created_at)}hs`
-      ).join("\n");
-      blocks.push(`${clientName}:\n${lines}`);
-    }
-
-    const panelLine = AGENCY_PANEL_URL
-      ? `Entrá a revisarlos y marcarlos: ${AGENCY_PANEL_URL}`
-      : "Entrá a tu panel de siempre para revisarlos y marcarlos.";
-
-    const client_smtp = new SMTPClient({
-      connection: {
-        hostname: SMTP_HOST,
-        port: SMTP_PORT,
-        tls: true,
-        auth: { username: SMTP_USER, password: SMTP_PASS },
-      },
+  try {
+    await client_smtp.send({
+      from: SMTP_FROM!,
+      to: ownerEmail,
+      subject: `🔥 Lead LISTO PARA COMPRAR${client.name ? " — " + client.name : ""}`,
+      content:
+        `Hola!\n\n` +
+        `Entró un lead en etapa LISTO PARA COMPRAR${client.name ? " para " + client.name : ""} y conviene contactarlo cuanto antes.\n\n` +
+        `Plataforma: ${lead.platform}\n` +
+        `Nombre: ${lead.name || "sin nombre"}\n` +
+        `Contacto: ${lead.contact || "sin contacto directo"}\n` +
+        `Interés: ${cleanInterest}\n` +
+        `Mensaje original: "${(lead.source_text || "").slice(0, 220)}"\n` +
+        (lead.post_permalink ? `Post de origen: ${lead.post_permalink}\n` : "") +
+        `\n${panelLine}\n\n` +
+        `Los leads en esta etapa son los de mayor probabilidad de cierre -- cuanto antes se contacten, mejor conversión.`,
     });
-
-    try {
-      await client_smtp.send({
-        from: SMTP_FROM!,
-        to: ownerEmail,
-        subject: `📋 ${totalLeads} lead${totalLeads === 1 ? "" : "s"} sin contactar hace más de ${STALE_HOURS}hs`,
-        content:
-          `Hola!\n\n` +
-          `Estos leads siguen marcados como "nuevo" hace más de ${STALE_HOURS} horas:\n\n` +
-          blocks.join("\n\n") +
-          `\n\n${panelLine}\n\n` +
-          `Este aviso se manda una vez al día -- si ya contactaste a alguno, marcalo en el panel para que no vuelva a salir en la lista.`,
-      });
-      agenciesNotified++;
-    } catch (e) {
-      console.error("Error mandando el email por SMTP:", e);
-    } finally {
-      try { await client_smtp.close(); } catch (_) { /* ya estaba cerrado o nunca abrio */ }
-    }
+    await client_smtp.close();
+  } catch (e) {
+    console.error("Error mandando el email por SMTP:", e);
+    try { await client_smtp.close(); } catch (_) { /* ya estaba cerrado o nunca abrio */ }
   }
 
-  return new Response(`ok (${agenciesNotified} agencia(s) notificada(s), ${staleLeads.length} lead(s) viejos)`, { status: 200 });
+  return new Response("ok", { status: 200 });
 });
