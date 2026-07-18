@@ -1,0 +1,24 @@
+name: Chequeo de leads sin contactar
+
+# NOTA: este workflow no se pudo bajar tal cual porque vive en GitHub (no
+# en Supabase) y no tengo acceso de lectura a ese repo -- lo reconstruí
+# siguiendo el mismo patrón que notify-stale-leads/index.ts describe en su
+# propio comentario de cabecera y el mismo estilo que ya usan
+# content_planner.yml / post_scheduler.yml. Antes de darlo por bueno,
+# comparalo con el que ya tenés funcionando en producción (si existe) y
+# quedate con el real.
+
+on:
+  schedule:
+    # Todos los días, 09:00 America/Sao_Paulo (UTC-3) = 12:00 UTC.
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}   # permite dispararlo manualmente desde GitHub para probar
+
+jobs:
+  chequear:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar notify-stale-leads
+        run: |
+          curl -sS -X POST "https://redaqqxoeciycqgjhpbv.supabase.co/functions/v1/notify-stale-leads" \
+            -H "Content-Type: application/json"
