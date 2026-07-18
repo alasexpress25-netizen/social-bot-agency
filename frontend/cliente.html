@@ -169,7 +169,8 @@
     <section>
       <details>
         <summary data-i18n="leadsTitle">Contactos interesados</summary>
-        <p class="section-hint" data-i18n="leadsHint">Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Vos solo tenés que ir actualizando el estado a medida que los contactás.</p>
+        <p class="section-hint" data-i18n="leadsHint">Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Es solo para consulta — el estado de contacto lo actualiza tu agencia.</p>
+        <button type="button" class="secondary" style="margin-bottom:10px;" id="exportLeadsBtn" data-i18n="exportCsvBtn" onclick="exportLeadsCsv()">Exportar CSV</button>
         <div id="leadsList"></div>
       </details>
     </section>
@@ -247,7 +248,7 @@ const I18N = {
     metricsTitle: 'Métricas',
     metricsHint: 'Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.',
     leadsTitle: 'Contactos interesados',
-    leadsHint: 'Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y está interesado en comprar (pregunta precio, deja teléfono, etc.).',
+    leadsHint: 'Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Es solo para consulta — el estado de contacto lo actualiza tu agencia.',
     prefsTitle: 'Sus Posts (opcional)',
     prefsHint: 'Lo que cargues acá tiene prioridad sobre lo que carga la agencia. Si lo dejás vacío, la agencia los coloca.',
     captionFixedLabel: 'Texto fijo de tus posts (opcional)',
@@ -261,6 +262,7 @@ const I18N = {
     carouselLabel: (n) => `Carrusel (${n} imágenes): `, imageLabel: (i) => `imagen ${i}`, noImages: 'sin imágenes',
     mediaLabel: 'Media: ', viewLink: 'ver',
     noPostsYet: 'Todavía no hay publicaciones.', noLeadsYet: 'Todavía no hay contactos interesados.',
+    exportCsvBtn: 'Exportar CSV', exportCsvEmpty: 'No hay contactos para exportar todavía.',
     rejectedTag: ' · rechazado', noName: 'Sin nombre', noContact: 'sin contacto',
     leadNuevo: 'Nuevo', leadContactado: 'Contactado', leadConvertido: 'Convertido', leadDescartado: 'Descartado',
     prefsSaved: 'Preferencias guardadas.', hashtagsSaved: 'Texto y hashtags guardados.',
@@ -306,6 +308,7 @@ const I18N = {
     carouselLabel: (n) => `Carrossel (${n} imagens): `, imageLabel: (i) => `imagem ${i}`, noImages: 'sem imagens',
     mediaLabel: 'Mídia: ', viewLink: 'ver',
     noPostsYet: 'Ainda não há publicações.', noLeadsYet: 'Ainda não há contatos interessados.',
+    exportCsvBtn: 'Exportar CSV', exportCsvEmpty: 'Ainda não há contatos para exportar.',
     rejectedTag: ' · rejeitado', noName: 'Sem nome', noContact: 'sem contato',
     leadNuevo: 'Novo', leadContactado: 'Contatado', leadConvertido: 'Convertido', leadDescartado: 'Descartado',
     prefsSaved: 'Preferências salvas.', hashtagsSaved: 'Texto e hashtags salvos.',
@@ -583,10 +586,13 @@ const LEAD_STATUS_META = {
   descartado:  { color: '#6b7280' },
 };
 
+let currentLeads = [];
+
 async function loadLeads(){
   const { data: leads } = await sb.from('socialbot_leads')
     .select('*').eq('client_id', currentClient.id).order('created_at', { ascending:false });
 
+  currentLeads = leads || [];
   const list = document.getElementById('leadsList');
   if(!leads || leads.length === 0){
     list.innerHTML = `<div class="empty">${t('noLeadsYet')}</div>`;
@@ -629,6 +635,41 @@ async function loadLeads(){
       ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${l.post_permalink ? `<a href="${l.post_permalink}" target="_blank" rel="noopener">${t('viewLink')}</a>` : `Post: ${l.post_id}`}</div>` : ''}
     </div>
   `;}).join('');
+}
+
+// Exporta los leads ya cargados a un CSV descargable en el navegador --
+// no pega contra Supabase de nuevo, usa currentLeads (seteado en
+// loadLeads). Solo lectura, mismo criterio que el resto del portal.
+function exportLeadsCsv(){
+  if(!currentLeads || currentLeads.length === 0){
+    alert(t('exportCsvEmpty'));
+    return;
+  }
+  const statusLabels = {
+    nuevo: t('leadNuevo'), contactado: t('leadContactado'),
+    convertido: t('leadConvertido'), descartado: t('leadDescartado'),
+  };
+  const headers = ['Nombre','Plataforma','Contacto','Interés','Estado','Mensaje original','Fecha','Link publicación'];
+  const csvEscape = (v) => `"${String(v ?? '').replace(/"/g,'""')}"`;
+  const rows = currentLeads.map(l => {
+    const { text } = parseLeadStage(l.interest);
+    const fecha = l.created_at ? new Date(l.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+    return [
+      l.name || '', l.platform || '', l.contact || '', text || '',
+      statusLabels[l.status] || l.status || '', l.source_text || '', fecha, l.post_permalink || '',
+    ].map(csvEscape).join(',');
+  });
+  const csvContent = '\uFEFF' + [headers.map(csvEscape).join(','), ...rows].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const dateStamp = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `contactos-interesados-${dateStamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function loadAiPrefs(){
