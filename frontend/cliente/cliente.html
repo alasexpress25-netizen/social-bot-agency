@@ -616,7 +616,7 @@ function populateDateFilterOptions(posts){
 
 async function loadPosts(){
   const { data: posts } = await sb.from('socialbot_posts')
-    .select('*, socialbot_social_accounts(platform)').eq('client_id', currentClient.id).eq('status', 'published')
+    .select('*').eq('client_id', currentClient.id).eq('status', 'published')
     .order('created_at', { ascending:false }).limit(20);
 
   window.__myPosts = posts || [];
@@ -630,7 +630,7 @@ function renderPostsList(){
   const platformFilter = document.getElementById('postsFilterPlatform')?.value || 'all';
   const filtered = posts.filter(p => {
     if(dateFilter !== 'all' && postDateKey(p) !== dateFilter) return false;
-    if(platformFilter !== 'all' && p.socialbot_social_accounts?.platform !== platformFilter) return false;
+    if(platformFilter !== 'all' && p.platform !== platformFilter) return false;
     return true;
   });
 
@@ -644,7 +644,7 @@ function renderPostsList(){
     return;
   }
   list.innerHTML = filtered.map(p => {
-    const platform = p.socialbot_social_accounts?.platform;
+    const platform = p.platform;
     const pMeta = PLATFORM_META[platform];
     const dateLabel = formatPostDate(p.published_at || p.created_at);
     return `
