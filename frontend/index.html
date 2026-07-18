@@ -666,7 +666,7 @@ async function renderMetrics(clientId){
 
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
   ]);
 
@@ -687,6 +687,12 @@ async function renderMetrics(clientId){
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
+  const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
+  const avgResponseMinutes = repliedWithTimes.length
+    ? Math.round(repliedWithTimes.reduce((sum, r) => sum + (new Date(r.replied_at) - new Date(r.created_at)) / 60000, 0) / repliedWithTimes.length)
+    : null;
+  const avgResponseLabel = avgResponseMinutes === null ? '—' : (avgResponseMinutes < 1 ? '<1' : avgResponseMinutes);
+
   const el = document.getElementById(`metrics-${clientId}`);
   if(!el) return;
   el.innerHTML = `
@@ -695,10 +701,11 @@ async function renderMetrics(clientId){
       <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('${clientId}','month')">Mensual</button>
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
-    <div class="kpi-row">
+    <div class="kpi-row kpi-row-4">
       <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+      <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
     </div>
     <div class="metric-title">Consultas recibidas</div>
     <div id="chartLeads-${clientId}"></div>
