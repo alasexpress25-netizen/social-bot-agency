@@ -697,14 +697,40 @@ const PLATFORM_META_AG = {
   instagram: { label: 'Instagram', icon: '📷' },
 };
 
+function postDateKey(p){
+  const iso = p.published_at || p.created_at;
+  return iso ? iso.slice(0, 10) : null; // YYYY-MM-DD, agnostico a la hora
+}
+
+function populateDateFilterOptions(selectEl, posts){
+  if(!selectEl) return;
+  const previousValue = selectEl.value || 'all';
+  const dates = [...new Set(posts.map(postDateKey).filter(Boolean))].sort().reverse();
+  selectEl.innerHTML = `<option value="all">Todas las fechas</option>` +
+    dates.map(d => {
+      const label = new Date(d + 'T00:00:00').toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric' });
+      return `<option value="${d}">${label}</option>`;
+    }).join('');
+  // Si la fecha elegida sigue existiendo en la lista, la mantenemos
+  // seleccionada (para no perder el filtro al reintentar un post, por ej.).
+  if(dates.includes(previousValue) || previousValue === 'all'){
+    selectEl.value = previousValue;
+  }
+}
+
 function renderPostsList(clientId){
   const all = (window.__clientPosts && window.__clientPosts[clientId]) || [];
   const statusFilter = document.getElementById(`postsFilterStatus-${clientId}`)?.value || 'all';
   const platformFilter = document.getElementById(`postsFilterPlatform-${clientId}`)?.value || 'all';
 
+  const dateSelectEl = document.getElementById(`postsFilterDate-${clientId}`);
+  populateDateFilterOptions(dateSelectEl, all);
+  const dateFilter = dateSelectEl?.value || 'all';
+
   const filtered = all.filter(p => {
     if(statusFilter !== 'all' && p.status !== statusFilter) return false;
     if(platformFilter !== 'all' && p.socialbot_social_accounts?.platform !== platformFilter) return false;
+    if(dateFilter !== 'all' && postDateKey(p) !== dateFilter) return false;
     return true;
   });
 
@@ -1253,6 +1279,9 @@ async function loadClients(){
             <option value="all">Todas las plataformas</option>
             <option value="facebook">Facebook</option>
             <option value="instagram">Instagram</option>
+          </select>
+          <select id="postsFilterDate-${c.id}" onchange="renderPostsList('${c.id}')" style="width:auto;">
+            <option value="all">Todas las fechas</option>
           </select>
         </div>
         <div id="posts-list-${c.id}"></div>
