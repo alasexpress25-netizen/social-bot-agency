@@ -150,15 +150,7 @@ IA ya existen) y aplicar la migración `0020` en producción.
 Salen de revisar el repo completo buscando huecos concretos, no genéricos.
 En orden de impacto:
 
-### 9. Chequeo proactivo de salud de tokens de Meta
-Directo de lo que ya pasó a mediados de julio: un `page_access_token` sin
-los scopes correctos (`pages_manage_posts`, `instagram_content_publish`)
-recién se descubrió cuando `post_scheduler.py` ya estaba fallando en
-producción. Hoy nada valida los tokens antes de que se rompan. Un cron
-(mismo patrón que `inactive_clients_alert.py`) que llame `/debug_token` de
-Graph API para cada cuenta activa, chequee validez + scopes, y avise por
-email antes de que falle la publicación. Evita repetir ese tipo de sesión
-de debugging.
+### 9. Quitado
 
 ### 10. Escalamiento de comentarios negativos/quejas
 El prompt de `meta-webhook` ya le dice a la IA que NO marque como lead una
