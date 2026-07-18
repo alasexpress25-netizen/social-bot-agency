@@ -685,6 +685,74 @@ function setMetricPeriod(clientId, period){
   renderMetrics(clientId);
 }
 
+// ---------------------------------------------------------------------------
+// Item 15 (PROPUESTAS-AGENCIA.md): filtro por estado/plataforma + reintentar
+// publicacion fallida + link a la publicacion real, en "Ultimas publicaciones"
+// de cada cliente. Los posts ya estan cacheados en window.__clientPosts[clientId]
+// (se cargan una vez en loadClients), asi que cambiar el filtro solo
+// re-renderiza esta lista puntual, sin volver a pegarle a Supabase.
+// ---------------------------------------------------------------------------
+const PLATFORM_META_AG = {
+  facebook:  { label: 'Facebook',  icon: '📘' },
+  instagram: { label: 'Instagram', icon: '📷' },
+};
+
+function renderPostsList(clientId){
+  const all = (window.__clientPosts && window.__clientPosts[clientId]) || [];
+  const statusFilter = document.getElementById(`postsFilterStatus-${clientId}`)?.value || 'all';
+  const platformFilter = document.getElementById(`postsFilterPlatform-${clientId}`)?.value || 'all';
+
+  const filtered = all.filter(p => {
+    if(statusFilter !== 'all' && p.status !== statusFilter) return false;
+    if(platformFilter !== 'all' && p.socialbot_social_accounts?.platform !== platformFilter) return false;
+    return true;
+  });
+
+  const container = document.getElementById(`posts-list-${clientId}`);
+  if(!container) return;
+
+  if(filtered.length === 0){
+    container.innerHTML = `<div class="empty">${all.length === 0 ? 'todavía no hay publicaciones' : 'ninguna publicación coincide con el filtro'}</div>`;
+    return;
+  }
+
+  container.innerHTML = filtered.map(p => {
+    const platform = p.socialbot_social_accounts?.platform;
+    const pMeta = PLATFORM_META_AG[platform];
+    const dateLabel = (p.published_at || p.created_at) ? new Date(p.published_at || p.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+    return `
+      <div class="card" style="margin-top:8px; padding:10px 12px;">
+        <div class="meta-row" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+          <span class="status-${p.status}" style="font-weight:600;">[${p.status}]</span>
+          ${pMeta ? `<span>${pMeta.icon} ${pMeta.label}</span>` : ''}
+          ${dateLabel ? `<span style="color:#000; font-weight:600; font-size:12px;">${dateLabel}</span>` : ''}
+        </div>
+        <div style="margin-top:4px;">${(p.caption||'').slice(0,80)}...</div>
+        ${p.status==='failed' && p.error_message ? `<div style="margin-top:4px; font-size:12px; color:#8b0000; font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
+        <div style="margin-top:6px; display:flex; gap:12px; align-items:center;">
+          ${p.permalink_url ? `<a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px;">Ver publicación ↗</a>` : ''}
+          ${p.status==='failed' ? `<button type="button" class="secondary" style="padding:4px 10px; font-size:12px;" onclick="retryPost('${p.id}', '${clientId}')">Reintentar</button>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function retryPost(postId, clientId){
+  if(!confirm('¿Reintentar esta publicación? Se va a volver a intentar publicar en el próximo ciclo del scheduler.')) return;
+  const { error } = await sb.from('socialbot_posts').update({
+    status: 'pending', approval_status: 'approved', error_message: null,
+  }).eq('id', postId);
+  if(error){ alert('Error al reintentar: ' + error.message); return; }
+
+  // Actualiza el cache en memoria (sin recargar todo el cliente) para que
+  // el cambio se vea al toque en la lista.
+  const cached = (window.__clientPosts && window.__clientPosts[clientId]) || [];
+  const idx = cached.findIndex(p => p.id === postId);
+  if(idx !== -1){ cached[idx].status = 'pending'; cached[idx].error_message = null; }
+  renderPostsList(clientId);
+}
+
 // KPIs reales que la agencia mira de un vistazo: consultas recibidas
 // (leads), clientes nuevos (leads con status='convertido') y me gusta
 // totales (suma de socialbot_post_metrics.likes de los posts publicados),
@@ -855,7 +923,7 @@ async function loadClients(){
     const { data: slots } = await sb.from('socialbot_schedule_slots').select('*').eq('client_id', c.id).order('hour');
     const { data: media } = await sb.from('socialbot_media_assets').select('*').eq('client_id', c.id).order('created_at', {ascending:false});
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
-    const { data: posts } = await sb.from('socialbot_posts').select('*, socialbot_social_accounts(platform)').eq('client_id', c.id).order('created_at', {ascending:false}).limit(5);
+    const { data: posts } = await sb.from('socialbot_posts').select('*, socialbot_social_accounts(platform)').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
     const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
@@ -1173,21 +1241,21 @@ async function loadClients(){
 
       <details>
         <summary>Últimas publicaciones</summary>
-        <div>${(posts||[]).map(p => {
-          const platform = p.socialbot_social_accounts?.platform;
-          const pLabel = platform === 'facebook' ? '📘 Facebook' : platform === 'instagram' ? '📷 Instagram' : '';
-          const dateLabel = (p.published_at || p.created_at) ? new Date(p.published_at || p.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
-          return `
-          <div class="card" style="margin-top:8px; padding:10px 12px;">
-            <div class="meta-row" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-              <span class="status-${p.status}" style="font-weight:600;">[${p.status}]</span>
-              ${pLabel ? `<span>${pLabel}</span>` : ''}
-              ${dateLabel ? `<span style="color:#000; font-weight:600; font-size:12px;">${dateLabel}</span>` : ''}
-            </div>
-            <div style="margin-top:4px;">${(p.caption||'').slice(0,80)}...</div>
-            ${p.status==='failed' && p.error_message ? `<div style="margin-top:4px; font-size:12px; color:#8b0000; font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
-          </div>
-        `;}).join('') || 'todavía no hay publicaciones'}</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+          <select id="postsFilterStatus-${c.id}" onchange="renderPostsList('${c.id}')" style="width:auto;">
+            <option value="all">Todos los estados</option>
+            <option value="published">Publicados</option>
+            <option value="failed">Fallidos</option>
+            <option value="pending">Pendientes</option>
+            <option value="publishing">Publicando</option>
+          </select>
+          <select id="postsFilterPlatform-${c.id}" onchange="renderPostsList('${c.id}')" style="width:auto;">
+            <option value="all">Todas las plataformas</option>
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+          </select>
+        </div>
+        <div id="posts-list-${c.id}"></div>
       </details>
 
       <details open>
@@ -1243,6 +1311,13 @@ async function loadClients(){
     // toggle semanal/mensual y se re-renderizan solas sin recargar toda
     // la tarjeta del cliente cuando se cambia el periodo.
     renderMetrics(c.id);
+
+    // Posts: mismo criterio que metricas -- se cachean en memoria para que
+    // los filtros de estado/plataforma solo re-rendericen esta lista, sin
+    // pegarle a Supabase de nuevo ni recargar toda la tarjeta.
+    window.__clientPosts = window.__clientPosts || {};
+    window.__clientPosts[c.id] = posts || [];
+    renderPostsList(c.id);
   }
 
   applyClientFilter();
