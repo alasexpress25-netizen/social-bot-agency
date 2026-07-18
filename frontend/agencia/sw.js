@@ -1,0 +1,95 @@
+// Service Worker — LaVMK Agencia (panel de automatización)
+//
+// Objetivo: cachear el "app shell" (el propio index.html, el manifest y los
+// íconos) para que el panel abra rápido y ande aunque el celular tenga mala
+// señal, SIN cachear nunca datos de Supabase (auth, clientes, leads, etc.) --
+// esos siempre tienen que ir a la red, porque son datos en vivo y además
+// llevan la sesión del usuario logueado.
+//
+// Estrategia:
+//  - Peticiones a supabase.co (API, auth, storage) -> nunca se tocan, van
+//    directo a la red (fetch pass-through, ni siquiera entran al cache).
+//  - Navegación (abrir la app / F5) -> "network first, cache fallback": si
+//    hay internet, siempre trae la versión más nueva del HTML; si no hay
+//    señal, muestra la última copia guardada en vez de un error blanco.
+//  - Assets estáticos propios (CSS/JS/ícono/manifest) -> "cache first,
+//    actualiza en segundo plano" (stale-while-revalidate), para que carguen
+//    instantáneo y a la vez se mantengan al día solos.
+
+const CACHE_NAME = 'lavmk-agencia-v1';
+const APP_SHELL = [
+  './',
+  './index.html',
+  './manifest.json',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable-192.png',
+  './icons/icon-maskable-512.png',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((names) => Promise.all(
+        names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n))
+      ))
+      .then(() => self.clients.claim())
+  );
+});
+
+function isSupabaseOrExternal(url) {
+  // Nunca cachear ni interceptar: Supabase (datos/auth en vivo), llamadas a
+  // Edge Functions, ni CDNs externos (supabase-js viene de jsdelivr).
+  return (
+    url.hostname.endsWith('supabase.co') ||
+    url.hostname.endsWith('jsdelivr.net') ||
+    url.hostname.endsWith('googleapis.com')
+  );
+}
+
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  if (request.method !== 'GET') return; // nunca cachear POST/PUT/DELETE
+
+  const url = new URL(request.url);
+  if (isSupabaseOrExternal(url)) return; // deja pasar tal cual, sin SW
+
+  // Navegación (abrir/recargar la app): network-first con fallback a cache.
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy));
+          return response;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // Assets propios: cache-first, revalidando en segundo plano.
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      const network = fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => cached); // sin señal: nos quedamos con lo cacheado
+
+      return cached || network;
+    })
+  );
+});
