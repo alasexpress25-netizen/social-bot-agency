@@ -247,7 +247,7 @@ const I18N = {
     metricsTitle: 'Métricas',
     metricsHint: 'Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.',
     leadsTitle: 'Contactos interesados',
-    leadsHint: 'Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Vos solo tenés que ir actualizando el estado a medida que los contactás.',
+    leadsHint: 'Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Es solo para consulta — el estado de contacto lo actualiza tu agencia.',
     prefsTitle: 'Sus Posts (opcional)',
     prefsHint: 'Lo que cargues acá tiene prioridad sobre lo que carga la agencia. Si lo dejás vacío, la agencia los coloca.',
     captionFixedLabel: 'Texto fijo de tus posts (opcional)',
@@ -292,7 +292,7 @@ const I18N = {
     metricsTitle: 'Métricas',
     metricsHint: 'Contatos interessados que chegaram, quantos viraram clientes, quanto suas publicações foram curtidas, e com que frequência o sistema respondeu automaticamente. Escolha ver por semana ou por mês.',
     leadsTitle: 'Contatos interessados',
-    leadsHint: 'Esta lista se preenche sozinha: quando alguém comenta ou escreve pelo Facebook/Instagram e a IA detecta interesse em comprar (pergunta preço, deixa telefone, etc.), é adicionado aqui com os dados. Você só precisa atualizar o status conforme for entrando em contato.',
+    leadsHint: 'Esta lista se preenche sozinha: quando alguém comenta ou escreve pelo Facebook/Instagram e a IA detecta interesse em comprar (pergunta preço, deixa telefone, etc.), é adicionado aqui com os dados. É apenas para consulta — o status de contato é atualizado pela sua agência.',
     prefsTitle: 'Seus posts (opcional)',
     prefsHint: 'O que você cadastrar aqui tem prioridade sobre o que a agência cadastra. Se deixar em branco, usa o da agência; se a agência também não cadastrou nada, a IA gera sozinha.',
     captionFixedLabel: 'Texto fixo dos seus posts (opcional)',
@@ -556,6 +556,33 @@ async function loadPosts(){
   `).join('');
 }
 
+// Etiqueta de etapa (ej: "[listo_para_comprar]") que la IA antepone al
+// campo interest — mismo criterio visual que usa el panel de la agencia.
+const LEAD_STAGE_META = {
+  listo_para_comprar: { label: 'Listo para comprar', color: '#16a34a', order: 0 },
+  potencial:           { label: 'Potencial',          color: '#2563eb', order: 1 },
+  interesado:          { label: 'Interesado',         color: '#ca8a04', order: 2 },
+  cliente_existente:   { label: 'Cliente existente',  color: '#6b7280', order: 3 },
+};
+
+function parseLeadStage(interestRaw) {
+  const raw = interestRaw || '';
+  const match = raw.match(/^\s*\[([a-z_]+)\]\s*(.*)$/i);
+  if (match && LEAD_STAGE_META[match[1]]) {
+    return { stageMeta: LEAD_STAGE_META[match[1]], text: match[2] };
+  }
+  return { stageMeta: null, text: raw };
+}
+
+// Colores para el estado de contacto (solo lectura acá — lo edita la
+// agencia desde su panel, el cliente solo lo consulta).
+const LEAD_STATUS_META = {
+  nuevo:       { color: '#2563eb' },
+  contactado:  { color: '#ca8a04' },
+  convertido:  { color: '#16a34a' },
+  descartado:  { color: '#6b7280' },
+};
+
 async function loadLeads(){
   const { data: leads } = await sb.from('socialbot_leads')
     .select('*').eq('client_id', currentClient.id).order('created_at', { ascending:false });
@@ -565,28 +592,43 @@ async function loadLeads(){
     list.innerHTML = `<div class="empty">${t('noLeadsYet')}</div>`;
     return;
   }
-  list.innerHTML = leads.map(l => `
+  const statusLabels = {
+    nuevo: t('leadNuevo'), contactado: t('leadContactado'),
+    convertido: t('leadConvertido'), descartado: t('leadDescartado'),
+  };
+  list.innerHTML = leads
+    .slice()
+    .sort((a, b) => {
+      const oa = parseLeadStage(a.interest).stageMeta?.order ?? 99;
+      const ob = parseLeadStage(b.interest).stageMeta?.order ?? 99;
+      return oa - ob;
+    })
+    .map(l => {
+      const { stageMeta, text } = parseLeadStage(l.interest);
+      const stageBadge = stageMeta
+        ? `<span style="display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; background:${stageMeta.color}; margin-bottom:4px;">${stageMeta.label}</span>`
+        : '';
+      const statusMeta = LEAD_STATUS_META[l.status] || LEAD_STATUS_META.nuevo;
+      const statusLabel = statusLabels[l.status] || statusLabels.nuevo;
+      // Solo lectura: pill con el estado tal cual está en la base, sin
+      // select ni onchange — el cliente no puede modificarlo.
+      const statusPill = `<span style="display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; color:#fff; background:${statusMeta.color}; white-space:nowrap;">${statusLabel}</span>`;
+      return `
     <div class="card">
-      <div class="card-row" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+      <div class="card-row" style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
         <div>
           <strong>${l.name || t('noName')}</strong>
-          <div class="meta-row">${l.platform} · ${l.contact || t('noContact')} · ${l.interest || ''}</div>
+          <div class="meta-row" style="margin-top:2px;">${l.platform} · ${l.contact || t('noContact')}</div>
         </div>
-        <select onchange="updateLeadStatus('${l.id}', this.value)">
-          <option value="nuevo" ${l.status==='nuevo'?'selected':''}>${t('leadNuevo')}</option>
-          <option value="contactado" ${l.status==='contactado'?'selected':''}>${t('leadContactado')}</option>
-          <option value="convertido" ${l.status==='convertido'?'selected':''}>${t('leadConvertido')}</option>
-          <option value="descartado" ${l.status==='descartado'?'selected':''}>${t('leadDescartado')}</option>
-        </select>
+        ${statusPill}
       </div>
+      <div>${stageBadge}</div>
+      <div class="meta-row">${text || ''}</div>
+      ${l.source_text ? `<div class="meta-row" style="font-style:italic;">"${l.source_text.replace(/"/g,'&quot;').slice(0,140)}"</div>` : ''}
+      <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${l.created_at ? new Date(l.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
+      ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${l.post_permalink ? `<a href="${l.post_permalink}" target="_blank" rel="noopener">${t('viewLink')}</a>` : `Post: ${l.post_id}`}</div>` : ''}
     </div>
-  `).join('');
-}
-
-async function updateLeadStatus(leadId, status){
-  const { error } = await sb.rpc('client_update_lead_status', { p_lead_id: leadId, p_status: status });
-  if(error){ alert(error.message); return; }
-  loadLeads();
+  `;}).join('');
 }
 
 async function loadAiPrefs(){
