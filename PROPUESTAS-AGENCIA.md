@@ -163,7 +163,7 @@ sentimiento negativo en el mismo llamado de IA que ya se hace, y en vez de
 autoresponder, guardar en una cola de "requiere atención humana" +
 notificación (mismo patrón que `notify-hot-lead`).
 
-### 11. Anti-spam por remitente repetido
+### 11. Anti-spam por remitente repetido ✅ HECHO (18/07/2026)
 El límite diario de IA (`daily_ai_reply_limit`) es por cliente, no por
 persona. Si un mismo `sender_id` comenta varias veces seguidas (spam,
 insistencia, alguien probando el sistema), cada comentario consume cupo
@@ -171,10 +171,40 @@ del límite diario del cliente y puede vaciarlo antes de que lleguen leads
 reales. Chequeo simple: mismo `sender_id` + más de N respuestas en la
 última hora → no autoresponder más, solo loguear.
 
-### 12. Recordatorio de posts pendientes de aprobación
+**Implementado:** migración `0023_antispam_sender_id.sql` agrega
+`sender_id` a `socialbot_interactions_log` (antes solo se guardaba el id
+del comentario/mensaje, no quién lo mandó) + `anti_spam_hourly_limit`
+opcional en `socialbot_ai_settings` para ajustar el umbral por cliente
+(default en el código: 5 por hora si la columna queda en `null`).
+`meta-webhook/index.ts` suma `isSenderSpamming()`: se chequea justo después
+de reservar la interacción (`claimInteraction`, que ahora también guarda el
+`sender_id`) y antes de intentar cualquier respuesta (IA, keyword o
+fallback) — si el remitente superó el límite en la última hora, se corta
+ahí mismo, se marca la interacción como `anti-spam-limite` en el log y no
+se manda ninguna respuesta ni se guarda lead. De paso se corrigió un bug
+preexistente en el archivo: a `tryAiReply` le faltaba la firma completa de
+la función (quedaba solo el tipo de retorno), lo que hubiera roto el
+deploy. Falta: aplicar la migración `0023` en producción.
+
+### 12. Recordatorio de posts pendientes de aprobación ✅ HECHO (18/07/2026)
 Si el cliente no aprueba/rechaza un post en X horas, un segundo email de
 seguimiento — mismo patrón que `notify-pending-post`, pero disparado por
 tiempo transcurrido en vez de por la creación del post.
+
+**Implementado:** migración `0024_pending_post_reminder.sql` agrega
+`reminder_sent_at` a `socialbot_posts` (evita mandar el recordatorio más de
+una vez por post) + Edge Function `notify-pending-post-reminder` (deployar
+manualmente) + workflow `.github/workflows/pending_post_reminder.yml`, que
+corre dos veces al día (09:00 y 21:00 Argentina/Brasil). A diferencia del
+aviso inicial de `notify-pending-post` (trigger de Postgres por fila), este
+es un chequeo periódico por tiempo transcurrido — mismo patrón que
+`notify-stale-leads` (item 2): un cron de GitHub Actions le pega por HTTP a
+la función, que busca posts `approval_status='pending'` más viejos que
+`PENDING_REMINDER_HOURS` (default 48hs) y sin recordatorio previo. Mismos
+secrets SMTP que `notify-pending-post` (se pueden copiar tal cual) + mismo
+`CLIENT_PORTAL_URL` opcional. Falta: subir el workflow al repo de GitHub,
+deployar la función, cargar los secrets SMTP y aplicar la migración `0024`
+en producción.
 
 ### 13. Mejor horario de publicación sugerido
 Ya existe `likes` por post con `published_at` en `socialbot_post_metrics`.

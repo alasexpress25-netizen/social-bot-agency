@@ -216,12 +216,13 @@ function buildFallbackReply(aiSettings: any, salesLink: string | null): string {
 // Esto reemplaza el chequeo previo (SELECT primero, INSERT despues al
 // final), que dejaba una ventana de carrera entre dos invocaciones
 // concurrentes procesando el mismo evento.
-async function claimInteraction(clientId: string, platform: string, type: string, externalId: string): Promise<boolean> {
+async function claimInteraction(clientId: string, platform: string, type: string, externalId: string, senderId?: string | null): Promise<boolean> {
   const { error } = await supabase.from("socialbot_interactions_log").insert({
     client_id: clientId,
     platform,
     type,
     external_id: externalId,
+    sender_id: senderId ?? null,
     matched_keyword: null,
     replied: false,
   });
@@ -474,6 +475,39 @@ function heuristicLeadDetection(text: string, topics: string | null): LeadDetect
 // cliente, volver a escribir es en si mismo una señal de interes sostenido
 // -- lo anotamos igual, aunque el mensaje puntual no dispare ninguna señal
 // por si solo (ni de la IA ni de la heuristica).
+// ---------------------------------------------------------------------------
+// Propuesta 11 (PROPUESTAS-AGENCIA.md, 18/07/2026): daily_ai_reply_limit es
+// por cliente, no por persona -- un mismo sender_id insistiendo (spam, o
+// alguien probando el sistema) puede consumir todo el cupo diario de IA de
+// un cliente antes de que lleguen leads reales de otras personas. Se agrega
+// un chequeo simple e independiente del limite diario: si el mismo
+// sender_id ya tiene mas de ANTI_SPAM_HOURLY_LIMIT interacciones registradas
+// en la ultima hora para este cliente, se deja de autoresponder (ni IA, ni
+// keyword, ni fallback) -- solo se loguea la interaccion (claimInteraction
+// ya la registro) para no perder rastro de que paso.
+// ---------------------------------------------------------------------------
+const DEFAULT_ANTI_SPAM_HOURLY_LIMIT = 5;
+
+async function isSenderSpamming(clientId: string, senderId: string | undefined | null, aiSettings: any): Promise<boolean> {
+  if (!senderId) return false;
+  const limit = aiSettings?.anti_spam_hourly_limit || DEFAULT_ANTI_SPAM_HOURLY_LIMIT;
+  const sinceIso = new Date(Date.now() - 3600000).toISOString();
+
+  const { count, error } = await supabase
+    .from("socialbot_interactions_log")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", clientId)
+    .eq("sender_id", senderId)
+    .gte("created_at", sinceIso);
+
+  if (error) {
+    console.error("Error chequeando anti-spam por remitente (se continua igual):", error);
+    return false;
+  }
+
+  return (count ?? 0) > limit;
+}
+
 async function hasExistingLead(clientId: string, platform: string, senderId: string): Promise<boolean> {
   const { data } = await supabase
     .from("socialbot_leads")
@@ -664,7 +698,7 @@ async function saveFlaggedComment(clientId: string, platform: string, externalId
   );
 }
 
- Promise<{ reply: string; source: "ia" | "ia-cache"; lead: LeadDetection | null; sentiment: "negativo" | "neutral" | "positivo" } | null> {
+async function tryAiReply(account: any, incomingText: string): Promise<{ reply: string; source: "ia" | "ia-cache"; lead: LeadDetection | null; sentiment: "negativo" | "neutral" | "positivo" } | null> {
   const clientId = account.client_id;
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
   const salesLink = account.socialbot_clients?.sales_link ?? null;
@@ -718,8 +752,16 @@ async function handleComment(params: { platform: string; pageId: string; comment
   // Reserva atomica: si ya estaba reservado (por un reenvio del mismo
   // evento, o por esta misma pagina respondiendose en bucle a pesar del
   // filtro de arriba), se corta aca sin generar ni mandar nada.
-  const claimed = await claimInteraction(account.client_id, platform, "comment", commentId);
+  const claimed = await claimInteraction(account.client_id, platform, "comment", commentId, senderId);
   if (!claimed) return;
+
+  // Propuesta 11: si este sender_id viene insistiendo (mas de N interacciones
+  // en la ultima hora), se corta aca -- no se autoresponde nada, solo queda
+  // logueado (ya se reservo arriba con claimInteraction).
+  if (await isSenderSpamming(account.client_id, senderId, aiSettings)) {
+    await finishInteraction(platform, commentId, "anti-spam-limite", false);
+    return;
+  }
 
   let replyText: string | null = null;
   let matchedLabel: string | null = null;
@@ -837,8 +879,14 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
 
   const dmId = `${pageId}-${senderId}-${Date.now()}`;
 
-  const claimed = await claimInteraction(account.client_id, platform, "dm", dmId);
+  const claimed = await claimInteraction(account.client_id, platform, "dm", dmId, senderId);
   if (!claimed) return;
+
+  // Propuesta 11: mismo chequeo anti-spam que en handleComment.
+  if (await isSenderSpamming(account.client_id, senderId, aiSettings)) {
+    await finishInteraction(platform, dmId, "anti-spam-limite", false);
+    return;
+  }
 
   let replyText: string | null = null;
   let matchedLabel: string | null = null;
