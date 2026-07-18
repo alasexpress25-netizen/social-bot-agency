@@ -70,6 +70,12 @@
   .pill.off{ background:#f1ece5; color:var(--muted); }
   .meta-row{ color:var(--muted); font-size:13px; margin-top:6px; }
   form.inline{ display:grid; gap:10px; margin-top:14px; }
+  .posts-filter-row{ display:flex; flex-direction:column; gap:8px; }
+  .posts-filter-row select{ width:100%; }
+  @media (min-width:600px){
+    .posts-filter-row{ flex-direction:row; flex-wrap:wrap; }
+    .posts-filter-row select{ width:auto; flex:1 1 170px; }
+  }
   form.inline input, form.inline select, form.inline textarea{
     padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%;
     font-family:inherit;
@@ -729,7 +735,7 @@ function renderPostsList(clientId){
 
   const filtered = all.filter(p => {
     if(statusFilter !== 'all' && p.status !== statusFilter) return false;
-    if(platformFilter !== 'all' && p.socialbot_social_accounts?.platform !== platformFilter) return false;
+    if(platformFilter !== 'all' && p.platform !== platformFilter) return false;
     if(dateFilter !== 'all' && postDateKey(p) !== dateFilter) return false;
     return true;
   });
@@ -743,7 +749,7 @@ function renderPostsList(clientId){
   }
 
   container.innerHTML = filtered.map(p => {
-    const platform = p.socialbot_social_accounts?.platform;
+    const platform = p.platform;
     const pMeta = PLATFORM_META_AG[platform];
     const dateLabel = (p.published_at || p.created_at) ? new Date(p.published_at || p.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
     return `
@@ -949,7 +955,7 @@ async function loadClients(){
     const { data: slots } = await sb.from('socialbot_schedule_slots').select('*').eq('client_id', c.id).order('hour');
     const { data: media } = await sb.from('socialbot_media_assets').select('*').eq('client_id', c.id).order('created_at', {ascending:false});
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
-    const { data: posts } = await sb.from('socialbot_posts').select('*, socialbot_social_accounts(platform)').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
+    const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
     const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
@@ -1267,20 +1273,20 @@ async function loadClients(){
 
       <details>
         <summary>Últimas publicaciones</summary>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
-          <select id="postsFilterStatus-${c.id}" onchange="renderPostsList('${c.id}')" style="width:auto;">
+        <div class="posts-filter-row" style="margin-bottom:10px;">
+          <select id="postsFilterStatus-${c.id}" onchange="renderPostsList('${c.id}')">
             <option value="all">Todos los estados</option>
             <option value="published">Publicados</option>
             <option value="failed">Fallidos</option>
             <option value="pending">Pendientes</option>
             <option value="publishing">Publicando</option>
           </select>
-          <select id="postsFilterPlatform-${c.id}" onchange="renderPostsList('${c.id}')" style="width:auto;">
+          <select id="postsFilterPlatform-${c.id}" onchange="renderPostsList('${c.id}')">
             <option value="all">Todas las plataformas</option>
             <option value="facebook">Facebook</option>
             <option value="instagram">Instagram</option>
           </select>
-          <select id="postsFilterDate-${c.id}" onchange="renderPostsList('${c.id}')" style="width:auto;">
+          <select id="postsFilterDate-${c.id}" onchange="renderPostsList('${c.id}')">
             <option value="all">Todas las fechas</option>
           </select>
         </div>
