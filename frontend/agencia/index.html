@@ -1185,7 +1185,7 @@ async function loadClients(){
               ${dateLabel ? `<span style="opacity:0.7; font-size:12px;">${dateLabel}</span>` : ''}
             </div>
             <div style="margin-top:4px;">${(p.caption||'').slice(0,80)}...</div>
-            ${p.status==='failed' && p.error_message ? `<div style="margin-top:4px; font-size:12px; color:var(--warn);">${p.error_message.slice(0,160)}</div>` : ''}
+            ${p.status==='failed' && p.error_message ? `<div style="margin-top:4px; font-size:12px; color:#8b0000; font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
           </div>
         `;}).join('') || 'todavía no hay publicaciones'}</div>
       </details>
