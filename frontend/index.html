@@ -395,6 +395,71 @@ async function boot(){
   loadClients();
 }
 
+// ---------------------------------------------------------------------------
+// Resumen de métricas a demanda (mejora post-roadmap, no es el reporte
+// mensual automático de scheduler/monthly_report.py -- ese sigue corriendo
+// solo el día 1 de cada mes). Esto llama a la Edge Function
+// send-report-now, que valida server-side que el cliente elegido
+// pertenezca a esta agencia antes de mandar nada.
+// ---------------------------------------------------------------------------
+function onReportPeriodChange(clientId){
+  const period = document.getElementById(`reportPeriod-${clientId}`).value;
+  const show = period === 'custom';
+  document.getElementById(`reportStart-${clientId}`).style.display = show ? 'inline-block' : 'none';
+  document.getElementById(`reportEnd-${clientId}`).style.display = show ? 'inline-block' : 'none';
+}
+
+function computeReportRange(period, clientId){
+  const fmt = d => d.toISOString().slice(0, 10);
+  const today = new Date();
+  if(period === 'this_month'){
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    return { start: fmt(start), end: fmt(today) };
+  }
+  if(period === 'last_month'){
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+    const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0)); // último día del mes anterior
+    return { start: fmt(start), end: fmt(end) };
+  }
+  if(period === 'last_30_days'){
+    const start = new Date(today.getTime() - 29 * 24 * 3600 * 1000);
+    return { start: fmt(start), end: fmt(today) };
+  }
+  // custom
+  return {
+    start: document.getElementById(`reportStart-${clientId}`).value,
+    end: document.getElementById(`reportEnd-${clientId}`).value,
+  };
+}
+
+async function sendReportNow(clientId){
+  const period = document.getElementById(`reportPeriod-${clientId}`).value;
+  const { start, end } = computeReportRange(period, clientId);
+  if(!start || !end){ alert('Elegí un rango de fechas válido.'); return; }
+
+  const btn = event.target;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Enviando...';
+  try {
+    const { data, error } = await sb.functions.invoke('send-report-now', {
+      body: { client_id: clientId, start_date: start, end_date: end }
+    });
+    if(error) throw error;
+    if(data && data.error) throw new Error(data.error);
+    alert(
+      `Resumen enviado a ${data.sent_to} (${data.period}):\n` +
+      `Consultas: ${data.consultas_recibidas} · Clientes nuevos: ${data.clientes_nuevos} · ` +
+      `Posts: ${data.posts_publicados} · Me gusta: ${data.me_gusta}`
+    );
+  } catch(err){
+    alert(`No se pudo enviar: ${err.message || err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
 async function publishNow(clientId, clientName){
   if(!confirm(`¿Disparar una publicación manual para ${clientName} ahora mismo? Va a generar (o reintentar) un post para cada horario activo de este cliente, sin esperar su horario programado.`)) return;
   const btn = event.target;
@@ -761,6 +826,23 @@ async function loadClients(){
         </label>
         <button type="submit" class="secondary">Guardar acceso</button>
       </form>
+
+      <div class="meta-row" style="margin-top:10px;">
+        <label style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">
+          Enviar resumen de métricas ahora ${c.client_email ? '' : '(cargá un email de portal arriba primero)'}
+        </label>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <select id="reportPeriod-${c.id}" onchange="onReportPeriodChange('${c.id}')" style="width:auto;">
+            <option value="this_month">Este mes</option>
+            <option value="last_month">Mes pasado</option>
+            <option value="last_30_days">Últimos 30 días</option>
+            <option value="custom">Personalizado…</option>
+          </select>
+          <input type="date" id="reportStart-${c.id}" style="display:none; width:auto;" />
+          <input type="date" id="reportEnd-${c.id}" style="display:none; width:auto;" />
+          <button type="button" class="secondary" ${c.client_email ? '' : 'disabled'} onclick="sendReportNow('${c.id}')">Enviar resumen</button>
+        </div>
+      </div>
 
       ${(planItems||[]).length ? `
       <details>
