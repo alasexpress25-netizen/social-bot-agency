@@ -79,29 +79,10 @@
   .btn-row{ display:flex; gap:8px; margin-top:10px; }
   button.reject{ background:var(--warn); }
   .kpi-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
-  .kpi-row-4{ grid-template-columns:repeat(4, 1fr); }
-  @media (max-width:520px){ .kpi-row-4{ grid-template-columns:repeat(2, 1fr); } }
+  .kpi-row.kpi-row-4{ grid-template-columns:repeat(4, 1fr); }
   .kpi-card{ background:var(--accent-soft); border-radius:var(--radius); padding:12px 14px; text-align:center; }
   .kpi-value{ font-size:24px; font-weight:700; color:var(--accent); line-height:1.1; }
   .kpi-label{ font-size:11.5px; color:var(--muted); margin-top:4px; }
-
-  /* Vista calendario del plan de contenido (item "menores" de PROPUESTAS-AGENCIA.md) */
-  .plan-calendar{ display:grid; grid-template-columns:repeat(7, 1fr); gap:6px; margin-top:8px; }
-  @media (max-width:640px){ .plan-calendar{ grid-template-columns:repeat(1, 1fr); } }
-  .plan-cal-day{ border:1px solid var(--line); border-radius:8px; padding:8px; min-height:70px; background:#fff; }
-  .plan-cal-day-label{ font-size:11px; color:var(--muted); text-transform:capitalize; margin-bottom:6px; }
-  .plan-cal-item{ font-size:11.5px; padding:5px 6px; border-radius:6px; margin-bottom:5px; background:var(--accent-soft); cursor:pointer; }
-  .plan-cal-item.approved{ background:#e2ecdf; }
-  .plan-cal-item-angle{ font-weight:600; display:block; }
-  .plan-view-toggle{ display:flex; gap:6px; margin-bottom:8px; }
-  .plan-view-toggle button{ background:transparent; color:var(--muted); border:1px solid var(--line); padding:4px 10px; font-size:12px; }
-  .plan-view-toggle button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
-
-  /* Reseñas (item 8) */
-  .review-card{ border-left:3px solid var(--line); padding:8px 10px; margin-top:8px; background:#fff; border-radius:6px; }
-  .review-card.negative{ border-left-color:var(--warn); }
-  .review-card.positive{ border-left-color:var(--accent); }
-  .review-suggested{ font-style:italic; color:var(--muted); margin-top:6px; font-size:13px; }
   .period-toggle{ display:flex; gap:6px; margin-bottom:12px; }
   .period-toggle button{ background:transparent; color:var(--muted); border:1px solid var(--line); padding:5px 12px; font-size:12px; }
   .period-toggle button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
@@ -245,16 +226,6 @@
         <input id="editClientPageToken" placeholder="Page Access Token" />
       </details>
 
-      <details>
-        <summary>⭐ Monitoreo de reseñas de Google (opcional)</summary>
-        <small class="hint" style="display:block; margin-top:10px;">
-          Buscá el negocio en el
-          <a href="https://developers.google.com/maps/documentation/places/web-service/place-id" target="_blank">buscador de Place ID de Google</a>
-          y pegá acá el ID. Las reseñas de Facebook no necesitan nada extra: se leen con el mismo Page Access Token de arriba.
-        </small>
-        <input id="editClientGooglePlaceId" placeholder="Google Place ID (ej: ChIJN1t_tDeuEmsRUsoyG83frY4)" />
-      </details>
-
       <button type="submit">Guardar cambios</button>
     </form>
   </div>
@@ -306,7 +277,6 @@ function openEditClientModal(clientId){
   document.getElementById('editClientId').value = client.id;
   document.getElementById('editClientName').value = client.name || '';
   document.getElementById('editClientLink').value = client.sales_link || '';
-  document.getElementById('editClientGooglePlaceId').value = client.google_place_id || '';
   document.getElementById('editClientPlatform').value = account ? account.platform : 'facebook';
   fillEditAccountFields(account);
 
@@ -344,9 +314,8 @@ async function saveClientEdit(e){
   const accountId = document.getElementById('editClientAccountId').value;
   const name = document.getElementById('editClientName').value;
   const sales_link = document.getElementById('editClientLink').value;
-  const google_place_id = document.getElementById('editClientGooglePlaceId').value || null;
 
-  const { error } = await sb.from('socialbot_clients').update({ name, sales_link, google_place_id }).eq('id', clientId);
+  const { error } = await sb.from('socialbot_clients').update({ name, sales_link }).eq('id', clientId);
   if(error){ alert(error.message); return; }
 
   // Igual que en createClient: page_id y page_access_token son NOT NULL en
@@ -605,50 +574,6 @@ function renderBarChart(containerEl, buckets, { rate = false, sum = false } = {}
 // clientId -> 'week' | 'month'. Por defecto semanal.
 const metricPeriod = {};
 
-// clientId -> 'list' | 'calendar'. Vista del plan semanal de contenido
-// (item "menores" de PROPUESTAS-AGENCIA.md). Por defecto lista, igual que
-// siempre -- el calendario es solo un vistazo visual alternativo, de solo
-// lectura (para editar/aprobar se sigue usando la vista de lista).
-const planViewMode = {};
-
-function setPlanView(clientId, mode){
-  planViewMode[clientId] = mode;
-  const listEl = document.getElementById(`planListView-${clientId}`);
-  const calEl = document.getElementById(`planCalView-${clientId}`);
-  if(listEl) listEl.style.display = mode === 'list' ? 'block' : 'none';
-  if(calEl) calEl.style.display = mode === 'calendar' ? 'block' : 'none';
-  document.querySelectorAll(`[data-plan-toggle="${clientId}"] button`).forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === mode);
-  });
-}
-
-// Arma una grilla lunes-a-domingo con los items del plan ubicados en su
-// dia (target_date). Es un resumen visual, de solo lectura -- para editar
-// texto/hashtags o aprobar/rechazar se usa la vista de lista de siempre.
-function buildPlanCalendarHtml(planItems){
-  const dayNames = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
-  const byDay = Array.from({ length: 7 }, () => []);
-  (planItems||[]).forEach(item => {
-    const d = new Date(item.target_date + 'T00:00:00');
-    const dow = (d.getDay() + 6) % 7; // lunes=0 ... domingo=6
-    byDay[dow].push(item);
-  });
-  return `
-    <div class="plan-calendar">
-      ${dayNames.map((name, i) => `
-        <div class="plan-cal-day">
-          <div class="plan-cal-day-label">${name}</div>
-          ${byDay[i].length ? byDay[i].map(item => `
-            <div class="plan-cal-item ${item.status === 'approved' ? 'approved' : ''}" title="${(item.caption||'').replace(/"/g,'&quot;')}">
-              <span class="plan-cal-item-angle">${item.angle || new Date(item.target_date + 'T00:00:00').toLocaleDateString('es-AR', { day:'numeric', month:'short' })} ${item.status === 'approved' ? '✅' : '⏳'}</span>
-              ${(item.caption || '').slice(0, 50)}${(item.caption||'').length > 50 ? '…' : ''}
-            </div>
-          `).join('') : '<span class="meta-row" style="margin-top:0; font-size:11px;">—</span>'}
-        </div>
-      `).join('')}
-    </div>`;
-}
-
 function setMetricPeriod(clientId, period){
   metricPeriod[clientId] = period;
   renderMetrics(clientId);
@@ -666,7 +591,7 @@ async function renderMetrics(clientId){
 
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
   ]);
 
@@ -687,6 +612,12 @@ async function renderMetrics(clientId){
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
+  const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
+  const avgResponseMinutes = repliedWithTimes.length
+    ? Math.round(repliedWithTimes.reduce((sum, r) => sum + (new Date(r.replied_at) - new Date(r.created_at)) / 60000, 0) / repliedWithTimes.length)
+    : null;
+  const avgResponseLabel = avgResponseMinutes === null ? '—' : (avgResponseMinutes < 1 ? '<1' : avgResponseMinutes);
+
   const el = document.getElementById(`metrics-${clientId}`);
   if(!el) return;
   el.innerHTML = `
@@ -695,10 +626,11 @@ async function renderMetrics(clientId){
       <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('${clientId}','month')">Mensual</button>
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
-    <div class="kpi-row">
+    <div class="kpi-row kpi-row-4">
       <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+      <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
     </div>
     <div class="metric-title">Consultas recibidas</div>
     <div id="chartLeads-${clientId}"></div>
@@ -821,11 +753,9 @@ async function loadClients(){
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
     const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
-    const { data: reviews } = await sb.from('socialbot_reviews').select('*').eq('client_id', c.id).order('review_created_at', { ascending:false }).limit(20);
 
     const ai = (aiRows && aiRows[0]) || {};
     const leadsNuevos = (leads||[]).filter(l => l.status === 'nuevo').length;
-    const reviewsNuevas = (reviews||[]).filter(r => r.status === 'nueva').length;
 
     // Guardamos cliente + todas sus cuentas conectadas para poder abrir el
     // modal "Editar cliente" sin volver a pedirle nada a Supabase, y para
@@ -928,14 +858,6 @@ async function loadClients(){
         <div class="meta-row" style="margin-bottom:8px;">
           POST DE PUBLICACION (texto que va debajo del video, junto con los hashtags), generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá/rechaza o edita cada uno — el que quede aprobado se publica solo el día sugerido, con este texto y ese Hashtag.
         </div>
-        <div class="plan-view-toggle" data-plan-toggle="${c.id}">
-          <button data-mode="list" class="${(planViewMode[c.id]||'list')==='list'?'active':''}" onclick="setPlanView('${c.id}','list')">📋 Lista</button>
-          <button data-mode="calendar" class="${planViewMode[c.id]==='calendar'?'active':''}" onclick="setPlanView('${c.id}','calendar')">📅 Calendario</button>
-        </div>
-        <div id="planCalView-${c.id}" style="display:${planViewMode[c.id]==='calendar'?'block':'none'};">
-          ${buildPlanCalendarHtml(planItems)}
-        </div>
-        <div id="planListView-${c.id}" style="display:${(planViewMode[c.id]||'list')==='list'?'block':'none'};">
         ${planItems.map(item => `
           <div class="card ${item.status === 'approved' ? '' : 'pending'}" style="margin-top:8px;">
             <div class="meta-row" style="margin-bottom:6px;">
@@ -961,37 +883,6 @@ async function loadClients(){
             </div>
           </div>
         `).join('')}
-        </div>
-      </details>
-      ` : ''}
-
-      ${(reviews||[]).length ? `
-      <details ${reviewsNuevas ? 'open' : ''}>
-        <summary>⭐ Reseñas (Google/Facebook) — ${reviews.length} total${reviewsNuevas ? `, ${reviewsNuevas} nueva(s)` : ''}</summary>
-        <div class="meta-row" style="margin-bottom:8px;">
-          Se detectan solas cada pocas horas (scheduler/reviews_monitor.py). La respuesta sugerida la arma la IA — copiala y publicala vos desde Facebook/Google Business, revisando antes el tono.
-        </div>
-        ${reviews.map(r => {
-          const isNeg = r.recommendation_type === 'negative' || (r.rating && r.rating <= 2);
-          const isPos = r.recommendation_type === 'positive' || (r.rating && r.rating >= 4);
-          const stars = r.rating ? '⭐'.repeat(Math.round(r.rating)) : (r.recommendation_type === 'positive' ? '👍 recomienda' : r.recommendation_type === 'negative' ? '👎 no recomienda' : '');
-          return `
-          <div class="review-card ${isNeg ? 'negative' : isPos ? 'positive' : ''}">
-            <div class="meta-row" style="margin-top:0;">
-              <strong>${r.platform === 'google' ? 'Google' : 'Facebook'}</strong> · ${stars} · ${r.author_name || 'anónimo'}
-              ${r.status !== 'nueva' ? ` · <span class="pill">${r.status}</span>` : ''}
-            </div>
-            <div style="margin-top:4px;">${(r.review_text || '(sin texto)').replace(/</g,'&lt;')}</div>
-            ${r.suggested_reply ? `<div class="review-suggested">💬 Sugerencia: ${r.suggested_reply.replace(/</g,'&lt;')}</div>` : ''}
-            ${r.status === 'nueva' ? `
-              <div class="btn-row">
-                <button class="secondary" onclick="copyReviewReply('${r.id}')">Copiar respuesta sugerida</button>
-                <button class="secondary" onclick="setReviewStatus('${r.id}', 'respondida')">Marcar como respondida</button>
-                <button class="reject" onclick="setReviewStatus('${r.id}', 'ignorada')">Ignorar</button>
-              </div>
-            ` : ''}
-          </div>`;
-        }).join('')}
       </details>
       ` : ''}
 
@@ -1419,28 +1310,6 @@ async function deleteRule(ruleId, clientId){
 
 async function updateLeadStatus(leadId, status){
   await sb.from('socialbot_leads').update({ status, updated_at: new Date().toISOString() }).eq('id', leadId);
-  loadClients();
-}
-
-// ---------------------------------------------------------------------------
-// Item 8 de PROPUESTAS-AGENCIA.md: reseñas de Google/Facebook. Guardadas por
-// scheduler/reviews_monitor.py con su respuesta sugerida ya generada -- acá
-// solo se copia el texto (clipboard) y se marca el estado una vez que Fede
-// la publicó a mano (o decidió ignorarla).
-// ---------------------------------------------------------------------------
-async function copyReviewReply(reviewId){
-  const { data } = await sb.from('socialbot_reviews').select('suggested_reply').eq('id', reviewId).maybeSingle();
-  const text = data?.suggested_reply || '';
-  try {
-    await navigator.clipboard.writeText(text);
-    alert('Respuesta copiada. Pegala en Facebook/Google Business y publicala vos.');
-  } catch (e) {
-    prompt('Copiá el texto manualmente:', text);
-  }
-}
-
-async function setReviewStatus(reviewId, status){
-  await sb.from('socialbot_reviews').update({ status }).eq('id', reviewId);
   loadClients();
 }
 
