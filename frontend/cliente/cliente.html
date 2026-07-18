@@ -603,7 +603,7 @@ function populateDateFilterOptions(posts){
 
 async function loadPosts(){
   const { data: posts } = await sb.from('socialbot_posts')
-    .select('*, socialbot_social_accounts(platform)').eq('client_id', currentClient.id).neq('approval_status', 'pending')
+    .select('*, socialbot_social_accounts(platform)').eq('client_id', currentClient.id).eq('status', 'published')
     .order('created_at', { ascending:false }).limit(20);
 
   window.__myPosts = posts || [];
