@@ -1,0 +1,31 @@
+name: Alerta de clientes en riesgo (inactividad)
+
+on:
+  schedule:
+    # Todos los lunes, 09:00 America/Sao_Paulo (UTC-3) = 12:00 UTC.
+    - cron: "0 12 * * 1"
+  workflow_dispatch: {}   # permite dispararlo manualmente desde GitHub para probar
+
+jobs:
+  chequear:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r scheduler/requirements.txt
+
+      - name: Chequear clientes inactivos y avisar a la agencia
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          INACTIVITY_DAYS: ${{ secrets.INACTIVITY_DAYS }}
+        run: python scheduler/inactive_clients_alert.py
