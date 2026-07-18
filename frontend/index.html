@@ -4,6 +4,17 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Panel · Automatización de redes</title>
+
+<!-- PWA: LaVMK Agencia -->
+<link rel="manifest" href="./manifest.json" />
+<meta name="theme-color" content="#3d5a4c" />
+<meta name="application-name" content="LaVMK Agencia" />
+<meta name="apple-mobile-web-app-title" content="LaVMK Agencia" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="icon" href="./icons/icon-192.png" />
+<link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
@@ -1515,6 +1526,18 @@ async function reviewContentPlanItem(itemId, status){
 }
 
 boot();
+
+// Registro del Service Worker (PWA LaVMK Agencia). Va al final, después de
+// boot(), para no competir por prioridad de red con la carga inicial de
+// datos de Supabase. Si el navegador no soporta SW (raro hoy en día) o el
+// registro falla, la app sigue funcionando igual, solo sin modo offline.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => {
+      console.warn('No se pudo registrar el service worker:', err);
+    });
+  });
+}
 </script>
 
 </body>
