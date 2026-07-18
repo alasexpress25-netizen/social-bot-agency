@@ -225,7 +225,7 @@ def build_context(client, ai_settings):
             continue
         m = metrics[0]
         score = (m.get("likes") or 0) + (m.get("comments") or 0) * 2 + (m.get("shares") or 0) * 3
-        scored.append({"caption": post["caption"], "score": score, "metrics": m})
+        scored.append({"caption": post["caption"], "score": score, "metrics": m, "published_at": post.get("published_at")})
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     top_posts = scored[:3]
@@ -237,7 +237,55 @@ def build_context(client, ai_settings):
         "top_posts": top_posts,
         "bottom_posts": bottom_posts,
         "posts_last_30_days": len(published),
+        "best_times": best_times_from_scored(scored),
     }
+
+
+# ---------------------------------------------------------------------------
+# Propuesta 13 (PROPUESTAS-AGENCIA.md, 18/07/2026): mejor horario de
+# publicacion sugerido, cruzando el "score" de enganche (likes/comments/
+# shares, mismo calculo que ya se usa para elegir top/bottom posts de
+# arriba) contra el dia de la semana y la hora en que se publico cada post
+# (socialbot_posts.published_at). Con esto el prompt de la IA no solo sabe
+# QUE angulo funciono, tambien A QUE HORA conviene publicarlo -- hoy
+# post_scheduler.py sigue publicando en los horarios fijos de
+# socialbot_schedule_slots (esto no los cambia), pero la sugerencia queda
+# en el campo "based_on" de cada idea para que la agencia vea el dato y,
+# si quiere, ajuste esos horarios a mano desde el panel.
+#
+# Se pide un minimo de 3 posts en el mismo dia+franja horaria antes de
+# sugerirlo (MIN_SAMPLES_PER_BUCKET) para no armar una "tendencia" con un
+# solo dato suelto -- con pocos posts publicados todavia, best_times queda
+# vacio y el prompt simplemente no menciona horarios.
+# ---------------------------------------------------------------------------
+_WEEKDAY_NAMES_ES = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+MIN_SAMPLES_PER_BUCKET = 3
+
+
+def best_times_from_scored(scored, top_n=2):
+    buckets = {}  # (weekday, hour) -> lista de scores
+    for item in scored:
+        raw = item.get("published_at")
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        key = (dt.weekday(), dt.hour)  # weekday(): 0=lunes
+        buckets.setdefault(key, []).append(item["score"])
+
+    ranked = [
+        (key, sum(scores) / len(scores), len(scores))
+        for key, scores in buckets.items()
+        if len(scores) >= MIN_SAMPLES_PER_BUCKET
+    ]
+    ranked.sort(key=lambda r: r[1], reverse=True)
+
+    return [
+        f"{_WEEKDAY_NAMES_ES[weekday]} alrededor de las {hour}hs (promedio de enganche mas alto, basado en {n} posts)"
+        for (weekday, hour), _avg, n in ranked[:top_n]
+    ]
 
 
 def build_prompt(client, ai_settings, context, num_days):
@@ -289,6 +337,14 @@ def build_prompt(client, ai_settings, context, num_days):
 
     if context["posts_last_30_days"] == 0:
         parts.append("No hay posts publicados en los ultimos 30 dias con metricas disponibles todavia -- proponé variedad de angulos sin depender de datos de performance.")
+
+    if context.get("best_times"):
+        parts.append(
+            "Segun el historial de metricas, estos son los momentos con mejor enganche para publicar: "
+            + " | ".join(context["best_times"])
+            + ". Si alguna de las ideas de esta semana cae naturalmente en uno de esos dias, mencionalo en \"based_on\" citando el dato "
+            "(esto NO cambia el horario real de publicacion, que sigue siendo el configurado en los horarios del cliente -- es solo una senal para que la agencia lo tenga en cuenta)."
+        )
 
     if default_hashtags:
         parts.append(

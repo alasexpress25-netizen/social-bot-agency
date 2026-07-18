@@ -333,6 +333,7 @@ interface LeadDetection {
 interface GroqReplyResult {
   reply: string;
   lead: LeadDetection | null;
+  sentiment: "negativo" | "neutral" | "positivo";
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +372,27 @@ function buildLeadInstructions(topics: string | null): string {
   ].join(" ");
 }
 
-// Frases de intencion de compra, en español y portugues (mercados de todos
+// ---------------------------------------------------------------------------
+// Propuesta 10 (PROPUESTAS-AGENCIA.md, 18/07/2026): ademas de detectar
+// leads, la misma llamada de IA ahora clasifica el "sentiment" del mensaje.
+// Antes, una "queja sin relacion al negocio" solo servia para NO marcarla
+// como lead (buildLeadInstructions), pero igual se le mandaba una respuesta
+// automatica de tono generico -- que puede sonar tonta o hasta peor frente
+// a un cliente enojado. Con sentiment="negativo", handleComment() NO manda
+// ninguna respuesta automatica: guarda el comentario en una cola para que
+// un humano de la agencia lo conteste a mano (ver saveFlaggedComment).
+// ---------------------------------------------------------------------------
+function buildComplaintInstructions(): string {
+  return [
+    `Ademas, clasifica el "sentiment" general del mensaje en EXACTAMENTE uno de estos valores:`,
+    `- "negativo": el mensaje es una queja, reclamo, critica, o expresa enojo/frustracion/decepcion (con el negocio, con un pedido, con una entrega, con la calidad de algo, etc.), sea o no relacionado directamente al rubro del negocio.`,
+    `- "positivo": el mensaje es un elogio, agradecimiento, o reaccion claramente favorable.`,
+    `- "neutral": no es ni queja ni elogio (pregunta comun, saludo, comentario sin carga emocional).`,
+    `Un mensaje puede ser is_hot=false Y sentiment="negativo" al mismo tiempo (ej: una queja sin relacion al negocio sigue siendo is_hot=false, pero sentiment="negativo").`,
+  ].join(" ");
+}
+
+
 // los clientes actuales: Argentina y Brasil). Lista deliberadamente amplia
 // -- es una red de seguridad, no el criterio principal (ese lo hace la IA
 // con buildLeadInstructions), asi que preferimos algun falso positivo de
@@ -502,8 +523,9 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     `Máximo ${maxChars} caracteres para la respuesta. No uses markdown ni asteriscos.`,
     ``,
     buildLeadInstructions(aiSettings?.topics ?? null),
+    buildComplaintInstructions(),
     `Respondé EXCLUSIVAMENTE con un JSON valido (sin texto antes ni despues, sin markdown, sin \`\`\`), con esta forma exacta:`,
-    `{"reply": "<tu respuesta al usuario>", "lead": {"is_hot": true|false, "stage": "interesado"|"potencial"|"listo_para_comprar"|"cliente_existente"|"no_lead", "name": "<nombre si lo menciono, o null>", "contact": "<telefono/email/usuario si lo menciono, o null>", "interest": "<en pocas palabras que le interesa, o null>"}}`,
+    `{"reply": "<tu respuesta al usuario>", "sentiment": "negativo"|"neutral"|"positivo", "lead": {"is_hot": true|false, "stage": "interesado"|"potencial"|"listo_para_comprar"|"cliente_existente"|"no_lead", "name": "<nombre si lo menciono, o null>", "contact": "<telefono/email/usuario si lo menciono, o null>", "interest": "<en pocas palabras que le interesa, o null>"}}`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -547,7 +569,11 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     } catch {
       console.error("No se pudo parsear JSON de Groq, se usa texto crudo como reply:", rawContent);
       await debugLog(clientId, "callGroq_json_parse_fallback", rawContent.slice(0, 500));
-      return { reply: rawContent.length > maxChars ? rawContent.slice(0, maxChars).trim() : rawContent, lead: null };
+      return {
+        reply: rawContent.length > maxChars ? rawContent.slice(0, maxChars).trim() : rawContent,
+        lead: null,
+        sentiment: "neutral",
+      };
     }
 
     const reply: string | undefined = parsed?.reply?.trim();
@@ -555,6 +581,10 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
       await debugLog(clientId, "callGroq_no_reply_field", rawContent.slice(0, 500));
       return null;
     }
+
+    const rawSentiment = parsed?.sentiment;
+    const sentiment: "negativo" | "neutral" | "positivo" =
+      rawSentiment === "negativo" || rawSentiment === "positivo" ? rawSentiment : "neutral";
 
     const leadRaw = parsed?.lead;
     const rawStage: string | null = leadRaw?.stage ?? null;
@@ -577,6 +607,7 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     return {
       reply: reply.length > maxChars ? reply.slice(0, maxChars).trim() : reply,
       lead,
+      sentiment,
     };
   } catch (e) {
     console.error("Error llamando a Groq:", e);
@@ -613,7 +644,27 @@ async function saveLead(clientId: string, platform: string, senderId: string, ex
   );
 }
 
-async function tryAiReply(account: any, incomingText: string): Promise<{ reply: string; source: "ia" | "ia-cache"; lead: LeadDetection | null } | null> {
+// Propuesta 10: guarda el comentario en la cola de "requiere atencion
+// humana" en vez de autoresponder. onConflict con la unique (platform,
+// external_id) por si el mismo comentario llegara a procesarse dos veces
+// (no deberia pasar gracias a claimInteraction, pero por las dudas no
+// rompe si ya estaba guardado).
+async function saveFlaggedComment(clientId: string, platform: string, externalId: string, senderId: string | undefined, text: string, reason: string | null) {
+  await supabase.from("socialbot_flagged_comments").upsert(
+    {
+      client_id: clientId,
+      platform,
+      external_id: externalId,
+      sender_id: senderId ?? null,
+      text,
+      reason,
+      status: "pendiente",
+    },
+    { onConflict: "platform,external_id" },
+  );
+}
+
+ Promise<{ reply: string; source: "ia" | "ia-cache"; lead: LeadDetection | null; sentiment: "negativo" | "neutral" | "positivo" } | null> {
   const clientId = account.client_id;
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
   const salesLink = account.socialbot_clients?.sales_link ?? null;
@@ -624,7 +675,7 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
   if (!normalized) return null;
 
   const cached = await getCachedReply(clientId, normalized);
-  if (cached) return { reply: cached, source: "ia-cache", lead: null };
+  if (cached) return { reply: cached, source: "ia-cache", lead: null, sentiment: "neutral" };
 
   const usedToday = await getTodayUsage(clientId);
   if (usedToday >= limit) {
@@ -636,9 +687,14 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
   if (!aiReply) return null;
 
   await incrementUsage(clientId);
+  // El cache solo guarda el texto de la respuesta -- una pregunta repetida
+  // por otra persona no necesariamente tiene el mismo sentiment (ej: dos
+  // personas preguntando "cuanto sale" no son lo mismo que una queja), por
+  // eso los hits de cache arriba devuelven sentiment "neutral" fijo en vez
+  // de reusar el sentiment original.
   await saveCachedReply(clientId, normalized, aiReply.reply);
 
-  return { reply: aiReply.reply, source: "ia", lead: aiReply.lead };
+  return { reply: aiReply.reply, source: "ia", lead: aiReply.lead, sentiment: aiReply.sentiment };
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +727,19 @@ async function handleComment(params: { platform: string; pageId: string; comment
 
   // 1) Primero se intenta con IA (si hay cuota y esta configurada)
   const aiResult = await tryAiReply(account, text);
+
+  // Propuesta 10 (18/07/2026): si la IA detecto sentiment="negativo" (queja,
+  // reclamo, enojo), NO se autoresponde -- se guarda en la cola de
+  // "requiere atencion humana" y se notifica a la agencia (trigger de
+  // 0022_flagged_comments.sql). Evita que un cliente enojado reciba una
+  // respuesta automatica de tono generico, que puede sonar peor que no
+  // responder nada hasta que un humano lo atienda.
+  if (aiResult?.sentiment === "negativo") {
+    await saveFlaggedComment(account.client_id, platform, commentId, senderId, text, aiResult.lead?.interest ?? null);
+    await finishInteraction(platform, commentId, "queja-escalada", false);
+    return;
+  }
+
   if (aiResult) {
     replyText = aiResult.reply;
     matchedLabel = aiResult.source; // "ia" o "ia-cache"
