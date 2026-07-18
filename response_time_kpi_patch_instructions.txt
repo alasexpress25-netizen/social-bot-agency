@@ -1,0 +1,72 @@
+Parche: KPI "tiempo de respuesta promedio" en el panel de agencia
+===================================================================
+
+Item "menores" de PROPUESTAS-AGENCIA.md: "Métrica de tiempo de respuesta
+promedio para mostrarle al cliente (prueba de velocidad = confianza)".
+
+Requisito de base de datos: aplicar antes las migraciones
+0020_reviews.sql y 0021_response_time.sql (agregan socialbot_reviews,
+google_place_id y la columna replied_at en socialbot_interactions_log).
+Sin replied_at poblada, este KPI siempre va a dar "—" para interacciones
+viejas (las nuevas sí la van a tener, porque meta-webhook/index.ts ya la
+setea desde este cambio).
+
+Tu frontend/index.html ya tiene la sección de reseñas y el calendario del
+plan de contenido -- este parche es SOLO el KPI nuevo, para no pisar nada
+de lo que ya tenés. Son 2 cambios chiquitos, ambos dentro de
+renderMetrics():
+
+--------------------------------------------------------------------
+CAMBIO 1 — pedir también replied_at en la consulta de interactions_log
+--------------------------------------------------------------------
+Buscar esta línea (dentro de renderMetrics):
+
+    sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', clientId).gte('created_at', windowStartIso),
+
+Reemplazar por:
+
+    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
+
+--------------------------------------------------------------------
+CAMBIO 2 — calcular el promedio y agregarlo al kpi-row
+--------------------------------------------------------------------
+Buscar este bloque (justo antes de "const el = document.getElementById(`metrics-${clientId}`)"):
+
+    const totalLeads = leadsRows.length;
+    const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
+    const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
+    const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
+
+Agregar DEBAJO (antes de "const el = ..."):
+
+    const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
+    const avgResponseMinutes = repliedWithTimes.length
+      ? Math.round(repliedWithTimes.reduce((sum, r) => sum + (new Date(r.replied_at) - new Date(r.created_at)) / 60000, 0) / repliedWithTimes.length)
+      : null;
+    const avgResponseLabel = avgResponseMinutes === null ? '—' : (avgResponseMinutes < 1 ? '<1' : avgResponseMinutes);
+
+--------------------------------------------------------------------
+CAMBIO 3 — mostrar el 4to KPI (usa la clase kpi-row-4 que ya existe en el <style>)
+--------------------------------------------------------------------
+Buscar:
+
+    <div class="kpi-row">
+      <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+    </div>
+
+Reemplazar por:
+
+    <div class="kpi-row kpi-row-4">
+      <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+      <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
+    </div>
+
+Con esto el panel de la agencia muestra el tiempo de respuesta promedio
+junto a los otros 3 KPIs, sin tocar nada del portal del cliente
+(cliente.html) -- si más adelante querés mostrárselo también ahí como
+"prueba de velocidad", el cálculo es el mismo (repliedWithTimes) y se
+puede copiar tal cual a ese archivo.
