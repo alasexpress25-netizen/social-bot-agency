@@ -171,7 +171,7 @@ del límite diario del cliente y puede vaciarlo antes de que lleguen leads
 reales. Chequeo simple: mismo `sender_id` + más de N respuestas en la
 última hora → no autoresponder más, solo loguear.
 
-**Implementado:** migración `0023_antispam_sender_id.sql` agrega
+**Implementado:** migración `0024_antispam_sender_id.sql` agrega
 `sender_id` a `socialbot_interactions_log` (antes solo se guardaba el id
 del comentario/mensaje, no quién lo mandó) + `anti_spam_hourly_limit`
 opcional en `socialbot_ai_settings` para ajustar el umbral por cliente
@@ -184,27 +184,32 @@ ahí mismo, se marca la interacción como `anti-spam-limite` en el log y no
 se manda ninguna respuesta ni se guarda lead. De paso se corrigió un bug
 preexistente en el archivo: a `tryAiReply` le faltaba la firma completa de
 la función (quedaba solo el tipo de retorno), lo que hubiera roto el
-deploy. Falta: aplicar la migración `0023` en producción.
+deploy. **Ya deployado y aplicado en producción** (redaqqxoeciycqgjhpbv,
+18/07/2026): migración `0024` corrida vía MCP de Supabase y
+`meta-webhook` re-deployado (v26) con la lógica de anti-spam activa. Nada
+pendiente de este lado.
 
 ### 12. Recordatorio de posts pendientes de aprobación ✅ HECHO (18/07/2026)
 Si el cliente no aprueba/rechaza un post en X horas, un segundo email de
 seguimiento — mismo patrón que `notify-pending-post`, pero disparado por
 tiempo transcurrido en vez de por la creación del post.
 
-**Implementado:** migración `0024_pending_post_reminder.sql` agrega
-`reminder_sent_at` a `socialbot_posts` (evita mandar el recordatorio más de
-una vez por post) + Edge Function `notify-pending-post-reminder` (deployar
-manualmente) + workflow `.github/workflows/pending_post_reminder.yml`, que
-corre dos veces al día (09:00 y 21:00 Argentina/Brasil). A diferencia del
-aviso inicial de `notify-pending-post` (trigger de Postgres por fila), este
-es un chequeo periódico por tiempo transcurrido — mismo patrón que
-`notify-stale-leads` (item 2): un cron de GitHub Actions le pega por HTTP a
-la función, que busca posts `approval_status='pending'` más viejos que
-`PENDING_REMINDER_HOURS` (default 48hs) y sin recordatorio previo. Mismos
-secrets SMTP que `notify-pending-post` (se pueden copiar tal cual) + mismo
-`CLIENT_PORTAL_URL` opcional. Falta: subir el workflow al repo de GitHub,
-deployar la función, cargar los secrets SMTP y aplicar la migración `0024`
-en producción.
+**Implementado:** al revisar producción para deployar esto encontré que
+**ya estaba hecho** — en otra sesión que no había quedado bajada a este
+ZIP (mismo patrón de desincronización que ya señala la nota técnica al pie
+de este documento). Ya existen en producción (redaqqxoeciycqgjhpbv):
+migración `pending_post_reminder` (columna `approval_reminder_sent_at` en
+`socialbot_posts`, evita mandar el recordatorio más de una vez por post) +
+Edge Function `remind-pending-post` (deployada y activa, default de 24hs).
+Funciona igual que lo descrito arriba: chequeo periódico por tiempo
+transcurrido, mismo patrón que `notify-stale-leads`. Sincronicé el repo
+local para que quede fiel a esto (`supabase/migrations/0023_pending_post_reminder.sql`
++ `supabase/functions/remind-pending-post/index.ts`, con el código exacto
+que está corriendo). Falta solo: subir
+`.github/workflows/pending_post_reminder.yml` al repo de GitHub — no
+encontré rastro de que ese cron ya exista ahí, así que puede estar
+corriendo manual o no estar corriendo del todo; conviene chequearlo antes
+de asumir que ya está automatizado.
 
 ### 13. Mejor horario de publicación sugerido
 Ya existe `likes` por post con `published_at` en `socialbot_post_metrics`.
