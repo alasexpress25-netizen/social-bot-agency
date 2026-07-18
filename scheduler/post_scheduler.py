@@ -275,6 +275,35 @@ def _clean_external_id(raw_id):
     return raw_id.split(" ")[0]
 
 
+def _build_permalink(platform, raw_external_id, access_token):
+    """
+    Item 15 de PROPUESTAS-AGENCIA.md ("Link a la publicación real").
+    Facebook: el id que devuelve Graph API al publicar ya viene con formato
+    "{page-id}_{post-id}", que funciona directo como facebook.com/{id} sin
+    llamada extra. Instagram no tiene ese atajo (el media id no arma una URL
+    valida por si solo) asi que se pide el field 'permalink' a Graph API.
+    Best-effort: si falla o no hay dato, devuelve None y no rompe el flujo
+    de publicacion (el post ya se publico igual).
+    """
+    clean_id = _clean_external_id(raw_external_id)
+    if not clean_id:
+        return None
+    try:
+        if platform == "facebook":
+            return f"https://www.facebook.com/{clean_id}"
+        else:
+            r = requests.get(
+                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{clean_id}",
+                params={"fields": "permalink", "access_token": access_token},
+                timeout=15,
+            )
+            r.raise_for_status()
+            return r.json().get("permalink")
+    except Exception as e:
+        print(f"[_build_permalink] no se pudo obtener permalink para {clean_id}: {e}")
+        return None
+
+
 def _fetch_facebook_post_insights(post_id, access_token):
     """Reach/impressions de un post de Pagina. Best-effort: si Meta no tiene
     el dato todavia (posts muy recientes) o el permiso no alcanza, no rompe
@@ -1083,10 +1112,11 @@ def publish_approved_pending_posts():
                     media.get("location_id_override") if media else None,
                     carousel_urls,
                 )
+            permalink = _build_permalink(account["platform"], external_id, account["page_access_token"])
             sb_update(
                 "socialbot_posts",
                 {"id": f"eq.{post['id']}"},
-                {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id},
+                {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id, "permalink_url": permalink},
             )
             print(f"OK (aprobado por cliente) -> post {post['id']}")
         except Exception as e:
@@ -1368,10 +1398,11 @@ def process_client(client_id, slot):
                     carousel_urls,
                 )
 
+            permalink = _build_permalink(account["platform"], external_id, account["page_access_token"])
             sb_update(
                 "socialbot_posts",
                 {"id": f"eq.{created['id']}"},
-                {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id},
+                {"status": "published", "published_at": datetime.now(timezone.utc).isoformat(), "external_post_id": external_id, "permalink_url": permalink},
             )
             print(f"OK -> {client['name']} / {account['platform']} / post {external_id}")
             media_published_ok = True
