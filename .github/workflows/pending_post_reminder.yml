@@ -1,9 +1,11 @@
 name: Recordatorio de posts pendientes de aprobación
 
-# Mismo patrón que stale-leads-check.yml: dispara por HTTP la Edge Function
-# notify-pending-post-reminder (propuesta 12 de PROPUESTAS-AGENCIA.md), que
-# manda un email de seguimiento a los clientes con posts esperando
-# aprobación hace más de PENDING_REMINDER_HOURS horas.
+# NOTA: la Edge Function remind-pending-post (propuesta 12 de
+# PROPUESTAS-AGENCIA.md) ya esta deployada y activa en produccion, pero este
+# workflow todavia no existe en el repo de GitHub -- se agrega aca siguiendo
+# el mismo patron que stale-leads-check.yml. Antes de darlo por bueno,
+# fijate si ya tenés algo similar corriendo (por si lo armaste manual desde
+# GitHub) para no duplicar el cron.
 
 on:
   schedule:
@@ -16,7 +18,7 @@ jobs:
   recordar:
     runs-on: ubuntu-latest
     steps:
-      - name: Disparar notify-pending-post-reminder
+      - name: Disparar remind-pending-post
         run: |
-          curl -sS -X POST "https://redaqqxoeciycqgjhpbv.supabase.co/functions/v1/notify-pending-post-reminder" \
+          curl -sS -X POST "https://redaqqxoeciycqgjhpbv.supabase.co/functions/v1/remind-pending-post" \
             -H "Content-Type: application/json"
