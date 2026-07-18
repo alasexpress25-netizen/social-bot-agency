@@ -592,10 +592,11 @@ async function loadPosts(){
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <span class="pill ${p.status==='failed' ? 'warn' : ''}">${p.status}${p.approval_status==='rejected' ? t('rejectedTag') : ''}</span>
         ${pMeta ? `<span class="pill">${pMeta.icon} ${pMeta.label}</span>` : ''}
-        ${dateLabel ? `<span style="opacity:0.7; font-size:12px;">${dateLabel}</span>` : ''}
+        ${dateLabel ? `<span style="color:#000; font-weight:600; font-size:12px;">${dateLabel}</span>` : ''}
       </div>
       <div style="margin-top:8px;">${(p.caption||'').slice(0,160)}...</div>
-      ${p.status==='failed' && p.error_message ? `<div style="margin-top:6px; font-size:12px; color:var(--warn,#c00);">${p.error_message.slice(0,160)}</div>` : ''}
+      ${p.status==='failed' && p.error_message ? `<div style="margin-top:6px; font-size:12px; color:#8b0000; font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
+      ${p.permalink_url ? `<div style="margin-top:6px;"><a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px;">Ver publicación ↗</a></div>` : ''}
     </div>
   `;}).join('');
 }
