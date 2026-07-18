@@ -1359,6 +1359,7 @@ def process_client(client_id, slot):
         post_row = {
             "client_id": client_id,
             "social_account_id": account["id"],
+            "platform": account["platform"],
             "caption": caption,
             "media_url": media_url,
             "media_asset_id": media["id"] if media else None,
