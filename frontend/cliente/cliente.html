@@ -562,9 +562,20 @@ async function reviewPost(postId, decision){
   loadAll();
 }
 
+const PLATFORM_META = {
+  facebook:  { label: 'Facebook',  icon: '📘' },
+  instagram: { label: 'Instagram', icon: '📷' },
+};
+
+function formatPostDate(iso){
+  if(!iso) return '';
+  const locale = (currentLang === 'pt') ? 'pt-BR' : 'es-AR';
+  return new Date(iso).toLocaleString(locale, { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+
 async function loadPosts(){
   const { data: posts } = await sb.from('socialbot_posts')
-    .select('*').eq('client_id', currentClient.id).neq('approval_status', 'pending')
+    .select('*, socialbot_social_accounts(platform)').eq('client_id', currentClient.id).neq('approval_status', 'pending')
     .order('created_at', { ascending:false }).limit(10);
 
   const list = document.getElementById('postsList');
@@ -572,12 +583,21 @@ async function loadPosts(){
     list.innerHTML = `<div class="empty">${t('noPostsYet')}</div>`;
     return;
   }
-  list.innerHTML = posts.map(p => `
+  list.innerHTML = posts.map(p => {
+    const platform = p.socialbot_social_accounts?.platform;
+    const pMeta = PLATFORM_META[platform];
+    const dateLabel = formatPostDate(p.published_at || p.created_at);
+    return `
     <div class="card">
-      <span class="pill ${p.status==='failed' ? 'warn' : ''}">${p.status}${p.approval_status==='rejected' ? t('rejectedTag') : ''}</span>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <span class="pill ${p.status==='failed' ? 'warn' : ''}">${p.status}${p.approval_status==='rejected' ? t('rejectedTag') : ''}</span>
+        ${pMeta ? `<span class="pill">${pMeta.icon} ${pMeta.label}</span>` : ''}
+        ${dateLabel ? `<span style="opacity:0.7; font-size:12px;">${dateLabel}</span>` : ''}
+      </div>
       <div style="margin-top:8px;">${(p.caption||'').slice(0,160)}...</div>
+      ${p.status==='failed' && p.error_message ? `<div style="margin-top:6px; font-size:12px; color:var(--warn,#c00);">${p.error_message.slice(0,160)}</div>` : ''}
     </div>
-  `).join('');
+  `;}).join('');
 }
 
 // Etiqueta de etapa (ej: "[listo_para_comprar]") que la IA antepone al
