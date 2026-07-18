@@ -61,6 +61,12 @@
   .pill.warn{ background:var(--warn-soft); color:var(--warn); }
   .btn-row{ display:flex; gap:8px; margin-top:12px; }
   select, textarea, input{ padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%; font-family:inherit; }
+  .posts-filter-row{ display:flex; flex-direction:column; gap:8px; }
+  .posts-filter-row select{ width:100%; }
+  @media (min-width:520px){
+    .posts-filter-row{ flex-direction:row; flex-wrap:wrap; }
+    .posts-filter-row select{ width:auto; flex:1 1 180px; }
+  }
   form.inline{ display:grid; gap:10px; margin-top:10px; }
   .empty{ color:var(--muted); font-size:13px; padding:12px 0; }
   .section-hint{ color:var(--muted); font-size:12.5px; margin:-6px 0 12px; line-height:1.45; }
@@ -154,9 +160,14 @@
       <details>
         <summary data-i18n="postsTitle">Últimas publicaciones</summary>
         <p class="section-hint" data-i18n="postsHint">Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.</p>
-        <div style="margin-bottom:10px;">
-          <select id="postsFilterDate" onchange="renderPostsList()" style="width:auto;">
+        <div class="posts-filter-row" style="margin-bottom:10px;">
+          <select id="postsFilterDate" onchange="renderPostsList()">
             <option value="all" data-i18n="postsFilterAllDates">Todas las fechas</option>
+          </select>
+          <select id="postsFilterPlatform" onchange="renderPostsList()">
+            <option value="all" data-i18n="postsFilterAllPlatforms">Todas las plataformas</option>
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
           </select>
         </div>
         <div id="postsList"></div>
@@ -262,6 +273,7 @@ const I18N = {
     postsTitle: 'Últimas publicaciones',
     postsHint: 'Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.',
     postsFilterAllDates: 'Todas las fechas',
+    postsFilterAllPlatforms: 'Todas las plataformas',
     metricsTitle: 'Métricas',
     metricsHint: 'Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.',
     leadsTitle: 'Contactos interesados',
@@ -314,6 +326,7 @@ const I18N = {
     postsTitle: 'Últimas publicações',
     postsHint: 'Histórico do que o sistema já publicou (ou tentou publicar) nas suas redes. É apenas para consulta — não pode ser editado aqui.',
     postsFilterAllDates: 'Todas as datas',
+    postsFilterAllPlatforms: 'Todas as plataformas',
     metricsTitle: 'Métricas',
     metricsHint: 'Contatos interessados que chegaram, quantos viraram clientes, quanto suas publicações foram curtidas, e com que frequência o sistema respondeu automaticamente. Escolha ver por semana ou por mês.',
     leadsTitle: 'Contatos interessados',
@@ -614,7 +627,12 @@ function renderPostsList(){
   const posts = window.__myPosts || [];
   populateDateFilterOptions(posts);
   const dateFilter = document.getElementById('postsFilterDate')?.value || 'all';
-  const filtered = dateFilter === 'all' ? posts : posts.filter(p => postDateKey(p) === dateFilter);
+  const platformFilter = document.getElementById('postsFilterPlatform')?.value || 'all';
+  const filtered = posts.filter(p => {
+    if(dateFilter !== 'all' && postDateKey(p) !== dateFilter) return false;
+    if(platformFilter !== 'all' && p.socialbot_social_accounts?.platform !== platformFilter) return false;
+    return true;
+  });
 
   const list = document.getElementById('postsList');
   if(!posts || posts.length === 0){
