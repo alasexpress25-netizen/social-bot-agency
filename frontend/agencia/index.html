@@ -1,1 +1,1544 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Panel · Automatización de redes</title>
 
+<!-- PWA: LaVMK Agencia -->
+<link rel="manifest" href="./manifest.json" />
+<meta name="theme-color" content="#3d5a4c" />
+<meta name="application-name" content="LaVMK Agencia" />
+<meta name="apple-mobile-web-app-title" content="LaVMK Agencia" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="icon" href="./icons/icon-192.png" />
+<link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --ink:#1a1d23;
+    --paper:#f7f6f3;
+    --line:#e1ddd4;
+    --accent:#3d5a4c;
+    --accent-soft:#e8efe9;
+    --warn:#a34e3a;
+    --muted:#6b6a66;
+    --radius:10px;
+    font-family:'Iowan Old Style','Georgia',serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:15px; line-height:1.5;
+  }
+  header{
+    padding:28px 32px; border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; justify-content:space-between;
+  }
+  header h1{
+    font-family:'Iowan Old Style','Georgia',serif; font-size:22px; margin:0;
+    letter-spacing:-0.01em;
+  }
+  header .tag{ color:var(--muted); font-size:13px; }
+  main{ max-width:980px; margin:0 auto; padding:32px; }
+  .auth-box{ max-width:360px; margin:80px auto; text-align:center; }
+  .auth-box input{
+    width:100%; padding:11px 12px; margin-bottom:10px; border:1px solid var(--line);
+    border-radius:var(--radius); font-size:14px; background:#fff;
+  }
+  button{
+    background:var(--accent); color:#fff; border:none; padding:10px 18px;
+    border-radius:var(--radius); font-size:14px; cursor:pointer; font-weight:500;
+  }
+  button:hover{ opacity:0.92; }
+  button.secondary{ background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  section{ margin-bottom:36px; }
+  section h2{ font-size:15px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:14px; font-weight:600; }
+  .card{
+    background:#fff; border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px 20px; margin-bottom:12px;
+  }
+  .card-row{ display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .client-name{ font-weight:600; font-size:16px; }
+  .pill{
+    display:inline-block; font-size:11px; padding:2px 9px; border-radius:99px;
+    background:var(--accent-soft); color:var(--accent); margin-left:8px; font-weight:600;
+  }
+  .pill.off{ background:#f1ece5; color:var(--muted); }
+  .meta-row{ color:var(--muted); font-size:13px; margin-top:6px; }
+  form.inline{ display:grid; gap:10px; margin-top:14px; }
+  form.inline input, form.inline select, form.inline textarea{
+    padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%;
+    font-family:inherit;
+  }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  details{ margin-top:10px; }
+  summary{ cursor:pointer; color:var(--accent); font-size:13px; font-weight:600; }
+  .status-published{ color:var(--accent); }
+  .status-failed{ color:var(--warn); }
+  .status-pending, .status-publishing{ color:var(--muted); }
+  small.hint{ color:var(--muted); display:block; margin-top:4px; }
+  .chart-wrap{ display:flex; align-items:flex-end; gap:6px; height:80px; padding:6px 0; }
+  .chart-bar-col{ flex:1; text-align:center; }
+  .chart-bar{ background:var(--accent); border-radius:3px 3px 0 0; margin:0 auto; width:70%; }
+  .chart-label{ font-size:10px; color:var(--muted); margin-top:4px; }
+  .metric-title{ font-size:12px; color:var(--muted); margin:10px 0 2px; }
+  .card.pending{ border-color:#d8c7a8; background:#fdfaf3; }
+  .btn-row{ display:flex; gap:8px; margin-top:10px; }
+  button.reject{ background:var(--warn); }
+  .kpi-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
+  .kpi-row-4{ grid-template-columns:repeat(4, 1fr); }
+  @media (max-width:520px){ .kpi-row-4{ grid-template-columns:repeat(2, 1fr); } }
+  .kpi-card{ background:var(--accent-soft); border-radius:var(--radius); padding:12px 14px; text-align:center; }
+  .kpi-value{ font-size:24px; font-weight:700; color:var(--accent); line-height:1.1; }
+  .kpi-label{ font-size:11.5px; color:var(--muted); margin-top:4px; }
+
+  /* Vista calendario del plan de contenido (item "menores" de PROPUESTAS-AGENCIA.md) */
+  .plan-calendar{ display:grid; grid-template-columns:repeat(7, 1fr); gap:6px; margin-top:8px; }
+  @media (max-width:640px){ .plan-calendar{ grid-template-columns:repeat(1, 1fr); } }
+  .plan-cal-day{ border:1px solid var(--line); border-radius:8px; padding:8px; min-height:70px; background:#fff; }
+  .plan-cal-day-label{ font-size:11px; color:var(--muted); text-transform:capitalize; margin-bottom:6px; }
+  .plan-cal-item{ font-size:11.5px; padding:5px 6px; border-radius:6px; margin-bottom:5px; background:var(--accent-soft); cursor:pointer; }
+  .plan-cal-item.approved{ background:#e2ecdf; }
+  .plan-cal-item-angle{ font-weight:600; display:block; }
+  .plan-view-toggle{ display:flex; gap:6px; margin-bottom:8px; }
+  .plan-view-toggle button{ background:transparent; color:var(--muted); border:1px solid var(--line); padding:4px 10px; font-size:12px; }
+  .plan-view-toggle button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+
+  /* Reseñas (item 8) */
+  .review-card{ border-left:3px solid var(--line); padding:8px 10px; margin-top:8px; background:#fff; border-radius:6px; }
+  .review-card.negative{ border-left-color:var(--warn); }
+  .review-card.positive{ border-left-color:var(--accent); }
+  .review-suggested{ font-style:italic; color:var(--muted); margin-top:6px; font-size:13px; }
+  .period-toggle{ display:flex; gap:6px; margin-bottom:12px; }
+  .period-toggle button{ background:transparent; color:var(--muted); border:1px solid var(--line); padding:5px 12px; font-size:12px; }
+  .period-toggle button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .hashtag-row{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .hashtag-chip{
+    display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
+    border-radius:99px; padding:3px 6px 3px 12px; font-size:12.5px; font-weight:600;
+  }
+  .hashtag-chip button{
+    background:none; border:none; color:var(--accent); padding:0 6px; font-size:14px; font-weight:700;
+    cursor:pointer; line-height:1; border-radius:50%;
+  }
+  .hashtag-chip button:hover{ background:rgba(61,90,76,0.18); }
+  .hashtag-add-row{ display:flex; gap:6px; margin-top:8px; }
+  .hashtag-add-row input{ flex:1; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; }
+  .hashtag-add-row button{ padding:6px 12px; font-size:12.5px; }
+
+  /* Selector de cliente + botón "nuevo cliente" arriba del dash */
+  .client-switch-bar{
+    display:flex; align-items:center; gap:10px; margin-bottom:28px;
+    flex-wrap:wrap;
+  }
+  .client-switch-bar select{
+    padding:9px 12px; border:1px solid var(--line); border-radius:var(--radius);
+    font-size:14px; background:#fff; font-family:inherit; min-width:220px;
+  }
+  .client-switch-bar .add-client-btn{
+    width:38px; height:38px; padding:0; font-size:20px; line-height:1;
+    display:flex; align-items:center; justify-content:center; flex:none;
+  }
+
+  /* Modal genérico */
+  .modal-overlay{
+    display:none; position:fixed; inset:0; background:rgba(26,29,35,0.45);
+    align-items:center; justify-content:center; padding:20px; z-index:100;
+  }
+  .modal-overlay.open{ display:flex; }
+  .modal-box{
+    background:#fff; border-radius:var(--radius); padding:24px 26px;
+    max-width:440px; width:100%; max-height:90vh; overflow-y:auto;
+    box-shadow:0 12px 32px rgba(0,0,0,0.18);
+  }
+  .modal-box .card-row{ margin-bottom:16px; }
+  .modal-close{
+    background:transparent; color:var(--muted); border:none; padding:2px 6px;
+    font-size:18px; cursor:pointer; line-height:1;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Panel de automatización</h1>
+  <span class="tag" id="userTag"></span>
+  <button onclick="logout()" style="margin-left:12px; padding:6px 14px; font-size:13px;">Cerrar sesión</button>
+</header>
+
+<main>
+  <!-- LOGIN -->
+  <div class="auth-box" id="authBox">
+    <p style="color:var(--muted); margin-bottom:18px;">Iniciá sesión para gestionar tus clientes</p>
+    <input type="email" id="email" placeholder="Email" />
+    <input type="password" id="password" placeholder="Contraseña" />
+    <button onclick="login()" style="width:100%;">Entrar</button>
+    <p style="margin-top:10px;"><a href="#" onclick="signup()" style="color:var(--accent); font-size:13px;">Crear cuenta nueva</a></p>
+  </div>
+
+  <!-- APP -->
+  <div id="app" style="display:none;">
+
+    <div class="client-switch-bar">
+      <select id="clientSelector" onchange="onClientSelectorChange()"></select>
+      <button type="button" class="secondary" id="topEditClientBtn" title="Editar cliente seleccionado" onclick="openEditClientModal(selectedClientId)">Editar</button>
+      <button type="button" class="add-client-btn" title="Nuevo cliente" onclick="openNewClientModal()">+</button>
+    </div>
+
+    <section>
+      <h2>Clientes</h2>
+      <div id="clientsList"></div>
+    </section>
+
+  </div>
+</main>
+
+<!-- Modal: Nuevo cliente -->
+<div class="modal-overlay" id="newClientModal" onclick="if(event.target===this) closeNewClientModal()">
+  <div class="modal-box">
+    <div class="card-row">
+      <h2 style="margin:0;">Nuevo cliente</h2>
+      <button type="button" class="modal-close" onclick="closeNewClientModal()">✕</button>
+    </div>
+    <form class="inline" onsubmit="createClient(event)">
+      <input id="newClientName" placeholder="Nombre del cliente / negocio" required />
+      <input id="newClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
+
+      <details>
+        <summary>Conectar cuenta de Facebook / Instagram</summary>
+        <small class="hint" style="display:block; margin-top:10px;">Opcional, podés cargarla ahora o más tarde desde "Editar cliente". Generá el Page Access Token de larga duración en Graph API Explorer (ver README).</small>
+        <div class="grid2">
+          <select id="newClientPlatform">
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+          </select>
+          <input id="newClientPageName" placeholder="Nombre de la página" />
+        </div>
+        <input id="newClientPageId" placeholder="Page ID" />
+        <input id="newClientIgId" placeholder="Instagram Business ID (solo si es Instagram)" />
+        <input id="newClientPageToken" placeholder="Page Access Token" />
+      </details>
+
+      <button type="submit">Agregar cliente</button>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Editar cliente -->
+<div class="modal-overlay" id="editClientModal" onclick="if(event.target===this) closeEditClientModal()">
+  <div class="modal-box">
+    <div class="card-row">
+      <h2 style="margin:0;">Editar cliente</h2>
+      <button type="button" class="modal-close" onclick="closeEditClientModal()">✕</button>
+    </div>
+    <form class="inline" onsubmit="saveClientEdit(event)">
+      <input type="hidden" id="editClientId" />
+      <input type="hidden" id="editClientAccountId" />
+      <input id="editClientName" placeholder="Nombre del cliente / negocio" required />
+      <input id="editClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
+
+      <details>
+        <summary>Conectar cuenta de Facebook / Instagram</summary>
+        <small class="hint" style="display:block; margin-top:10px;">Generá el Page Access Token de larga duración en Graph API Explorer (ver README).</small>
+        <div class="grid2">
+          <select id="editClientPlatform" onchange="onEditClientPlatformChange()">
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+          </select>
+          <input id="editClientPageName" placeholder="Nombre de la página" />
+        </div>
+        <input id="editClientPageId" placeholder="Page ID" />
+        <input id="editClientIgId" placeholder="Instagram Business ID (solo si es Instagram)" />
+        <input id="editClientPageToken" placeholder="Page Access Token" />
+      </details>
+
+      <details>
+        <summary>⭐ Monitoreo de reseñas de Google (opcional)</summary>
+        <small class="hint" style="display:block; margin-top:10px;">
+          Buscá el negocio en el
+          <a href="https://developers.google.com/maps/documentation/places/web-service/place-id" target="_blank">buscador de Place ID de Google</a>
+          y pegá acá el ID. Las reseñas de Facebook no necesitan nada extra: se leen con el mismo Page Access Token de arriba.
+        </small>
+        <input id="editClientGooglePlaceId" placeholder="Google Place ID (ej: ChIJN1t_tDeuEmsRUsoyG83frY4)" />
+      </details>
+
+      <button type="submit">Guardar cambios</button>
+    </form>
+  </div>
+</div>
+
+<script>
+// ⚠️ Completá con los datos de tu proyecto Supabase (Settings > API)
+const SUPABASE_URL = "https://redaqqxoeciycqgjhpbv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlZGFxcXhvZWNpeWNxZ2pocGJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxMDcyMjEsImV4cCI6MjA5MzY4MzIyMX0.HqpOrWPtbYImgy57TafbaB4qriqmq4FI9GIa4Vg9FhI";
+// ⚠️ URL pública donde vive frontend/cliente.html. Tiene que ser EXACTA
+// (con o sin barra final, según cómo la tengas publicada) y estar agregada
+// en Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
+// o el magic link no va a poder volver a la página.
+const CLIENT_PORTAL_URL = "https://lavisualmk.alastecno.com/cliente/";
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { flowType: 'implicit' } // el link va por mail y lo abre OTRO dispositivo (el del cliente),
+                                  // así que no puede depender de una llave guardada en este navegador (PKCE)
+});
+let currentAgencyId = null;
+let selectedClientId = 'all'; // 'all' = ver todos los clientes en el dash
+
+// Guarda, por clientId, el cliente y su primera cuenta conectada (si tiene),
+// para poder abrir el modal "Editar cliente" sin volver a pedirle nada a
+// Supabase. Se repuebla cada vez que loadClients() renderiza las tarjetas.
+let clientsCache = {};
+
+function openNewClientModal(){
+  document.getElementById('newClientModal').classList.add('open');
+}
+function closeNewClientModal(){
+  document.getElementById('newClientModal').classList.remove('open');
+  document.getElementById('newClientName').value = '';
+  document.getElementById('newClientLink').value = '';
+  document.getElementById('newClientPlatform').value = 'facebook';
+  document.getElementById('newClientPageName').value = '';
+  document.getElementById('newClientPageId').value = '';
+  document.getElementById('newClientIgId').value = '';
+  document.getElementById('newClientPageToken').value = '';
+}
+
+function openEditClientModal(clientId){
+  if(!clientId || clientId === 'all'){ alert('Elegí primero un cliente puntual en el selector de arriba para poder editarlo.'); return; }
+  const entry = clientsCache[clientId];
+  if(!entry){ alert('No se encontró el cliente. Probá recargar la página.'); return; }
+  const { client, accounts } = entry;
+  const account = (accounts && accounts[0]) || null;
+
+  document.getElementById('editClientId').value = client.id;
+  document.getElementById('editClientName').value = client.name || '';
+  document.getElementById('editClientLink').value = client.sales_link || '';
+  document.getElementById('editClientGooglePlaceId').value = client.google_place_id || '';
+  document.getElementById('editClientPlatform').value = account ? account.platform : 'facebook';
+  fillEditAccountFields(account);
+
+  document.getElementById('editClientModal').classList.add('open');
+}
+
+// Cuando el usuario cambia la plataforma dentro del modal, buscamos si el
+// cliente ya tiene una cuenta conectada con esa plataforma (en clientsCache)
+// y la usamos para editar en vez de la que estaba antes. Así evitamos el
+// error de "duplicate key" que pasaba al intentar convertir, por ejemplo,
+// la cuenta de Facebook en una de Instagram cuando esa ya existía aparte.
+function onEditClientPlatformChange(){
+  const clientId = document.getElementById('editClientId').value;
+  const entry = clientsCache[clientId];
+  const platform = document.getElementById('editClientPlatform').value;
+  const accounts = (entry && entry.accounts) || [];
+  const match = accounts.find(a => a.platform === platform) || null;
+  fillEditAccountFields(match);
+}
+
+function fillEditAccountFields(account){
+  document.getElementById('editClientAccountId').value = account ? account.id : '';
+  document.getElementById('editClientPageName').value = account ? (account.page_name || '') : '';
+  document.getElementById('editClientPageId').value = account ? (account.page_id || '') : '';
+  document.getElementById('editClientIgId').value = account ? (account.ig_business_id || '') : '';
+  document.getElementById('editClientPageToken').value = account ? (account.page_access_token || '') : '';
+}
+function closeEditClientModal(){
+  document.getElementById('editClientModal').classList.remove('open');
+}
+
+async function saveClientEdit(e){
+  e.preventDefault();
+  const clientId = document.getElementById('editClientId').value;
+  const accountId = document.getElementById('editClientAccountId').value;
+  const name = document.getElementById('editClientName').value;
+  const sales_link = document.getElementById('editClientLink').value;
+  const google_place_id = document.getElementById('editClientGooglePlaceId').value || null;
+
+  const { error } = await sb.from('socialbot_clients').update({ name, sales_link, google_place_id }).eq('id', clientId);
+  if(error){ alert(error.message); return; }
+
+  // Igual que en createClient: page_id y page_access_token son NOT NULL en
+  // la base, así que sólo tocamos la cuenta si ambos están cargados.
+  const pageId = document.getElementById('editClientPageId').value;
+  const pageToken = document.getElementById('editClientPageToken').value;
+  if(pageId && pageToken){
+    const accountPatch = {
+      platform: document.getElementById('editClientPlatform').value,
+      page_id: pageId,
+      ig_business_id: document.getElementById('editClientIgId').value || null,
+      page_name: document.getElementById('editClientPageName').value,
+      page_access_token: pageToken,
+    };
+    const { error: accError } = accountId
+      ? await sb.from('socialbot_social_accounts').update(accountPatch).eq('id', accountId)
+      : await sb.from('socialbot_social_accounts').insert({ ...accountPatch, client_id: clientId });
+    if(accError){ alert(`El cliente se guardó, pero la cuenta de FB/IG no se pudo guardar: ${accError.message}`); }
+  }
+
+  closeEditClientModal();
+  loadClients();
+}
+
+function onClientSelectorChange(){
+  selectedClientId = document.getElementById('clientSelector').value;
+  applyClientFilter();
+}
+
+// Muestra sólo la tarjeta del cliente elegido en el selector (o todas si
+// está en "Todos los clientes"). No vuelve a pedir datos a Supabase, sólo
+// oculta/muestra las tarjetas ya renderizadas por loadClients().
+function applyClientFilter(){
+  document.querySelectorAll('#clientsList > .client-card').forEach(card => {
+    const show = selectedClientId === 'all' || card.dataset.clientId === selectedClientId;
+    card.style.display = show ? '' : 'none';
+  });
+}
+
+async function login(){
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if(error){ alert(error.message); return; }
+  boot();
+}
+
+async function signup(){
+  const email = prompt("Email:");
+  const password = prompt("Contraseña (mínimo 6 caracteres):");
+  if(!email || !password) return;
+  const { data, error } = await sb.auth.signUp({ email, password });
+  if(error){ alert(error.message); return; }
+  alert("Cuenta creada. Si tu proyecto pide confirmación por email, revisá tu bandeja de entrada.");
+}
+
+async function logout(){
+  await sb.auth.signOut();
+  location.reload();
+}
+
+async function boot(){
+  const { data: { session } } = await sb.auth.getSession();
+  if(!session){ return; }
+
+  document.getElementById('authBox').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('userTag').innerText = session.user.email;
+
+  // Buscar o crear la agencia del usuario logueado
+  let { data: agencies } = await sb.from('socialbot_agencies').select('*').eq('owner_user_id', session.user.id);
+  if(!agencies || agencies.length === 0){
+    const name = prompt("Nombre de tu agencia:") || "Mi Agencia";
+    const { data: created } = await sb.from('socialbot_agencies').insert({ owner_user_id: session.user.id, name }).select();
+    agencies = created;
+  }
+  currentAgencyId = agencies[0].id;
+  loadClients();
+}
+
+// ---------------------------------------------------------------------------
+// Resumen de métricas a demanda (mejora post-roadmap, no es el reporte
+// mensual automático de scheduler/monthly_report.py -- ese sigue corriendo
+// solo el día 1 de cada mes). Esto llama a la Edge Function
+// send-report-now, que valida server-side que el cliente elegido
+// pertenezca a esta agencia antes de mandar nada.
+// ---------------------------------------------------------------------------
+function onReportPeriodChange(clientId){
+  const period = document.getElementById(`reportPeriod-${clientId}`).value;
+  const show = period === 'custom';
+  document.getElementById(`reportStart-${clientId}`).style.display = show ? 'inline-block' : 'none';
+  document.getElementById(`reportEnd-${clientId}`).style.display = show ? 'inline-block' : 'none';
+}
+
+function computeReportRange(period, clientId){
+  const fmt = d => d.toISOString().slice(0, 10);
+  const today = new Date();
+  if(period === 'this_month'){
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    return { start: fmt(start), end: fmt(today) };
+  }
+  if(period === 'last_month'){
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+    const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0)); // último día del mes anterior
+    return { start: fmt(start), end: fmt(end) };
+  }
+  if(period === 'last_30_days'){
+    const start = new Date(today.getTime() - 29 * 24 * 3600 * 1000);
+    return { start: fmt(start), end: fmt(today) };
+  }
+  // custom
+  return {
+    start: document.getElementById(`reportStart-${clientId}`).value,
+    end: document.getElementById(`reportEnd-${clientId}`).value,
+  };
+}
+
+async function sendReportNow(clientId){
+  const period = document.getElementById(`reportPeriod-${clientId}`).value;
+  const { start, end } = computeReportRange(period, clientId);
+  if(!start || !end){ alert('Elegí un rango de fechas válido.'); return; }
+
+  const btn = event.target;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Enviando...';
+  try {
+    const { data, error } = await sb.functions.invoke('send-report-now', {
+      body: { client_id: clientId, start_date: start, end_date: end }
+    });
+    if(error) throw error;
+    if(data && data.error) throw new Error(data.error);
+    alert(
+      `Resumen enviado a ${data.sent_to} (${data.period}):\n` +
+      `Consultas: ${data.consultas_recibidas} · Clientes nuevos: ${data.clientes_nuevos} · ` +
+      `Posts: ${data.posts_publicados} · Me gusta: ${data.me_gusta}`
+    );
+  } catch(err){
+    alert(`No se pudo enviar: ${err.message || err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+async function publishNow(clientId, clientName){
+  if(!confirm(`¿Disparar una publicación manual para ${clientName} ahora mismo? Va a generar (o reintentar) un post para cada horario activo de este cliente, sin esperar su horario programado.`)) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Disparando...';
+  try {
+    const { data, error } = await sb.functions.invoke('trigger-manual-publish', { body: { client_id: clientId } });
+    if(error){ throw error; }
+    if(data && data.error){ throw new Error(data.error); }
+    alert(`Listo, se disparó el workflow para ${clientName}. Puede tardar 1-2 minutos en verse el resultado — revisá la pestaña Actions de GitHub, o volvé a entrar acá en un rato para ver el post nuevo.`);
+  } catch(err){
+    alert(`No se pudo disparar: ${err.message || err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Publicar ahora';
+  }
+}
+
+async function createClient(e){
+  e.preventDefault();
+  const name = document.getElementById('newClientName').value;
+  const sales_link = document.getElementById('newClientLink').value;
+  const { data: created, error } = await sb.from('socialbot_clients').insert({ agency_id: currentAgencyId, name, sales_link }).select();
+  if(error){ alert(error.message); return; }
+
+  // La cuenta de FB/IG es opcional en este modal: page_id y page_access_token
+  // son NOT NULL en la base, así que solo la creamos si se cargaron los dos.
+  // Si se dejaron vacíos, el cliente queda creado igual y la cuenta se puede
+  // agregar más tarde desde su tarjeta ("Conectar cuenta nueva").
+  const pageId = document.getElementById('newClientPageId').value;
+  const pageToken = document.getElementById('newClientPageToken').value;
+  if(created && created[0] && pageId && pageToken){
+    const { error: accError } = await sb.from('socialbot_social_accounts').insert({
+      client_id: created[0].id,
+      platform: document.getElementById('newClientPlatform').value,
+      page_id: pageId,
+      ig_business_id: document.getElementById('newClientIgId').value || null,
+      page_name: document.getElementById('newClientPageName').value,
+      page_access_token: pageToken,
+    });
+    if(accError){ alert(`El cliente se creó, pero la cuenta de FB/IG no se pudo guardar: ${accError.message}`); }
+  }
+
+  closeNewClientModal();
+  // Seleccionamos automáticamente el cliente recién creado
+  if(created && created[0]) selectedClientId = created[0].id;
+  loadClients();
+}
+
+// ---------------------------------------------------------------------------
+// Métricas — agrupa registros por semana (lunes a domingo) o por mes
+// calendario, según el toggle Semanal/Mensual que elige la agencia por
+// cliente, y los renderiza como barras simples con CSS puro. Mismo criterio
+// (funciones espejo) en frontend/cliente.html.
+// ---------------------------------------------------------------------------
+function buildPeriodBuckets(period){
+  const now = new Date();
+  const buckets = [];
+  if(period === 'month'){
+    for(let i = 5; i >= 0; i--){
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+      buckets.push({ start, end, label: start.toLocaleDateString('es-AR', { month:'short' }) });
+    }
+  } else {
+    for(let i = 7; i >= 0; i--){
+      const start = new Date(now);
+      const dow = (start.getDay() + 6) % 7; // 0=lunes .. 6=domingo
+      start.setHours(0,0,0,0);
+      start.setDate(start.getDate() - dow - (i * 7));
+      const end = new Date(start);
+      end.setDate(start.getDate() + 7);
+      buckets.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}` });
+    }
+  }
+  return buckets;
+}
+
+function fillBuckets(buckets, rows, dateField, { replyField = null, sumField = null, filterFn = null } = {}){
+  buckets.forEach(b => { b.count = 0; b.total = 0; b.replied = 0; b.sum = 0; });
+  (rows||[]).forEach(r => {
+    if(!r[dateField]) return;
+    if(filterFn && !filterFn(r)) return;
+    const d = new Date(r[dateField]);
+    const b = buckets.find(b => d >= b.start && d < b.end);
+    if(!b) return;
+    b.count++;
+    if(replyField){ b.total++; if(r[replyField]) b.replied++; }
+    if(sumField){ b.sum += (r[sumField] || 0); }
+  });
+  return buckets;
+}
+
+function renderBarChart(containerEl, buckets, { rate = false, sum = false } = {}){
+  const values = buckets.map(b => rate ? (b.total ? Math.round((b.replied / b.total) * 100) : 0) : (sum ? b.sum : b.count));
+  const max = Math.max(1, ...values);
+  containerEl.innerHTML = `
+    <div class="chart-wrap">
+      ${buckets.map((b, i) => {
+        const value = values[i];
+        const h = Math.max(3, (value / max) * 70);
+        return `
+          <div class="chart-bar-col">
+            <div class="chart-bar" style="height:${h}px;" title="${b.label}: ${value}${rate ? '%' : ''}"></div>
+            <div class="chart-label">${b.label}</div>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
+// clientId -> 'week' | 'month'. Por defecto semanal.
+const metricPeriod = {};
+
+// clientId -> 'list' | 'calendar'. Vista del plan semanal de contenido
+// (item "menores" de PROPUESTAS-AGENCIA.md). Por defecto lista, igual que
+// siempre -- el calendario es solo un vistazo visual alternativo, de solo
+// lectura (para editar/aprobar se sigue usando la vista de lista).
+const planViewMode = {};
+
+function setPlanView(clientId, mode){
+  planViewMode[clientId] = mode;
+  const listEl = document.getElementById(`planListView-${clientId}`);
+  const calEl = document.getElementById(`planCalView-${clientId}`);
+  if(listEl) listEl.style.display = mode === 'list' ? 'block' : 'none';
+  if(calEl) calEl.style.display = mode === 'calendar' ? 'block' : 'none';
+  document.querySelectorAll(`[data-plan-toggle="${clientId}"] button`).forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+}
+
+// Arma una grilla lunes-a-domingo con los items del plan ubicados en su
+// dia (target_date). Es un resumen visual, de solo lectura -- para editar
+// texto/hashtags o aprobar/rechazar se usa la vista de lista de siempre.
+function buildPlanCalendarHtml(planItems){
+  const dayNames = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+  const byDay = Array.from({ length: 7 }, () => []);
+  (planItems||[]).forEach(item => {
+    const d = new Date(item.target_date + 'T00:00:00');
+    const dow = (d.getDay() + 6) % 7; // lunes=0 ... domingo=6
+    byDay[dow].push(item);
+  });
+  return `
+    <div class="plan-calendar">
+      ${dayNames.map((name, i) => `
+        <div class="plan-cal-day">
+          <div class="plan-cal-day-label">${name}</div>
+          ${byDay[i].length ? byDay[i].map(item => `
+            <div class="plan-cal-item ${item.status === 'approved' ? 'approved' : ''}" title="${(item.caption||'').replace(/"/g,'&quot;')}">
+              <span class="plan-cal-item-angle">${item.angle || new Date(item.target_date + 'T00:00:00').toLocaleDateString('es-AR', { day:'numeric', month:'short' })} ${item.status === 'approved' ? '✅' : '⏳'}</span>
+              ${(item.caption || '').slice(0, 50)}${(item.caption||'').length > 50 ? '…' : ''}
+            </div>
+          `).join('') : '<span class="meta-row" style="margin-top:0; font-size:11px;">—</span>'}
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+function setMetricPeriod(clientId, period){
+  metricPeriod[clientId] = period;
+  renderMetrics(clientId);
+}
+
+// KPIs reales que la agencia mira de un vistazo: consultas recibidas
+// (leads), clientes nuevos (leads con status='convertido') y me gusta
+// totales (suma de socialbot_post_metrics.likes de los posts publicados),
+// mas los 3 graficos de siempre, todo dentro de la ventana elegida
+// (ultimas 8 semanas o ultimos 6 meses).
+async function renderMetrics(clientId){
+  const period = metricPeriod[clientId] || 'week';
+  const buckets = buildPeriodBuckets(period);
+  const windowStartIso = buckets[0].start.toISOString();
+
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }] = await Promise.all([
+    sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+  ]);
+
+  const leadsRows = leads || [];
+  const postsRows = (postsWithMetrics||[]).map(p => ({
+    published_at: p.published_at,
+    likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
+  }));
+
+  const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
+  const convertedBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at', { filterFn: r => r.status === 'convertido' });
+  const postsBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at');
+  const likesBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at', { sumField: 'likes' });
+  const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactions || [], 'created_at', { replyField: 'replied' });
+
+  const totalLeads = leadsRows.length;
+  const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
+  const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
+  const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
+
+  const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
+  const avgResponseMinutes = repliedWithTimes.length
+    ? Math.round(repliedWithTimes.reduce((sum, r) => sum + (new Date(r.replied_at) - new Date(r.created_at)) / 60000, 0) / repliedWithTimes.length)
+    : null;
+  const avgResponseLabel = avgResponseMinutes === null ? '—' : (avgResponseMinutes < 1 ? '<1' : avgResponseMinutes);
+
+  const el = document.getElementById(`metrics-${clientId}`);
+  if(!el) return;
+  el.innerHTML = `
+    <div class="period-toggle">
+      <button class="${period==='week'?'active':''}" onclick="setMetricPeriod('${clientId}','week')">Semanal</button>
+      <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('${clientId}','month')">Mensual</button>
+    </div>
+    <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
+    <div class="kpi-row kpi-row-4">
+      <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+      <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
+    </div>
+    <div class="metric-title">Consultas recibidas</div>
+    <div id="chartLeads-${clientId}"></div>
+    <div class="metric-title">Clientes nuevos (convertidos)</div>
+    <div id="chartConverted-${clientId}"></div>
+    <div class="metric-title">Me gusta en publicaciones</div>
+    <div id="chartLikes-${clientId}"></div>
+    <div class="metric-title">Posts publicados</div>
+    <div id="chartPosts-${clientId}"></div>
+    <div class="metric-title">Tasa de respuesta automática (%)</div>
+    <div id="chartReplyRate-${clientId}"></div>
+  `;
+  renderBarChart(document.getElementById(`chartLeads-${clientId}`), leadsBuckets);
+  renderBarChart(document.getElementById(`chartConverted-${clientId}`), convertedBuckets);
+  renderBarChart(document.getElementById(`chartLikes-${clientId}`), likesBuckets, { sum: true });
+  renderBarChart(document.getElementById(`chartPosts-${clientId}`), postsBuckets);
+  renderBarChart(document.getElementById(`chartReplyRate-${clientId}`), replyBuckets, { rate: true });
+}
+
+// ---------------------------------------------------------------------------
+// Editor de hashtags reutilizable (chips con boton de borrar + input para
+// agregar). Los hashtags se guardan como texto separado por espacios (mismo
+// formato que ya usa content_planner.py / socialbot_ai_settings.default_hashtags
+// / socialbot_content_plan_items.hashtags), en un <input type="hidden"> que
+// despues cada form/boton "Guardar" lee y persiste en Supabase.
+// ---------------------------------------------------------------------------
+function hashtagsToArray(str){
+  return (str||'').split(/\s+/).map(t => t.trim()).filter(Boolean).map(t => t.startsWith('#') ? t : '#'+t);
+}
+
+function hashtagEditorHtml(fieldId, hashtagsStr){
+  return `
+    <input type="hidden" name="default_hashtags" id="${fieldId}" value="${(hashtagsStr||'').replace(/"/g,'&quot;')}" />
+    <div class="hashtag-row" id="${fieldId}-chips"></div>
+    <div class="hashtag-add-row">
+      <input type="text" id="${fieldId}-input" placeholder="Agregar hashtag (ej: marketing)"
+        onkeydown="if(event.key==='Enter'){ event.preventDefault(); addHashtag('${fieldId}'); }" />
+      <button type="button" class="secondary" onclick="addHashtag('${fieldId}')">+ Agregar</button>
+    </div>`;
+}
+
+function renderHashtagChips(fieldId){
+  const hidden = document.getElementById(fieldId);
+  const chipsEl = document.getElementById(`${fieldId}-chips`);
+  if(!hidden || !chipsEl) return;
+  const tags = hashtagsToArray(hidden.value);
+  chipsEl.innerHTML = tags.map(t => `
+    <span class="hashtag-chip">${t}<button type="button" title="Quitar" onclick="removeHashtag('${fieldId}', '${t.replace(/'/g,"\\'")}')">&times;</button></span>
+  `).join('') || '<span class="meta-row" style="margin-top:0;">sin hashtags todavía</span>';
+}
+
+function addHashtag(fieldId){
+  const input = document.getElementById(`${fieldId}-input`);
+  let val = (input.value || '').trim();
+  if(!val) return;
+  if(!val.startsWith('#')) val = '#' + val;
+  val = val.replace(/\s+/g, '');
+  const hidden = document.getElementById(fieldId);
+  const tags = hashtagsToArray(hidden.value);
+  if(!tags.includes(val)) tags.push(val);
+  hidden.value = tags.join(' ');
+  input.value = '';
+  renderHashtagChips(fieldId);
+}
+
+function removeHashtag(fieldId, tag){
+  const hidden = document.getElementById(fieldId);
+  hidden.value = hashtagsToArray(hidden.value).filter(t => t !== tag).join(' ');
+  renderHashtagChips(fieldId);
+}
+
+// Extrae la etiqueta de etapa (ej: "[listo_para_comprar]") que la IA
+// antepone al campo interest, y devuelve el texto limpio + metadata
+// visual para pintar el badge.
+const LEAD_STAGE_META = {
+  listo_para_comprar: { label: 'Listo para comprar', color: '#16a34a', order: 0 },
+  potencial:           { label: 'Potencial',          color: '#2563eb', order: 1 },
+  interesado:          { label: 'Interesado',         color: '#ca8a04', order: 2 },
+  cliente_existente:   { label: 'Cliente existente',  color: '#6b7280', order: 3 },
+};
+
+function parseLeadStage(interestRaw) {
+  const raw = interestRaw || '';
+  const match = raw.match(/^\s*\[([a-z_]+)\]\s*(.*)$/i);
+  if (match && LEAD_STAGE_META[match[1]]) {
+    return {
+      stageKey: match[1],
+      stageMeta: LEAD_STAGE_META[match[1]],
+      text: match[2] || '—',
+    };
+  }
+  // Leads viejos (sin etiqueta) o etiqueta desconocida: se muestran igual,
+  // sin badge, para no romper nada de lo histórico.
+  return { stageKey: null, stageMeta: null, text: raw || '—' };
+}
+
+async function loadClients(){
+  const { data: clients } = await sb.from('socialbot_clients').select('*').order('created_at', { ascending:false });
+  const container = document.getElementById('clientsList');
+  container.innerHTML = '';
+
+  // Armamos el selector de clientes de arriba del dash, preservando la
+  // selección actual si ese cliente todavía existe.
+  const selector = document.getElementById('clientSelector');
+  const stillExists = selectedClientId === 'all' || (clients||[]).some(c => c.id === selectedClientId);
+  if(!stillExists) selectedClientId = 'all';
+  selector.innerHTML = `
+    <option value="all">— Todos los clientes —</option>
+    ${(clients||[]).map(c => `<option value="${c.id}" ${c.id === selectedClientId ? 'selected' : ''}>${c.name}</option>`).join('')}
+  `;
+  if(selectedClientId === 'all') selector.value = 'all';
+
+  for(const c of (clients||[])){
+    const { data: accounts } = await sb.from('socialbot_social_accounts').select('*').eq('client_id', c.id);
+    const { data: aiRows } = await sb.from('socialbot_ai_settings').select('*').eq('client_id', c.id);
+    const { data: slots } = await sb.from('socialbot_schedule_slots').select('*').eq('client_id', c.id).order('hour');
+    const { data: media } = await sb.from('socialbot_media_assets').select('*').eq('client_id', c.id).order('created_at', {ascending:false});
+    const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
+    const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(5);
+    const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
+    const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
+    const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
+    const { data: reviews } = await sb.from('socialbot_reviews').select('*').eq('client_id', c.id).order('review_created_at', { ascending:false }).limit(20);
+
+    const ai = (aiRows && aiRows[0]) || {};
+    const leadsNuevos = (leads||[]).filter(l => l.status === 'nuevo').length;
+    const reviewsNuevas = (reviews||[]).filter(r => r.status === 'nueva').length;
+
+    // Guardamos cliente + todas sus cuentas conectadas para poder abrir el
+    // modal "Editar cliente" sin volver a pedirle nada a Supabase, y para
+    // poder ubicar la cuenta correcta según la plataforma elegida (ver
+    // openEditClientModal / onEditClientPlatformChange).
+    clientsCache[c.id] = { client: c, accounts: accounts || [] };
+
+
+    // Para los medios tipo 'carousel' no hay una unica url en el propio
+    // media_asset; contamos cuantas imagenes tiene cada uno para mostrarlo
+    // en el resumen (ver socialbot_carousel_items).
+    const carouselMediaIds = (media||[]).filter(m => m.media_type === 'carousel').map(m => m.id);
+    let carouselCounts = {};
+    let carouselUrlsByAsset = {};
+    if(carouselMediaIds.length){
+      const { data: items } = await sb.from('socialbot_carousel_items').select('media_asset_id, url, position').in('media_asset_id', carouselMediaIds).order('position');
+      (items||[]).forEach(it => {
+        carouselCounts[it.media_asset_id] = (carouselCounts[it.media_asset_id]||0) + 1;
+        (carouselUrlsByAsset[it.media_asset_id] = carouselUrlsByAsset[it.media_asset_id] || []).push(it.url);
+      });
+    }
+
+    const div = document.createElement('div');
+    div.className = 'card client-card';
+    div.dataset.clientId = c.id;
+    div.innerHTML = `
+      <div class="card-row">
+        <div>
+          <span class="client-name">${c.name}</span>
+          <span class="pill ${c.active ? '' : 'off'}">${c.active ? 'activo' : 'pausado'}</span>
+        </div>
+        <div>
+          <button onclick="publishNow('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Publicar ahora</button>
+          <button class="secondary" onclick="toggleActive('${c.id}', ${c.active})">${c.active ? 'Pausar' : 'Reactivar'}</button>
+        </div>
+      </div>
+      <div class="meta-row">Link de venta: ${c.sales_link || '—'}</div>
+      <div class="meta-row">Cuentas conectadas: ${(accounts||[]).map(a => `${a.platform} (${a.page_name||a.page_id})`).join(', ') || 'ninguna aún'}</div>
+      <div class="meta-row">Acceso del cliente: ${c.client_email || 'sin asignar'} ${c.client_user_id ? '<span class="pill">ya entró</span>' : (c.client_email ? '<span class="pill off">pendiente</span>' : '')}</div>
+
+      ${(pendingPosts||[]).length ? `
+      <div style="margin-top:14px;">
+        <div class="meta-row" style="margin-bottom:6px;">
+          <strong>${pendingPosts.length} post(s) esperando aprobación</strong> — normalmente los aprueba el cliente desde su portal, pero también podés hacerlo vos acá (ej. si el cliente todavía no tiene acceso, o hay apuro).
+        </div>
+        <div class="btn-row" style="margin-bottom:10px;">
+          <button onclick="approveAllPending('${c.id}')">Aprobar todos (${pendingPosts.length})</button>
+          <button class="secondary" onclick="approveSelectedPending('${c.id}')">Aprobar selección</button>
+        </div>
+        <div data-client-pending="${c.id}">
+          ${pendingPosts.map(p => `
+            <div class="card pending" style="margin-top:8px;">
+              <div class="card-row" style="margin-bottom:6px;">
+                <label style="font-size:13px; color:var(--muted);">
+                  <input type="checkbox" class="pending-check" data-post-id="${p.id}" style="width:auto; vertical-align:middle;" />
+                  Seleccionar este post
+                </label>
+              </div>
+              <textarea id="agency-caption-${p.id}" rows="3">${(p.caption||'').replace(/</g,'&lt;')}</textarea>
+              <div class="btn-row">
+                <button class="secondary" onclick="saveCaptionAsAgency('${p.id}')">Guardar texto</button>
+                <button onclick="reviewPostAsAgency('${p.id}', 'approved')">Aprobar</button>
+                <button class="reject" onclick="reviewPostAsAgency('${p.id}', 'rejected')">Rechazar</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
+
+      <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
+        <input name="client_email" placeholder="Email del cliente (portal)" value="${c.client_email || ''}" />
+        <label style="font-size:13px; color:var(--muted);">
+          <input type="checkbox" name="require_approval" ${c.require_approval ? 'checked' : ''} style="width:auto; vertical-align:middle;" />
+          El cliente debe aprobar cada post antes de publicarse
+        </label>
+        <button type="submit" class="secondary">Guardar acceso</button>
+      </form>
+
+      <div class="meta-row" style="margin-top:10px;">
+        <label style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">
+          Enviar resumen de métricas ahora ${c.client_email ? '' : '(cargá un email de portal arriba primero)'}
+        </label>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <select id="reportPeriod-${c.id}" onchange="onReportPeriodChange('${c.id}')" style="width:auto;">
+            <option value="this_month">Este mes</option>
+            <option value="last_month">Mes pasado</option>
+            <option value="last_30_days">Últimos 30 días</option>
+            <option value="custom">Personalizado…</option>
+          </select>
+          <input type="date" id="reportStart-${c.id}" style="display:none; width:auto;" />
+          <input type="date" id="reportEnd-${c.id}" style="display:none; width:auto;" />
+          <button type="button" class="secondary" ${c.client_email ? '' : 'disabled'} onclick="sendReportNow('${c.id}')">Enviar resumen</button>
+        </div>
+      </div>
+
+      ${(planItems||[]).length ? `
+      <details>
+        <summary>📅 Plan semanal de contenido (IA) — ${planItems.length} idea(s)</summary>
+        <div class="meta-row" style="margin-bottom:8px;">
+          POST DE PUBLICACION (texto que va debajo del video, junto con los hashtags), generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá/rechaza o edita cada uno — el que quede aprobado se publica solo el día sugerido, con este texto y ese Hashtag.
+        </div>
+        <div class="plan-view-toggle" data-plan-toggle="${c.id}">
+          <button data-mode="list" class="${(planViewMode[c.id]||'list')==='list'?'active':''}" onclick="setPlanView('${c.id}','list')">📋 Lista</button>
+          <button data-mode="calendar" class="${planViewMode[c.id]==='calendar'?'active':''}" onclick="setPlanView('${c.id}','calendar')">📅 Calendario</button>
+        </div>
+        <div id="planCalView-${c.id}" style="display:${planViewMode[c.id]==='calendar'?'block':'none'};">
+          ${buildPlanCalendarHtml(planItems)}
+        </div>
+        <div id="planListView-${c.id}" style="display:${(planViewMode[c.id]||'list')==='list'?'block':'none'};">
+        ${planItems.map(item => `
+          <div class="card ${item.status === 'approved' ? '' : 'pending'}" style="margin-top:8px;">
+            <div class="meta-row" style="margin-bottom:6px;">
+              <strong>${new Date(item.target_date + 'T00:00:00').toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'short' })}</strong>
+              ${item.angle ? ` · <span class="pill">${item.angle}</span>` : ''}
+              ${item.status === 'approved' ? ' · <span class="pill">aprobado, se publica solo</span>' : ''}
+            </div>
+            ${item.based_on ? `<div class="meta-row" style="font-style:italic; margin-bottom:8px;">${item.based_on}</div>` : ''}
+            <textarea id="plan-caption-${item.id}" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
+            <label style="font-size:12px; color:var(--muted); display:block; margin-top:8px;">Hashtags de este post (los propuso la IA — editalos, borralos, o agregá los tuyos antes de aprobar)</label>
+            ${item.status === 'approved'
+              ? `<div class="hashtag-row">${hashtagsToArray(item.hashtags).map(t => `<span class="hashtag-chip" style="padding:3px 12px;">${t}</span>`).join('') || '<span class="meta-row" style="margin-top:0;">sin hashtags</span>'}</div>`
+              : hashtagEditorHtml(`plan-hashtags-${item.id}`, item.hashtags)}
+            <div class="btn-row">
+              ${item.status === 'approved' ? `
+                <button class="secondary" onclick="reviewContentPlanItem('${item.id}', 'proposed')">Volver a editar</button>
+                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
+              ` : `
+                <button class="secondary" onclick="saveContentPlanItem('${item.id}')">Guardar cambios</button>
+                <button onclick="reviewContentPlanItem('${item.id}', 'approved')">Aprobar (se publica con este texto y estos hashtags)</button>
+                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
+              `}
+            </div>
+          </div>
+        `).join('')}
+        </div>
+      </details>
+      ` : ''}
+
+      ${(reviews||[]).length ? `
+      <details ${reviewsNuevas ? 'open' : ''}>
+        <summary>⭐ Reseñas (Google/Facebook) — ${reviews.length} total${reviewsNuevas ? `, ${reviewsNuevas} nueva(s)` : ''}</summary>
+        <div class="meta-row" style="margin-bottom:8px;">
+          Se detectan solas cada pocas horas (scheduler/reviews_monitor.py). La respuesta sugerida la arma la IA — copiala y publicala vos desde Facebook/Google Business, revisando antes el tono.
+        </div>
+        ${reviews.map(r => {
+          const isNeg = r.recommendation_type === 'negative' || (r.rating && r.rating <= 2);
+          const isPos = r.recommendation_type === 'positive' || (r.rating && r.rating >= 4);
+          const stars = r.rating ? '⭐'.repeat(Math.round(r.rating)) : (r.recommendation_type === 'positive' ? '👍 recomienda' : r.recommendation_type === 'negative' ? '👎 no recomienda' : '');
+          return `
+          <div class="review-card ${isNeg ? 'negative' : isPos ? 'positive' : ''}">
+            <div class="meta-row" style="margin-top:0;">
+              <strong>${r.platform === 'google' ? 'Google' : 'Facebook'}</strong> · ${stars} · ${r.author_name || 'anónimo'}
+              ${r.status !== 'nueva' ? ` · <span class="pill">${r.status}</span>` : ''}
+            </div>
+            <div style="margin-top:4px;">${(r.review_text || '(sin texto)').replace(/</g,'&lt;')}</div>
+            ${r.suggested_reply ? `<div class="review-suggested">💬 Sugerencia: ${r.suggested_reply.replace(/</g,'&lt;')}</div>` : ''}
+            ${r.status === 'nueva' ? `
+              <div class="btn-row">
+                <button class="secondary" onclick="copyReviewReply('${r.id}')">Copiar respuesta sugerida</button>
+                <button class="secondary" onclick="setReviewStatus('${r.id}', 'respondida')">Marcar como respondida</button>
+                <button class="reject" onclick="setReviewStatus('${r.id}', 'ignorada')">Ignorar</button>
+              </div>
+            ` : ''}
+          </div>`;
+        }).join('')}
+      </details>
+      ` : ''}
+
+      <details>
+        <summary>Configurar IA (${ai.provider || 'sin configurar'})</summary>
+        <form class="inline" onsubmit="saveAi(event, '${c.id}')">
+          <div class="grid2">
+            <select name="provider">
+              <option value="groq" ${ai.provider==='groq'?'selected':''}>Groq (gratis)</option>
+              <option value="openai" ${ai.provider==='openai'?'selected':''}>OpenAI</option>
+              <option value="claude" ${ai.provider==='claude'?'selected':''}>Claude</option>
+            </select>
+            <input name="tone" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
+          </div>
+          <label style="font-size:13px; color:var(--muted);">Modelo para el plan semanal de contenido (Fase 6) — independiente del de arriba, para no compartir cuota gratuita con las respuestas automáticas</label>
+          <select name="content_plan_provider">
+            <option value="groq" ${ai.content_plan_provider==='groq'?'selected':''}>Groq (gratis)</option>
+            <option value="openai" ${ai.content_plan_provider==='openai'?'selected':''}>OpenAI</option>
+            <option value="claude" ${ai.content_plan_provider==='claude'?'selected':''}>Claude</option>
+          </select>
+          <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
+          <label style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando 2-4 propios del tema del día. Si el cliente cargó sus propios hashtags desde su portal, los de él tienen prioridad sobre estos.</label>
+          ${hashtagEditorHtml(`hashtags-${c.id}`, ai.default_hashtags)}
+          <label style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</label>
+          <textarea name="knowledge_base" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
+          <textarea name="system_prompt" placeholder="Instrucciones para la IA">${ai.system_prompt||''}</textarea>
+          <button type="submit">Guardar configuración</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Horarios de publicación (${(slots||[]).length})</summary>
+        ${(slots||[]).map(s => `
+          <form class="inline" onsubmit="updateSlot(event, '${s.id}', '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+            <div class="grid2">
+              <input name="hour" type="number" min="0" max="23" value="${s.hour}" placeholder="Hora (0-23)" required />
+              <input name="minute" type="number" min="0" max="59" value="${s.minute}" placeholder="Minuto" />
+            </div>
+            <select name="day_of_week">
+              <option value="" ${!s.day_of_week ? 'selected' : ''}>Todos los días</option>
+              <option value="1" ${s.day_of_week===1?'selected':''}>Lunes</option>
+              <option value="2" ${s.day_of_week===2?'selected':''}>Martes</option>
+              <option value="3" ${s.day_of_week===3?'selected':''}>Miércoles</option>
+              <option value="4" ${s.day_of_week===4?'selected':''}>Jueves</option>
+              <option value="5" ${s.day_of_week===5?'selected':''}>Viernes</option>
+              <option value="6" ${s.day_of_week===6?'selected':''}>Sábado</option>
+              <option value="7" ${s.day_of_week===7?'selected':''}>Domingo</option>
+            </select>
+            <label class="meta-row" style="margin-top:0;"><input type="checkbox" name="active" ${s.active ? 'checked' : ''} style="width:auto; vertical-align:middle;" /> Activo</label>
+            <div class="grid2">
+              <button type="submit">Guardar cambios</button>
+              <button type="button" class="secondary" onclick="deleteSlot('${s.id}', '${c.id}')">Eliminar</button>
+            </div>
+          </form>
+        `).join('') || '<div>sin horarios</div>'}
+        <form class="inline" onsubmit="addSlot(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+          <div class="grid2">
+            <input name="hour" type="number" min="0" max="23" placeholder="Hora (0-23)" required />
+            <input name="minute" type="number" min="0" max="59" placeholder="Minuto" value="0" />
+          </div>
+          <select name="day_of_week">
+            <option value="">Todos los días</option>
+            <option value="1">Lunes</option>
+            <option value="2">Martes</option>
+            <option value="3">Miércoles</option>
+            <option value="4">Jueves</option>
+            <option value="5">Viernes</option>
+            <option value="6">Sábado</option>
+            <option value="7">Domingo</option>
+          </select>
+          <button type="submit">Agregar horario</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Medios para publicar (${(media||[]).length})</summary>
+        ${(media||[]).map(m => `
+          <form class="inline" onsubmit="updateMedia(event, '${m.id}', '${c.id}', '${m.media_type}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+            <div class="meta-row">${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x</div>
+            ${m.media_type === 'carousel' ? `
+            <textarea name="carousel_urls" placeholder="Una URL de imagen por línea (entre 2 y 10)">${(carouselUrlsByAsset[m.id]||[]).join('\n')}</textarea>
+            ` : `
+            <input name="url" value="${(m.url||'').replace(/"/g,'&quot;')}" placeholder="URL pública del video/imagen (https://...)" />
+            <input name="fb_photo_url" value="${(m.fb_photo_url||'').replace(/"/g,'&quot;')}" placeholder="URL de foto para Facebook (opcional, solo si es video)" />
+            `}
+            <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez.">${m.caption_override||''}</textarea>
+            <input name="hashtags_override" value="${(m.hashtags_override||'').replace(/"/g,'&quot;')}" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta)" />
+            <div class="btn-row">
+              <button type="submit" class="secondary">Guardar cambios</button>
+              <button type="button" class="reject" onclick="deleteMedia('${m.id}', '${c.id}')">Eliminar</button>
+            </div>
+          </form>
+        `).join('') || '<div class="meta-row">sin medios cargados</div>'}
+        <form class="inline" onsubmit="addMedia(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+          <div class="meta-row" style="font-weight:600;">Agregar medio nuevo</div>
+          <select name="media_type" onchange="toggleMediaTypeFields(this)">
+            <option value="video">Video / Reel</option>
+            <option value="image">Imagen</option>
+            <option value="carousel">Carrusel (varias imágenes)</option>
+          </select>
+          <input name="url" placeholder="URL pública del video/imagen (https://...)" />
+          <textarea name="carousel_urls" placeholder="Solo para carrusel: una URL de imagen por línea (entre 2 y 10)" style="display:none;"></textarea>
+          <input name="fb_photo_url" placeholder="URL de foto para Facebook (opcional, solo si el medio de arriba es un video). Si la cargás, en Facebook se publica esta foto en vez del video." />
+          <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez."></textarea>
+          <input name="hashtags_override" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta). Se agregan al final del caption fijo de arriba." />
+          <label class="meta-row" style="margin-top:0;">Si el cliente cargó su propio texto/hashtags fijos desde su portal, los del cliente tienen prioridad sobre estos.</label>
+          <button type="submit">Agregar medio</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Reglas de auto-respuesta (${(rules||[]).length})</summary>
+        ${(rules||[]).map(r => `
+          <form class="inline" onsubmit="updateRule(event, '${r.id}', '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+            <div class="grid2">
+              <input name="keyword" value="${(r.keyword||'').replace(/"/g,'&quot;')}" placeholder="Palabra clave" required />
+              <select name="match_type">
+                <option value="both" ${r.match_type==='both'?'selected':''}>Comentarios + DMs</option>
+                <option value="comment" ${r.match_type==='comment'?'selected':''}>Solo comentarios</option>
+                <option value="dm" ${r.match_type==='dm'?'selected':''}>Solo DMs</option>
+              </select>
+            </div>
+            <textarea name="reply_template" placeholder="Respuesta. Usá {{sales_link}} para el link" required>${r.reply_template||''}</textarea>
+            <div class="grid2">
+              <button type="submit">Guardar cambios</button>
+              <button type="button" class="secondary" onclick="deleteRule('${r.id}', '${c.id}')">Eliminar</button>
+            </div>
+          </form>
+        `).join('') || '<div>sin reglas</div>'}
+        <form class="inline" onsubmit="addRule(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+          <input name="keyword" placeholder="Palabra clave (ej: precio, quiero, info)" required />
+          <select name="match_type">
+            <option value="both">Comentarios + DMs</option>
+            <option value="comment">Solo comentarios</option>
+            <option value="dm">Solo DMs</option>
+          </select>
+          <textarea name="reply_template" placeholder="Respuesta. Usá {{sales_link}} para el link" required></textarea>
+          <button type="submit">Agregar regla</button>
+        </form>
+      </details>
+
+      <details>
+        <summary>Últimas publicaciones</summary>
+        <div>${(posts||[]).map(p => `<div class="status-${p.status}">[${p.status}] ${(p.caption||'').slice(0,80)}...</div>`).join('') || 'todavía no hay publicaciones'}</div>
+      </details>
+
+      <details open>
+        <summary>Métricas</summary>
+        <div id="metrics-${c.id}"></div>
+      </details>
+
+      <details>
+        <summary>Leads capturados (${(leads||[]).length}${leadsNuevos ? ` · ${leadsNuevos} sin contactar` : ''})</summary>
+        ${(leads||[])
+          .slice()
+          .sort((a, b) => {
+            const oa = parseLeadStage(a.interest).stageMeta?.order ?? 99;
+            const ob = parseLeadStage(b.interest).stageMeta?.order ?? 99;
+            return oa - ob;
+          })
+          .map(l => {
+            const { stageMeta, text } = parseLeadStage(l.interest);
+            const badge = stageMeta
+              ? `<span style="display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; background:${stageMeta.color}; margin-bottom:4px;">${stageMeta.label}</span>`
+              : '';
+            return `
+          <div class="card" style="margin-top:8px; padding:12px 14px;">
+            <div class="card-row">
+              <div>
+                <strong>${l.name || 'Sin nombre'}</strong>
+                <div class="meta-row" style="margin-top:2px;">${l.platform} · ${l.contact || 'sin contacto'}</div>
+              </div>
+              <select onchange="updateLeadStatus('${l.id}', this.value)">
+                <option value="nuevo" ${l.status==='nuevo'?'selected':''}>Nuevo</option>
+                <option value="contactado" ${l.status==='contactado'?'selected':''}>Contactado</option>
+                <option value="convertido" ${l.status==='convertido'?'selected':''}>Convertido</option>
+                <option value="descartado" ${l.status==='descartado'?'selected':''}>Descartado</option>
+              </select>
+            </div>
+            <div>${badge}</div>
+            <div class="meta-row">Interés: ${text}</div>
+            <div class="meta-row" style="font-style:italic;">"${(l.source_text||'').replace(/"/g,'&quot;').slice(0,140)}"</div>
+            <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${l.created_at ? new Date(l.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
+            ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${l.post_permalink ? `<a href="${l.post_permalink}" target="_blank" rel="noopener">Ver publicación de origen</a>` : `Post: ${l.post_id}`}</div>` : ''}
+          </div>
+        `;}).join('') || '<div class="meta-row">sin leads todavía</div>'}
+      </details>
+    `;
+    container.appendChild(div);
+
+    // Los chips de hashtags se pintan despues de insertar el HTML (necesitan
+    // que el <input type="hidden"> ya exista en el DOM).
+    renderHashtagChips(`hashtags-${c.id}`);
+    (planItems||[]).filter(item => item.status !== 'approved').forEach(item => renderHashtagChips(`plan-hashtags-${item.id}`));
+
+    // Metricas: se cargan aparte (funcion propia) porque tienen su propio
+    // toggle semanal/mensual y se re-renderizan solas sin recargar toda
+    // la tarjeta del cliente cuando se cambia el periodo.
+    renderMetrics(c.id);
+  }
+
+  applyClientFilter();
+}
+
+async function toggleActive(clientId, current){
+  await sb.from('socialbot_clients').update({ active: !current }).eq('id', clientId);
+  loadClients();
+}
+
+async function saveClientPortalAccess(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const clientEmail = f.get('client_email');
+  
+  // Guardar email y require_approval en la BD
+  const { data: client, error } = await sb.from('socialbot_clients').update({
+    client_email: clientEmail || null,
+    require_approval: f.get('require_approval') === 'on',
+  }).eq('id', clientId).select().single();
+  
+  if(error){
+    alert('Error al guardar: ' + error.message);
+    return;
+  }
+
+  // Si hay email, enviar magic link automático (mismo método que usa
+  // cliente.html para el login del cliente: sb.auth.signInWithOtp).
+  // Ya no depende de la Edge Function send-client-magic-link.
+  if(clientEmail && clientEmail.trim()){
+    const { error: otpError } = await sb.auth.signInWithOtp({
+      email: clientEmail.trim(),
+      options: { emailRedirectTo: CLIENT_PORTAL_URL }
+    });
+    if(otpError){
+      alert(`Acceso guardado, pero no se pudo enviar el link: ${otpError.message}`);
+    } else {
+      alert(`Acceso guardado. Magic link enviado a ${clientEmail}`);
+    }
+  } else {
+    alert('Acceso guardado (sin email de cliente).');
+  }
+  
+  loadClients();
+}
+
+// Edita una cuenta ya conectada (UPDATE por id). Crear cuentas nuevas se
+// hace únicamente desde el modal "Nuevo cliente" (createClient), para que
+// cada sección tenga un solo trabajo: esta solo edita lo que ya existe.
+async function saveAccount(e, accountId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const patch = {
+    platform: f.get('platform'),
+    page_id: f.get('page_id'),
+    ig_business_id: f.get('ig_business_id') || null,
+    page_name: f.get('page_name'),
+    page_access_token: f.get('page_access_token'),
+  };
+
+  const { error } = await sb.from('socialbot_social_accounts').update(patch).eq('id', accountId);
+  if (error){ alert(error.message); return; }
+  alert('Cuenta actualizada.');
+  loadClients();
+}
+
+async function saveAi(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  await sb.from('socialbot_ai_settings').upsert({
+    client_id: clientId,
+    provider: f.get('provider'),
+    content_plan_provider: f.get('content_plan_provider'),
+    tone: f.get('tone'),
+    default_hashtags: f.get('default_hashtags'),
+    topics: f.get('topics'),
+    knowledge_base: f.get('knowledge_base'),
+    system_prompt: f.get('system_prompt'),
+  }, { onConflict: 'client_id' });
+  loadClients();
+}
+
+async function addSlot(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const dow = f.get('day_of_week');
+  await sb.from('socialbot_schedule_slots').insert({
+    client_id: clientId,
+    hour: parseInt(f.get('hour')),
+    minute: parseInt(f.get('minute') || 0),
+    day_of_week: dow ? parseInt(dow) : null,
+  });
+  loadClients();
+}
+
+async function updateSlot(e, slotId, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const dow = f.get('day_of_week');
+  await sb.from('socialbot_schedule_slots').update({
+    hour: parseInt(f.get('hour')),
+    minute: parseInt(f.get('minute') || 0),
+    day_of_week: dow ? parseInt(dow) : null,
+    active: f.get('active') === 'on',
+  }).eq('id', slotId);
+  loadClients();
+}
+
+async function deleteSlot(slotId, clientId){
+  if(!confirm('¿Eliminar este horario?')) return;
+  await sb.from('socialbot_schedule_slots').delete().eq('id', slotId);
+  loadClients();
+}
+
+function toggleMediaTypeFields(selectEl){
+  const form = selectEl.closest('form');
+  const isCarousel = selectEl.value === 'carousel';
+  form.querySelector('[name="url"]').style.display = isCarousel ? 'none' : 'block';
+  form.querySelector('[name="carousel_urls"]').style.display = isCarousel ? 'block' : 'none';
+  form.querySelector('[name="fb_photo_url"]').style.display = isCarousel ? 'none' : 'block';
+}
+
+async function addMedia(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const mediaType = f.get('media_type');
+
+  if(mediaType === 'carousel'){
+    const urls = (f.get('carousel_urls') || '').split('\n').map(u => u.trim()).filter(Boolean);
+    if(urls.length < 2 || urls.length > 10){
+      alert('Un carrusel necesita entre 2 y 10 imágenes (una URL por línea).');
+      return;
+    }
+    const { data: createdAsset, error } = await sb.from('socialbot_media_assets').insert({
+      client_id: clientId,
+      url: null,
+      media_type: 'carousel',
+      caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
+    }).select();
+    if(error){ alert(error.message); return; }
+    const assetId = createdAsset[0].id;
+    const itemRows = urls.map((url, i) => ({ media_asset_id: assetId, url, position: i }));
+    await sb.from('socialbot_carousel_items').insert(itemRows);
+  } else {
+    const url = f.get('url');
+    if(!url){ alert('Cargá la URL del medio.'); return; }
+    await sb.from('socialbot_media_assets').insert({
+      client_id: clientId,
+      url,
+      media_type: mediaType,
+      caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
+      fb_photo_url: f.get('fb_photo_url') || null,
+    });
+  }
+  loadClients();
+}
+
+async function updateMedia(e, mediaId, clientId, mediaType){
+  e.preventDefault();
+  const f = new FormData(e.target);
+
+  if(mediaType === 'carousel'){
+    const urls = (f.get('carousel_urls') || '').split('\n').map(u => u.trim()).filter(Boolean);
+    if(urls.length < 2 || urls.length > 10){
+      alert('Un carrusel necesita entre 2 y 10 imágenes (una URL por línea).');
+      return;
+    }
+    await sb.from('socialbot_media_assets').update({
+      caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
+    }).eq('id', mediaId);
+    // Reemplazamos todos los items del carrusel por la lista nueva (mas simple
+    // y confiable que tratar de "matchear" cuales cambiaron una por una).
+    await sb.from('socialbot_carousel_items').delete().eq('media_asset_id', mediaId);
+    const itemRows = urls.map((url, i) => ({ media_asset_id: mediaId, url, position: i }));
+    await sb.from('socialbot_carousel_items').insert(itemRows);
+  } else {
+    const url = f.get('url');
+    if(!url){ alert('Cargá la URL del medio.'); return; }
+    await sb.from('socialbot_media_assets').update({
+      url,
+      fb_photo_url: f.get('fb_photo_url') || null,
+      caption_override: f.get('caption_override') || null,
+      hashtags_override: f.get('hashtags_override') || null,
+    }).eq('id', mediaId);
+  }
+  loadClients();
+}
+
+async function deleteMedia(mediaId, clientId){
+  if(!confirm('¿Eliminar este medio? Si tenía un post ya generado usándolo, ese post no se ve afectado, pero el medio ya no se va a poder volver a usar.')) return;
+  await sb.from('socialbot_media_assets').delete().eq('id', mediaId);
+  loadClients();
+}
+
+async function addRule(e, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  await sb.from('socialbot_auto_reply_rules').insert({
+    client_id: clientId,
+    keyword: f.get('keyword'),
+    match_type: f.get('match_type'),
+    reply_template: f.get('reply_template'),
+  });
+  loadClients();
+}
+
+async function updateRule(e, ruleId, clientId){
+  e.preventDefault();
+  const f = new FormData(e.target);
+  await sb.from('socialbot_auto_reply_rules').update({
+    keyword: f.get('keyword'),
+    match_type: f.get('match_type'),
+    reply_template: f.get('reply_template'),
+  }).eq('id', ruleId);
+  loadClients();
+}
+
+async function deleteRule(ruleId, clientId){
+  if(!confirm('¿Eliminar esta regla?')) return;
+  await sb.from('socialbot_auto_reply_rules').delete().eq('id', ruleId);
+  loadClients();
+}
+
+async function updateLeadStatus(leadId, status){
+  await sb.from('socialbot_leads').update({ status, updated_at: new Date().toISOString() }).eq('id', leadId);
+  loadClients();
+}
+
+// ---------------------------------------------------------------------------
+// Item 8 de PROPUESTAS-AGENCIA.md: reseñas de Google/Facebook. Guardadas por
+// scheduler/reviews_monitor.py con su respuesta sugerida ya generada -- acá
+// solo se copia el texto (clipboard) y se marca el estado una vez que Fede
+// la publicó a mano (o decidió ignorarla).
+// ---------------------------------------------------------------------------
+async function copyReviewReply(reviewId){
+  const { data } = await sb.from('socialbot_reviews').select('suggested_reply').eq('id', reviewId).maybeSingle();
+  const text = data?.suggested_reply || '';
+  try {
+    await navigator.clipboard.writeText(text);
+    alert('Respuesta copiada. Pegala en Facebook/Google Business y publicala vos.');
+  } catch (e) {
+    prompt('Copiá el texto manualmente:', text);
+  }
+}
+
+async function setReviewStatus(reviewId, status){
+  await sb.from('socialbot_reviews').update({ status }).eq('id', reviewId);
+  loadClients();
+}
+
+// ---------------------------------------------------------------------------
+// FASE 5: la agencia tambien puede aprobar/rechazar (y editar el texto de)
+// un post pendiente, ademas del cliente desde su propio portal. No hace
+// falta ninguna funcion RPC especial para esto (a diferencia del cliente):
+// la agencia ya tiene UPDATE directo sobre estas filas via la policy
+// "owner sees own posts" (0001_init.sql, "for all"). El scheduler publica
+// lo aprobado en la siguiente corrida sin importar quien lo aprobo.
+// ---------------------------------------------------------------------------
+async function reviewPostAsAgency(postId, decision){
+  const { error } = await sb.from('socialbot_posts').update({ approval_status: decision }).eq('id', postId);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+// Aprueba de una todos los posts pendientes de este cliente (sin tildar nada).
+async function approveAllPending(clientId){
+  const ids = Array.from(document.querySelectorAll(`[data-client-pending="${clientId}"] .pending-check`)).map(cb => cb.dataset.postId);
+  if(!ids.length) return;
+  if(!confirm(`¿Aprobar los ${ids.length} post(s) pendientes de este cliente?`)) return;
+  const { error } = await sb.from('socialbot_posts').update({ approval_status: 'approved' }).in('id', ids);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+// Aprueba solo los posts que el usuario tildó con el checkbox de cada tarjeta.
+async function approveSelectedPending(clientId){
+  const ids = Array.from(document.querySelectorAll(`[data-client-pending="${clientId}"] .pending-check:checked`)).map(cb => cb.dataset.postId);
+  if(!ids.length){ alert('No tildaste ningún post.'); return; }
+  const { error } = await sb.from('socialbot_posts').update({ approval_status: 'approved' }).in('id', ids);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+async function saveCaptionAsAgency(postId){
+  const value = document.getElementById(`agency-caption-${postId}`).value;
+  const { error } = await sb.from('socialbot_posts').update({ caption: value }).eq('id', postId);
+  if(error){ alert(error.message); return; }
+  alert('Texto guardado.');
+}
+
+// ---------------------------------------------------------------------------
+// FASE 6: revisar (editar/aprobar/rechazar) items del plan semanal de
+// contenido generado por IA (scheduler/content_planner.py). Mismo criterio
+// de RLS que el resto del panel de agencia: "owner sees own
+// content_plan_items" (0013_content_plan.sql) le da UPDATE directo, sin
+// necesitar ninguna función RPC.
+// ---------------------------------------------------------------------------
+async function saveContentPlanItem(itemId){
+  const caption = document.getElementById(`plan-caption-${itemId}`).value;
+  const hashtagsField = document.getElementById(`plan-hashtags-${itemId}`);
+  const hashtags = hashtagsField ? hashtagsField.value : undefined;
+  const { error } = await sb.from('socialbot_content_plan_items').update({ caption, hashtags }).eq('id', itemId);
+  if(error){ alert(error.message); return; }
+  alert('Texto y hashtags guardados.');
+}
+
+async function reviewContentPlanItem(itemId, status){
+  const patch = { status, reviewed_at: new Date().toISOString() };
+  const { error } = await sb.from('socialbot_content_plan_items').update(patch).eq('id', itemId);
+  if(error){ alert(error.message); return; }
+  loadClients();
+}
+
+boot();
+
+// Registro del Service Worker (PWA LaVMK Agencia). Va al final, después de
+// boot(), para no competir por prioridad de red con la carga inicial de
+// datos de Supabase. Si el navegador no soporta SW (raro hoy en día) o el
+// registro falla, la app sigue funcionando igual, solo sin modo offline.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => {
+      console.warn('No se pudo registrar el service worker:', err);
+    });
+  });
+}
+</script>
+
+</body>
+</html>
