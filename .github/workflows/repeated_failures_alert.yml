@@ -1,0 +1,32 @@
+name: Alerta de fallos de publicación recurrentes
+
+on:
+  schedule:
+    # Todos los días, 09:00 America/Sao_Paulo (UTC-3) = 12:00 UTC.
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}   # permite dispararlo manualmente desde GitHub para probar
+
+jobs:
+  chequear:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r scheduler/requirements.txt
+
+      - name: Chequear fallos recurrentes y avisar a la agencia
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          REPEATED_FAILURES_THRESHOLD: ${{ secrets.REPEATED_FAILURES_THRESHOLD }}
+          REPEATED_FAILURES_HOURS: ${{ secrets.REPEATED_FAILURES_HOURS }}
+        run: python scheduler/repeated_failures_alert.py
