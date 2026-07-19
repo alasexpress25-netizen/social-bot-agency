@@ -1073,6 +1073,18 @@ def publish_instagram(ig_business_id, page_access_token, caption, media_url, med
 # Logica principal
 # ---------------------------------------------------------------------------
 def pick_media(client_id):
+    # Si la corrida viene del boton "Publicar ahora" de una card puntual en
+    # la pestaña Medios, MANUAL_MEDIA_ID viene seteado y usamos ESE medio
+    # exacto en vez del criterio de siempre (el menos usado / mas viejo).
+    # Si el ID no existe o no pertenece a este cliente, lo ignoramos y
+    # caemos al criterio normal (no rompemos la corrida por un ID invalido).
+    manual_media_id = os.environ.get("MANUAL_MEDIA_ID") or None
+    if manual_media_id:
+        assets = sb_get("socialbot_media_assets", {"id": f"eq.{manual_media_id}", "client_id": f"eq.{client_id}"})
+        if assets:
+            return assets[0]
+        print(f"MANUAL_MEDIA_ID={manual_media_id} no encontrado para este cliente, se usa el criterio normal.")
+
     assets = sb_get("socialbot_media_assets", {"client_id": f"eq.{client_id}", "order": "times_used.asc", "limit": "1"})
     if not assets:
         return None
