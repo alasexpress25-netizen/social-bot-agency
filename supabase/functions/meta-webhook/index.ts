@@ -142,6 +142,7 @@ Deno.serve(async (req: Request) => {
               commentId: change.value.comment_id,
               text: change.value.message ?? "",
               senderId: change.value.from?.id,
+              senderName: change.value.from?.name ?? null,
               postId: change.value.post_id ?? null,
             });
           }
@@ -152,6 +153,7 @@ Deno.serve(async (req: Request) => {
               commentId: change.value.id,
               text: change.value.text ?? "",
               senderId: change.value.from?.id,
+              senderName: change.value.from?.username ?? change.value.from?.name ?? null,
               postId: change.value.media?.id ?? null,
             });
           }
@@ -650,7 +652,7 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
   }
 }
 
-async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection, postId: string | null = null) {
+async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection, postId: string | null = null, senderName: string | null = null) {
   if (!senderId) return;
 
   // Guardamos el "stage" como tag al principio de interest (ej: "[potencial]
@@ -661,13 +663,20 @@ async function saveLead(clientId: string, platform: string, senderId: string, ex
   const stageTag = lead.stage && lead.stage !== "no_lead" ? `[${lead.stage}] ` : "";
   const interestText = lead.interest ? `${stageTag}${lead.interest}` : (stageTag || null);
 
+  // El nombre real del comentario (username de Instagram, o nombre de
+  // Facebook) que viene directo del webhook de Meta es mas confiable que
+  // cualquier nombre que la IA haya podido inferir del propio texto del
+  // mensaje (eso solo pasa si la persona se presento por su nombre) -- por
+  // eso senderName tiene prioridad; lead.name queda como respaldo.
+  const resolvedName = senderName ?? lead.name ?? null;
+
   await supabase.from("socialbot_leads").upsert(
     {
       client_id: clientId,
       platform,
       sender_id: senderId,
       external_id: externalId,
-      name: lead.name,
+      name: resolvedName,
       contact: lead.contact,
       interest: interestText,
       source_text: sourceText,
@@ -732,8 +741,8 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
 }
 
 // ---------------------------------------------------------------------------
-async function handleComment(params: { platform: string; pageId: string; commentId: string; text: string; senderId?: string; postId?: string | null }) {
-  const { platform, pageId, commentId, text, senderId, postId } = params;
+async function handleComment(params: { platform: string; pageId: string; commentId: string; text: string; senderId?: string; senderName?: string | null; postId?: string | null }) {
+  const { platform, pageId, commentId, text, senderId, senderName, postId } = params;
   if (!commentId) return;
 
   const account = await findSocialAccountAndClient(platform, pageId);
@@ -826,7 +835,7 @@ async function handleComment(params: { platform: string; pageId: string; comment
   }
 
   if (leadToSave?.is_hot) {
-    await saveLead(account.client_id, platform, senderId ?? "", commentId, text, leadToSave, postId ?? null);
+    await saveLead(account.client_id, platform, senderId ?? "", commentId, text, leadToSave, postId ?? null, senderName ?? null);
   }
 
   const endpoint =
