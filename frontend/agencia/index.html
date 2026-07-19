@@ -266,6 +266,8 @@
       <input type="hidden" id="editClientAccountId" />
       <input id="editClientName" placeholder="Nombre del cliente / negocio" required />
       <input id="editClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" />
+      <input id="editClientLogoUrl" placeholder="URL del logo del cliente (para su portal)" />
+      <img id="editClientLogoPreview" src="" alt="" style="display:none; max-height:48px; max-width:120px; object-fit:contain; margin-top:-4px;" onerror="this.style.display='none';" onload="this.style.display='block';" />
 
       <details>
         <summary>Conectar cuenta de Facebook / Instagram</summary>
@@ -343,6 +345,10 @@ function openEditClientModal(clientId){
   document.getElementById('editClientId').value = client.id;
   document.getElementById('editClientName').value = client.name || '';
   document.getElementById('editClientLink').value = client.sales_link || '';
+  document.getElementById('editClientLogoUrl').value = client.logo_url || '';
+  const logoPreview = document.getElementById('editClientLogoPreview');
+  logoPreview.src = client.logo_url || '';
+  logoPreview.style.display = client.logo_url ? 'block' : 'none';
   document.getElementById('editClientGooglePlaceId').value = client.google_place_id || '';
   document.getElementById('editClientPlatform').value = account ? account.platform : 'facebook';
   fillEditAccountFields(account);
@@ -375,15 +381,22 @@ function closeEditClientModal(){
   document.getElementById('editClientModal').classList.remove('open');
 }
 
+document.getElementById('editClientLogoUrl').addEventListener('input', (e) => {
+  const preview = document.getElementById('editClientLogoPreview');
+  preview.src = e.target.value || '';
+  if(!e.target.value) preview.style.display = 'none';
+});
+
 async function saveClientEdit(e){
   e.preventDefault();
   const clientId = document.getElementById('editClientId').value;
   const accountId = document.getElementById('editClientAccountId').value;
   const name = document.getElementById('editClientName').value;
   const sales_link = document.getElementById('editClientLink').value;
+  const logo_url = document.getElementById('editClientLogoUrl').value || null;
   const google_place_id = document.getElementById('editClientGooglePlaceId').value || null;
 
-  const { error } = await sb.from('socialbot_clients').update({ name, sales_link, google_place_id }).eq('id', clientId);
+  const { error } = await sb.from('socialbot_clients').update({ name, sales_link, logo_url, google_place_id }).eq('id', clientId);
   if(error){ alert(error.message); return; }
 
   // Igual que en createClient: page_id y page_access_token son NOT NULL en
@@ -991,7 +1004,8 @@ async function loadClients(){
     div.dataset.clientId = c.id;
     div.innerHTML = `
       <div class="card-row">
-        <div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          ${c.logo_url ? `<img src="${c.logo_url}" alt="" style="width:28px; height:28px; object-fit:contain; border-radius:6px;" onerror="this.style.display='none';" />` : ''}
           <span class="client-name">${c.name}</span>
           <span class="pill ${c.active ? '' : 'off'}">${c.active ? 'activo' : 'pausado'}</span>
         </div>
