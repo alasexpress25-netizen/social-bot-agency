@@ -113,7 +113,10 @@
 <body>
 
 <header>
-  <h1 id="headerTitle">Mi panel</h1>
+  <div style="display:flex; align-items:center; gap:12px;">
+    <img id="clientLogo" src="" alt="" style="display:none; width:36px; height:36px; object-fit:contain; border-radius:8px;" onerror="this.style.display='none';" />
+    <h1 id="headerTitle">Mi panel</h1>
+  </div>
   <div>
     <button onclick="toggleLang()" class="secondary" style="padding:6px 12px; font-size:13px;" id="langBtn">PT</button>
     <span class="tag" id="userTag"></span>
@@ -476,6 +479,11 @@ async function boot(){
 
   currentClient = claimed;
   document.getElementById('headerTitle').innerText = currentClient.name;
+  const logoEl = document.getElementById('clientLogo');
+  if(currentClient.logo_url){
+    logoEl.src = currentClient.logo_url;
+    logoEl.style.display = 'block';
+  }
   loadAll();
 }
 
