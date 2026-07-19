@@ -278,27 +278,57 @@ def _clean_external_id(raw_id):
 def _build_permalink(platform, raw_external_id, access_token):
     """
     Item 15 de PROPUESTAS-AGENCIA.md ("Link a la publicación real").
-    Facebook: el id que devuelve Graph API al publicar ya viene con formato
-    "{page-id}_{post-id}", que funciona directo como facebook.com/{id} sin
-    llamada extra. Instagram no tiene ese atajo (el media id no arma una URL
-    valida por si solo) asi que se pide el field 'permalink' a Graph API.
-    Best-effort: si falla o no hay dato, devuelve None y no rompe el flujo
-    de publicacion (el post ya se publico igual).
+
+    Facebook: NO alcanza con armar "facebook.com/{id}" a mano -- eso solo
+    funciona para posts de Página "normales". Cuando el video falla y se
+    sube una foto de fallback (o una foto manual), Meta devuelve el ID de
+    un objeto Photo, y ese tipo de objeto no soporta el campo
+    "permalink_url" (tira error "nonexisting field"); en cambio SI expone
+    "link" (con formato photo.php?fbid=...&set=...). Para no adivinar mal
+    el tipo de objeto, probamos permalink_url primero y, si ese campo no
+    existe para este objeto puntual, reintentamos con link. Si Meta
+    devuelve una ruta relativa (le pasa a veces con permalink_url en
+    reels, ej. "/reel/123/"), se completa con el dominio.
+
+    Instagram: el media id no arma una URL valida por si solo, asi que se
+    pide el field 'permalink' a Graph API (ese si devuelve URL absoluta
+    siempre).
+
+    Best-effort: si todo falla, devuelve None (o, para Facebook, la URL
+    generica de siempre) y no rompe el flujo de publicacion (el post ya se
+    publico igual).
     """
     clean_id = _clean_external_id(raw_external_id)
     if not clean_id:
         return None
+
+    if platform == "facebook":
+        for field in ("permalink_url", "link"):
+            try:
+                r = requests.get(
+                    f"https://graph.facebook.com/{GRAPH_API_VERSION}/{clean_id}",
+                    params={"fields": field, "access_token": access_token},
+                    timeout=15,
+                )
+                r.raise_for_status()
+                value = r.json().get(field)
+                if value:
+                    return value if value.startswith("http") else f"https://www.facebook.com{value}"
+            except Exception as e:
+                print(f"[_build_permalink] campo '{field}' no disponible para {clean_id}: {e}")
+                continue
+        # Ningun campo funciono (objeto sin permiso, o tipo no contemplado
+        # arriba) -- como ultimo recurso, la URL generica de siempre.
+        return f"https://www.facebook.com/{clean_id}"
+
     try:
-        if platform == "facebook":
-            return f"https://www.facebook.com/{clean_id}"
-        else:
-            r = requests.get(
-                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{clean_id}",
-                params={"fields": "permalink", "access_token": access_token},
-                timeout=15,
-            )
-            r.raise_for_status()
-            return r.json().get("permalink")
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{clean_id}",
+            params={"fields": "permalink", "access_token": access_token},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json().get("permalink")
     except Exception as e:
         print(f"[_build_permalink] no se pudo obtener permalink para {clean_id}: {e}")
         return None
