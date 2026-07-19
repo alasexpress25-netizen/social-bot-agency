@@ -11,56 +11,119 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="LA Visual" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
-    --ink:#1a1d23; --paper:#f7f6f3; --line:#e1ddd4;
-    --accent:#3d5a4c; --accent-soft:#e8efe9; --warn:#a34e3a; --warn-soft:#f6e8e4;
-    --muted:#6b6a66; --radius:10px;
+    /* Paleta sacada de lavisualmk.alastecno.com (index.html de la web) */
+    --black:#020202; --dark:#0a0a0a; --dark2:#111111;
+    --gold:#C9A244; --gold2:#e8c96a;
+    --white:#FFFFFF; --gray:#F2F2F2;
+    --font-title:'Cinzel', serif; --font-body:'Montserrat', sans-serif;
+
+    /* Mapeo a los nombres de variable que ya usa toda la hoja de estilos
+       (asi el resto del CSS existente hereda la paleta nueva sin tener que
+       reescribir cada regla una por una). */
+    --ink:var(--white); --paper:var(--black); --line:#242220;
+    --accent:var(--gold); --accent-soft:#241f14; --warn:#c0564a; --warn-soft:#2a1512;
+    --muted:#9a9a9a; --radius:10px;
   }
   *{box-sizing:border-box;}
   body{
     margin:0; background:var(--paper); color:var(--ink);
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-family:var(--font-body);
     font-size:15px; line-height:1.5;
   }
-  header{
-    padding:24px 28px; border-bottom:1px solid var(--line);
-    display:flex; align-items:baseline; justify-content:space-between;
+  h1, h2, .brand-title{ font-family:var(--font-title); letter-spacing:0.02em; }
+
+  /* ─── Barra superior (logo + nombre del cliente + salir) ────────────── */
+  .topbar{
+    position:fixed; top:0; left:0; right:0; height:64px; z-index:50;
+    background:var(--dark); border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 20px;
   }
-  header h1{ font-size:20px; margin:0; }
-  header .tag{ color:var(--muted); font-size:13px; }
-  main{ max-width:760px; margin:0 auto; padding:28px; }
+  .topbar .brand{ display:flex; align-items:center; gap:12px; min-width:0; }
+  .topbar .brand img{ width:34px; height:34px; object-fit:contain; border-radius:8px; flex-shrink:0; }
+  .topbar .brand-fallback{
+    width:34px; height:34px; border:1.5px solid var(--gold); border-radius:6px; transform:rotate(45deg);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  .topbar .brand-fallback span{ transform:rotate(-45deg); color:var(--gold); font-family:var(--font-title); font-size:13px; }
+  .topbar h1{ font-size:16px; margin:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--white); }
+  .topbar .tag{ color:var(--muted); font-size:12px; }
+  .topbar .right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  @media (max-width:480px){
+    .topbar .tag{ display:none; } /* en celular no entra el email completo junto al boton Salir */
+  }
+
+  /* ─── Layout: sidebar fija a la izquierda + contenido ────────────────── */
+  .layout{ display:flex; padding-top:64px; min-height:100vh; }
+  .sidebar{
+    position:fixed; top:64px; left:0; bottom:0; width:84px; z-index:40;
+    background:var(--dark2); border-right:1px solid var(--line);
+    display:flex; flex-direction:column; align-items:stretch; gap:2px;
+    padding:14px 0; overflow-y:auto;
+  }
+  .sidebar button.nav-item{
+    background:none; border:none; color:var(--muted); cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; gap:5px;
+    padding:12px 4px; font-size:10.5px; font-family:var(--font-body); font-weight:600;
+    text-transform:uppercase; letter-spacing:0.03em; border-radius:0; position:relative;
+  }
+  .sidebar button.nav-item svg{ width:22px; height:22px; stroke:var(--muted); fill:none; stroke-width:1.6; transition:stroke .15s; }
+  .sidebar button.nav-item span{ line-height:1.15; text-align:center; }
+  .sidebar button.nav-item:hover{ color:var(--gold2); }
+  .sidebar button.nav-item:hover svg{ stroke:var(--gold2); }
+  .sidebar button.nav-item.active{ color:var(--gold); }
+  .sidebar button.nav-item.active svg{ stroke:var(--gold); }
+  .sidebar button.nav-item.active::before{
+    content:''; position:absolute; left:0; top:6px; bottom:6px; width:3px;
+    background:var(--gold); border-radius:0 3px 3px 0;
+  }
+  .sidebar button.nav-item .nav-badge{
+    position:absolute; top:6px; right:14px; width:8px; height:8px; border-radius:50%;
+    background:var(--warn); border:1.5px solid var(--dark2);
+  }
+  main{ margin-left:84px; flex:1; max-width:760px; padding:28px; width:100%; }
+  .page{ display:none; }
+  .page.active{ display:block; }
+  .page-title{
+    display:flex; align-items:center; gap:10px; margin-bottom:4px;
+  }
+  .page-title svg{ width:22px; height:22px; stroke:var(--gold); fill:none; stroke-width:1.6; }
+  .page-title h2{ font-size:18px; margin:0; color:var(--white); font-weight:600; }
+
   .auth-box{ max-width:360px; margin:80px auto; text-align:center; }
   .auth-box input{
     width:100%; padding:11px 12px; margin-bottom:10px; border:1px solid var(--line);
-    border-radius:var(--radius); font-size:14px; background:#fff;
+    border-radius:var(--radius); font-size:14px; background:var(--dark); color:var(--white);
   }
   .auth-box input.code-input{
     text-align:center; letter-spacing:6px; font-size:20px; font-weight:600;
   }
   button{
-    background:var(--accent); color:#fff; border:none; padding:10px 18px;
-    border-radius:var(--radius); font-size:14px; cursor:pointer; font-weight:500;
+    background:var(--gold); color:var(--black); border:none; padding:10px 18px;
+    border-radius:99px; font-size:13px; cursor:pointer; font-weight:700;
+    text-transform:uppercase; letter-spacing:0.05em; font-family:var(--font-body);
   }
-  button:hover{ opacity:0.92; }
-  button.secondary{ background:transparent; color:var(--accent); border:1px solid var(--accent); }
-  button.reject{ background:var(--warn); }
+  button:hover{ background:var(--gold2); }
+  button.secondary{ background:transparent; color:var(--gold); border:1px solid var(--gold); }
+  button.secondary:hover{ background:var(--accent-soft); color:var(--gold2); border-color:var(--gold2); }
+  button.reject{ background:var(--warn); color:var(--white); }
+  button.reject:hover{ background:#d66a5d; }
   button:disabled{ opacity:0.5; cursor:default; }
   section{ margin-bottom:32px; }
   section h2{ font-size:14px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:12px; font-weight:600; }
-  section details{ margin-top:0; }
-  section summary{ font-size:14px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); font-weight:600; cursor:pointer; margin-bottom:12px; }
-  section summary::marker{ color:var(--accent); }
-  section details[open] summary{ margin-bottom:12px; }
-  section details > *:not(summary):first-of-type{ margin-top:0; }
-  .card{ background:#fff; border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:10px; }
-  .card.pending{ border-color:#d8c7a8; background:#fdfaf3; }
+  .card{ background:var(--dark); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:10px; }
+  .card.pending{ border-color:var(--gold); background:var(--accent-soft); }
   .meta-row{ color:var(--muted); font-size:13px; margin-top:6px; }
-  .pill{ display:inline-block; font-size:11px; padding:2px 9px; border-radius:99px; background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  .pill{ display:inline-block; font-size:11px; padding:2px 9px; border-radius:99px; background:var(--accent-soft); color:var(--gold); font-weight:600; }
   .pill.warn{ background:var(--warn-soft); color:var(--warn); }
   .btn-row{ display:flex; gap:8px; margin-top:12px; }
-  select, textarea, input{ padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%; font-family:inherit; }
+  select, textarea, input{ padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; width:100%; font-family:inherit; background:var(--dark); color:var(--white); }
   .posts-filter-row{ display:flex; flex-direction:column; gap:8px; }
   .posts-filter-row select{ width:100%; }
   @media (min-width:520px){
@@ -69,99 +132,173 @@
   }
   form.inline{ display:grid; gap:10px; margin-top:10px; }
   .empty{ color:var(--muted); font-size:13px; padding:12px 0; }
-  .section-hint{ color:var(--muted); font-size:12.5px; margin:-6px 0 12px; line-height:1.45; }
+  .section-hint{ color:var(--muted); font-size:12.5px; margin:6px 0 16px; line-height:1.45; }
   .divider-text{ color:var(--muted); font-size:12px; margin:16px 0; text-transform:uppercase; letter-spacing:0.04em; }
-  .link-btn{ background:none; border:none; color:var(--accent); font-size:13px; cursor:pointer; padding:0; text-decoration:underline; }
+  .link-btn{ background:none; border:none; color:var(--gold); font-size:13px; cursor:pointer; padding:0; text-decoration:underline; }
   .chart-wrap{ display:flex; align-items:flex-end; gap:6px; height:90px; padding:6px 0; }
   .chart-bar-col{ flex:1; text-align:center; }
-  .chart-bar{ background:var(--accent); border-radius:3px 3px 0 0; margin:0 auto; width:70%; }
+  .chart-bar{ background:var(--gold); border-radius:3px 3px 0 0; margin:0 auto; width:70%; }
   .chart-label{ font-size:10px; color:var(--muted); margin-top:4px; }
   .metric-title{ font-size:12px; color:var(--muted); margin-bottom:4px; }
   .kpi-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
-  .kpi-card{ background:var(--accent-soft); border-radius:var(--radius); padding:12px 14px; text-align:center; }
-  .kpi-value{ font-size:22px; font-weight:700; color:var(--accent); line-height:1.1; }
+  .kpi-card{ background:var(--accent-soft); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; text-align:center; }
+  .kpi-value{ font-size:22px; font-weight:700; color:var(--gold); line-height:1.1; font-family:var(--font-title); }
   .kpi-label{ font-size:11px; color:var(--muted); margin-top:4px; }
   .period-toggle{ display:flex; gap:6px; margin-bottom:12px; }
   .period-toggle button{ background:transparent; color:var(--muted); border:1px solid var(--line); padding:5px 12px; font-size:12px; }
-  .period-toggle button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .period-toggle button.active{ background:var(--gold); color:var(--black); border-color:var(--gold); }
   .hashtag-row{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
   .hashtag-chip{
-    display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
+    display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--gold);
     border-radius:99px; padding:3px 6px 3px 12px; font-size:12.5px; font-weight:600;
   }
   .hashtag-chip button{
-    background:none; border:none; color:var(--accent); padding:0 6px; font-size:14px; font-weight:700;
+    background:none; border:none; color:var(--gold); padding:0 6px; font-size:14px; font-weight:700;
     cursor:pointer; line-height:1; border-radius:50%;
   }
-  .hashtag-chip button:hover{ background:rgba(61,90,76,0.18); }
+  .hashtag-chip button:hover{ background:rgba(201,162,68,0.18); }
   .hashtag-add-row{ display:flex; gap:6px; margin-top:8px; }
   .hashtag-add-row input{ flex:1; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; }
   .hashtag-add-row button{ padding:6px 12px; font-size:12.5px; }
   #installBanner{
     display:none; position:fixed; left:12px; right:12px; bottom:12px; z-index:999;
-    background:var(--ink); color:#fff; border-radius:var(--radius);
-    padding:14px 16px; box-shadow:0 6px 20px rgba(0,0,0,0.25);
+    background:var(--dark2); color:var(--white); border-radius:var(--radius);
+    padding:14px 16px; box-shadow:0 6px 20px rgba(0,0,0,0.5); border:1px solid var(--gold);
     align-items:center; gap:12px; max-width:420px; margin:0 auto;
   }
   #installBanner img{ width:36px; height:36px; border-radius:8px; flex-shrink:0; }
   #installBanner .installText{ flex:1; font-size:13px; line-height:1.35; }
   #installBanner .installBtns{ display:flex; gap:6px; flex-shrink:0; }
   #installBanner button{ font-size:12.5px; padding:7px 12px; }
-  #installBanner button.dismiss{ background:transparent; color:#fff; opacity:0.7; border:1px solid rgba(255,255,255,0.3); }
+  #installBanner button.dismiss{ background:transparent; color:var(--white); opacity:0.7; border:1px solid rgba(255,255,255,0.3); }
+
+  /* ─── Dashboard: tarjeta de "último post" estilo Instagram ──────────── */
+  .ig-card{
+    background:var(--dark); border:1px solid var(--line); border-radius:14px;
+    max-width:420px; overflow:hidden; margin-bottom:18px;
+  }
+  .ig-card .ig-head{ display:flex; align-items:center; gap:10px; padding:12px 14px; }
+  .ig-card .ig-avatar{ width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid var(--gold); flex-shrink:0; }
+  .ig-card .ig-avatar-fallback{
+    width:34px; height:34px; border-radius:50%; border:1.5px solid var(--gold); flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; font-family:var(--font-title); color:var(--gold); font-size:13px;
+  }
+  .ig-card .ig-headname{ font-weight:600; font-size:13.5px; color:var(--white); }
+  .ig-card .ig-headplatform{ font-size:11px; color:var(--muted); display:flex; align-items:center; gap:4px; }
+  .ig-card .ig-media{ width:100%; aspect-ratio:1/1; object-fit:cover; background:var(--dark2); display:block; }
+  .ig-card .ig-actions{ display:flex; align-items:center; gap:14px; padding:10px 14px 4px; }
+  .ig-card .ig-actions svg{ width:22px; height:22px; stroke:var(--white); fill:none; stroke-width:1.6; }
+  .ig-card .ig-likes{ padding:2px 14px 4px; font-size:13px; font-weight:600; color:var(--white); }
+  .ig-card .ig-caption{ padding:0 14px 14px; font-size:13px; color:var(--gray); line-height:1.5; }
+  .ig-card .ig-caption b{ color:var(--white); margin-right:6px; }
+  .ig-card .ig-date{ padding:0 14px 14px; font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; }
+  .dash-empty{
+    max-width:420px; border:1px dashed var(--line); border-radius:14px; padding:40px 20px;
+    text-align:center; color:var(--muted); font-size:13.5px;
+  }
+  .dash-empty img{ width:64px; height:64px; object-fit:contain; margin-bottom:14px; opacity:0.85; }
+  .pending-banner{
+    max-width:420px; background:var(--accent-soft); border:1px solid var(--gold); border-radius:var(--radius);
+    padding:14px 16px; margin-bottom:18px; display:flex; align-items:center; justify-content:space-between; gap:12px;
+  }
+  .pending-banner span{ font-size:13px; color:var(--white); }
 </style>
 </head>
 <body>
 
-<header>
-  <div style="display:flex; align-items:center; gap:12px;">
-    <img id="clientLogo" src="" alt="" style="display:none; width:36px; height:36px; object-fit:contain; border-radius:8px;" onerror="this.style.display='none';" />
+<div class="topbar">
+  <div class="brand">
+    <img id="clientLogo" src="" alt="" style="display:none;" onerror="this.style.display='none'; document.getElementById('clientLogoFallback').style.display='flex';" />
+    <div class="brand-fallback" id="clientLogoFallback"><span>M</span></div>
     <h1 id="headerTitle">Mi panel</h1>
   </div>
-  <div>
-    <button onclick="toggleLang()" class="secondary" style="padding:6px 12px; font-size:13px;" id="langBtn">PT</button>
+  <div class="right">
+    <button onclick="toggleLang()" class="secondary" style="padding:6px 12px; font-size:11px;" id="langBtn">PT</button>
     <span class="tag" id="userTag"></span>
+    <button onclick="logout()" class="secondary" style="padding:6px 14px; font-size:11px;" id="logoutBtn" data-i18n="logout">Salir</button>
   </div>
-</header>
-<div id="notYouBar" style="display:none; background:var(--accent-soft); color:var(--accent); font-size:13px; padding:10px 28px; text-align:center;">
-  <span id="notYouText"></span>
-  <button class="link-btn" onclick="logout()" id="notYouBtn" style="margin-left:6px;"></button>
 </div>
 
-<main>
-  <div class="auth-box" id="authBox">
-    <p style="color:var(--muted); margin-bottom:18px;" data-i18n="loginHint">Ingresá tu email para recibir un link de acceso</p>
-    <input type="email" id="email" placeholder="Email" />
-    <button onclick="sendMagicLink()" style="width:100%;" id="sendLinkBtn" data-i18n="sendLinkBtn">Enviarme el link de acceso</button>
-    <p id="authMsg" style="margin-top:14px; color:var(--accent); font-size:13px;"></p>
+<div id="authBox" class="auth-box" style="padding-top:64px;">
+  <p style="color:var(--muted); margin-bottom:18px;" data-i18n="loginHint">Ingresá tu email para recibir un link de acceso</p>
+  <input type="email" id="email" placeholder="Email" />
+  <button onclick="sendMagicLink()" style="width:100%;" id="sendLinkBtn" data-i18n="sendLinkBtn">Enviarme el link de acceso</button>
+  <p id="authMsg" style="margin-top:14px; color:var(--gold); font-size:13px;"></p>
 
-    <!-- Paso 2 (aparece despues de pedir el link): confirmar con el codigo
-         de 6 digitos que llega en el MISMO email, como alternativa al link.
-         Util cuando el link no funciona en la PC (algunos webmails/antivirus
-         "abren" el link ellos solos para revisarlo y lo consumen antes de
-         que el usuario lo clickee; el codigo no tiene ese problema). -->
-    <div id="codeBox" style="display:none; margin-top:22px; border-top:1px solid var(--line); padding-top:18px;">
-      <p style="color:var(--muted); font-size:13px; margin-bottom:10px;" data-i18n="codeHint">
-        ¿El link no funcionó? Ingresá el código de 6 dígitos que también llegó en ese email.
-      </p>
-      <input type="text" id="codeInput" class="code-input" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
-      <button onclick="verifyCode()" style="width:100%;" id="verifyCodeBtn" data-i18n="verifyCodeBtn">Confirmar código</button>
-      <p style="margin-top:10px;"><button class="link-btn" onclick="sendMagicLink(true)" data-i18n="resendBtn">Reenviar código / link</button></p>
-    </div>
+  <!-- Paso 2 (aparece despues de pedir el link): confirmar con el codigo
+       de 6 digitos que llega en el MISMO email, como alternativa al link.
+       Util cuando el link no funciona en la PC (algunos webmails/antivirus
+       "abren" el link ellos solos para revisarlo y lo consumen antes de
+       que el usuario lo clickee; el codigo no tiene ese problema). -->
+  <div id="codeBox" style="display:none; margin-top:22px; border-top:1px solid var(--line); padding-top:18px;">
+    <p style="color:var(--muted); font-size:13px; margin-bottom:10px;" data-i18n="codeHint">
+      ¿El link no funcionó? Ingresá el código de 6 dígitos que también llegó en ese email.
+    </p>
+    <input type="text" id="codeInput" class="code-input" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
+    <button onclick="verifyCode()" style="width:100%;" id="verifyCodeBtn" data-i18n="verifyCodeBtn">Confirmar código</button>
+    <p style="margin-top:10px;"><button class="link-btn" onclick="sendMagicLink(true)" data-i18n="resendBtn">Reenviar código / link</button></p>
   </div>
+</div>
 
-  <div id="app" style="display:none;">
+<div id="app" style="display:none;">
+  <div class="layout">
+    <nav class="sidebar">
+      <button class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')">
+        <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4.5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1V19a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/></svg>
+        <span data-i18n="navDashboard">Inicio</span>
+      </button>
+      <button class="nav-item" data-page="pending" id="navPendingBtn" style="display:none;" onclick="showPage('pending')">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 3.2"/></svg>
+        <span data-i18n="navPending">Aprobar</span>
+        <span class="nav-badge" id="navPendingBadge" style="display:none;"></span>
+      </button>
+      <button class="nav-item" data-page="posts" onclick="showPage('posts')">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span data-i18n="navPosts">Posts</span>
+      </button>
+      <button class="nav-item" data-page="metrics" onclick="showPage('metrics')">
+        <svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/><path d="M2 20h20"/></svg>
+        <span data-i18n="navMetrics">Métricas</span>
+      </button>
+      <button class="nav-item" data-page="leads" onclick="showPage('leads')">
+        <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        <span data-i18n="navLeads">Contactos</span>
+      </button>
+      <button class="nav-item" data-page="prefs" onclick="showPage('prefs')">
+        <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <span data-i18n="navPrefs">Sus posts</span>
+      </button>
+    </nav>
 
-    <section id="pendingSection" style="display:none;">
-      <details>
-        <summary data-i18n="pendingTitle">Posts esperando tu aprobación</summary>
+    <main>
+
+      <!-- ─── Dashboard / Inicio ──────────────────────────────────────── -->
+      <div class="page active" id="page-dashboard">
+        <div class="page-title">
+          <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4.5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1V19a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/></svg>
+          <h2 data-i18n="navDashboard">Inicio</h2>
+        </div>
+        <p class="section-hint" data-i18n="dashboardHint">Tu última publicación, tal como se ve en tus redes.</p>
+        <div id="pendingDashboardBanner"></div>
+        <div id="dashboardLastPost"></div>
+      </div>
+
+      <!-- ─── Posts esperando tu aprobación ───────────────────────────── -->
+      <div class="page" id="page-pending">
+        <div class="page-title">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 3.2"/></svg>
+          <h2 data-i18n="pendingTitle">Posts esperando tu aprobación</h2>
+        </div>
         <p class="section-hint" data-i18n="pendingHint">Estos posts ya fueron generados pero no se van a publicar hasta que vos los apruebes o rechaces. Podés editar el texto antes de aprobar. Si rechazás uno, se descarta para siempre (no se vuelve a intentar publicar).</p>
         <div id="pendingList"></div>
-      </details>
-    </section>
+      </div>
 
-    <section>
-      <details>
-        <summary data-i18n="postsTitle">Últimas publicaciones</summary>
+      <!-- ─── Últimas publicaciones ────────────────────────────────────── -->
+      <div class="page" id="page-posts">
+        <div class="page-title">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <h2 data-i18n="postsTitle">Últimas publicaciones</h2>
+        </div>
         <p class="section-hint" data-i18n="postsHint">Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.</p>
         <div class="posts-filter-row" style="margin-bottom:10px;">
           <select id="postsFilterDate" onchange="renderPostsList()">
@@ -174,12 +311,14 @@
           </select>
         </div>
         <div id="postsList"></div>
-      </details>
-    </section>
+      </div>
 
-    <section>
-      <details>
-        <summary data-i18n="metricsTitle">Métricas</summary>
+      <!-- ─── Métricas ─────────────────────────────────────────────────── -->
+      <div class="page" id="page-metrics">
+        <div class="page-title">
+          <svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/><path d="M2 20h20"/></svg>
+          <h2 data-i18n="metricsTitle">Métricas</h2>
+        </div>
         <p class="section-hint" data-i18n="metricsHint">Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.</p>
         <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
           <select id="reportPeriod" onchange="onReportPeriodChange()" style="width:auto;">
@@ -193,21 +332,25 @@
           <button type="button" class="secondary" id="sendReportBtn" data-i18n="sendReportBtn" onclick="sendMyReportNow()">Enviarme este resumen por email</button>
         </div>
         <div id="metricsBox"></div>
-      </details>
-    </section>
+      </div>
 
-    <section>
-      <details>
-        <summary data-i18n="leadsTitle">Contactos interesados</summary>
+      <!-- ─── Contactos interesados ────────────────────────────────────── -->
+      <div class="page" id="page-leads">
+        <div class="page-title">
+          <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          <h2 data-i18n="leadsTitle">Contactos interesados</h2>
+        </div>
         <p class="section-hint" data-i18n="leadsHint">Esta lista se completa sola: cuando alguien comenta o te escribe por Facebook/Instagram y la IA detecta que está interesado en comprar (pregunta precio, deja teléfono, etc.), lo agrega acá con sus datos. Es solo para consulta — el estado de contacto lo actualiza tu agencia.</p>
         <button type="button" class="secondary" style="margin-bottom:10px;" id="exportLeadsBtn" data-i18n="exportCsvBtn" onclick="exportLeadsCsv()">Exportar CSV</button>
         <div id="leadsList"></div>
-      </details>
-    </section>
+      </div>
 
-    <section>
-      <details>
-        <summary data-i18n="prefsTitle">Posts</summary>
+      <!-- ─── Sus posts (preferencias) ─────────────────────────────────── -->
+      <div class="page" id="page-prefs">
+        <div class="page-title">
+          <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          <h2 data-i18n="prefsTitle">Posts</h2>
+        </div>
         <p class="section-hint" data-i18n="prefsHint">Lo que cargues acá tiene prioridad sobre lo que carga la agencia. Si lo dejás vacío, se usa lo de la agencia; si la agencia tampoco cargó nada, la IA lo genera sola.</p>
         <div class="card">
           <form class="inline" onsubmit="saveAiPrefs(event)">
@@ -226,11 +369,11 @@
             <button type="submit" data-i18n="savePrefsBtn">Guardar cambios</button>
           </form>
         </div>
-      </details>
-    </section>
+      </div>
 
+    </main>
   </div>
-</main>
+</div>
 
 <div id="installBanner">
   <img src="icons/icon-192.png" alt="" />
@@ -277,6 +420,13 @@ const I18N = {
     postsHint: 'Historial de lo que el sistema ya publicó (o intentó publicar) en tus redes. Es solo para consulta — no se puede editar desde acá.',
     postsFilterAllDates: 'Todas las fechas',
     postsFilterAllPlatforms: 'Todas las plataformas',
+    navDashboard: 'Inicio', navPending: 'Aprobar', navPosts: 'Posts', navMetrics: 'Métricas',
+    navLeads: 'Contactos', navPrefs: 'Sus posts',
+    dashboardHint: 'Tu última publicación, tal como se ve en tus redes.',
+    dashboardEmpty: 'Todavía no hay publicaciones para mostrar acá.',
+    dashboardLikes: 'me gusta',
+    pendingBannerText: (n) => `Tenés ${n} post${n===1?'':'s'} esperando tu aprobación.`,
+    pendingBannerBtn: 'Revisar ahora',
     metricsTitle: 'Métricas',
     metricsHint: 'Contactos interesados que llegaron, cuántos se convirtieron en clientes, cuánto gustaron tus publicaciones, y qué tan seguido el sistema respondió automáticamente. Elegí ver por semana o por mes.',
     leadsTitle: 'Contactos interesados',
@@ -311,7 +461,6 @@ const I18N = {
     installText: 'Instalá la app para acceso más rápido, sin buscarla en el navegador cada vez.',
     installTextIos: 'Instalá la app: tocá el botón Compartir de Safari y elegí "Agregar a inicio".',
     installBtn: 'Instalar', installDismissBtn: 'Ahora no',
-    notYouText: (email) => `Conectado como ${email}.`, notYouBtn: '¿No sos vos? Salir',
   },
   pt: {
     logout: 'Sair', langBtnLabel: 'PT',
@@ -330,6 +479,13 @@ const I18N = {
     postsHint: 'Histórico do que o sistema já publicou (ou tentou publicar) nas suas redes. É apenas para consulta — não pode ser editado aqui.',
     postsFilterAllDates: 'Todas as datas',
     postsFilterAllPlatforms: 'Todas as plataformas',
+    navDashboard: 'Início', navPending: 'Aprovar', navPosts: 'Posts', navMetrics: 'Métricas',
+    navLeads: 'Contatos', navPrefs: 'Seus posts',
+    dashboardHint: 'Sua última publicação, do jeito que aparece nas suas redes.',
+    dashboardEmpty: 'Ainda não há publicações para mostrar aqui.',
+    dashboardLikes: 'curtidas',
+    pendingBannerText: (n) => `Você tem ${n} post${n===1?'':'s'} aguardando sua aprovação.`,
+    pendingBannerBtn: 'Revisar agora',
     metricsTitle: 'Métricas',
     metricsHint: 'Contatos interessados que chegaram, quantos viraram clientes, quanto suas publicações foram curtidas, e com que frequência o sistema respondeu automaticamente. Escolha ver por semana ou por mês.',
     leadsTitle: 'Contatos interessados',
@@ -364,7 +520,6 @@ const I18N = {
     installText: 'Instale o app para um acesso mais rápido, sem precisar procurar no navegador toda vez.',
     installTextIos: 'Instale o app: toque no botão Compartilhar da Safari e escolha "Adicionar à Tela de Início".',
     installBtn: 'Instalar', installDismissBtn: 'Agora não',
-    notYouText: (email) => `Conectado como ${email}.`, notYouBtn: 'Não é você? Sair',
   }
 };
 
@@ -392,10 +547,6 @@ function toggleLang(){
   applyStaticI18n();
   if(typeof isIos === 'function' && isIos() && document.getElementById('installBanner').style.display === 'flex'){
     document.getElementById('installText').innerText = t('installTextIos');
-  }
-  if(document.getElementById('notYouBar').style.display === 'block'){
-    document.getElementById('notYouText').innerText = t('notYouText')(document.getElementById('userTag').innerText);
-    document.getElementById('notYouBtn').innerText = t('notYouBtn');
   }
   // Re-renderiza todo lo dinamico si ya hay sesion activa
   if(currentClient) loadAll();
@@ -454,6 +605,14 @@ async function logout(){
   location.reload();
 }
 
+function normalizeUrl(url){
+  if(!url) return url;
+  const trimmed = url.trim();
+  if(/^https?:\/\//i.test(trimmed)) return trimmed;
+  if(trimmed.startsWith('//')) return 'https:' + trimmed;
+  return 'https://' + trimmed; // URLs pegadas sin esquema (ej: "lavisualmk.alastecno.com/...")
+}
+
 async function boot(){
   const { data: { session } } = await sb.auth.getSession();
   if(!session){ return; }
@@ -461,10 +620,6 @@ async function boot(){
   document.getElementById('authBox').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   document.getElementById('userTag').innerText = session.user.email;
-
-  document.getElementById('notYouText').innerText = t('notYouText')(session.user.email);
-  document.getElementById('notYouBtn').innerText = t('notYouBtn');
-  document.getElementById('notYouBar').style.display = 'block';
 
   // Reclama (o recupera) la fila de cliente vinculada a este usuario.
   // Corre server-side via RPC: valida el email de la sesion actual, no
@@ -481,14 +636,86 @@ async function boot(){
   document.getElementById('headerTitle').innerText = currentClient.name;
   const logoEl = document.getElementById('clientLogo');
   if(currentClient.logo_url){
-    logoEl.src = currentClient.logo_url;
+    logoEl.src = normalizeUrl(currentClient.logo_url);
     logoEl.style.display = 'block';
+    document.getElementById('clientLogoFallback').style.display = 'none';
   }
   loadAll();
 }
 
+// ---------------------------------------------------------------------------
+// Navegacion entre "paginas" del sidebar (sin acordeon: cada icono muestra
+// su seccion entera, tapando las demas). El dashboard es la pagina inicial.
+// ---------------------------------------------------------------------------
+function showPage(pageId){
+  document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.getElementById(`page-${pageId}`)?.classList.add('active');
+  document.querySelector(`.nav-item[data-page="${pageId}"]`)?.classList.add('active');
+  window.scrollTo(0, 0);
+}
+
 async function loadAll(){
-  await Promise.all([loadPending(), loadPosts(), loadLeads(), loadAiPrefs(), loadMetrics()]);
+  // loadPosts va antes que loadLeads (y no en el mismo Promise.all): la
+  // lista de leads usa window.__myPosts para el fallback del link a la
+  // publicación de origen, asi que necesita que los posts ya esten cargados.
+  await loadPosts();
+  await Promise.all([loadPending(), loadLeads(), loadAiPrefs(), loadMetrics(), loadDashboard()]);
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard: la ultima publicacion, mostrada como una tarjeta al estilo
+// Instagram (avatar del cliente + plataforma, imagen grande, corazon +
+// likes, caption) en vez de un link seco. Usa datos que ya estan en
+// Supabase (media_url, caption, likes via socialbot_post_metrics) — no
+// hace falta pegarle a la API de Meta en vivo.
+// ---------------------------------------------------------------------------
+async function loadDashboard(){
+  const { data: rows } = await sb.from('socialbot_posts')
+    .select('*, socialbot_post_metrics(likes)')
+    .eq('client_id', currentClient.id).eq('status', 'published')
+    .order('published_at', { ascending:false }).limit(1);
+
+  const container = document.getElementById('dashboardLastPost');
+  const post = (rows && rows[0]) || null;
+
+  if(!post){
+    const logoSrc = currentClient.logo_url ? normalizeUrl(currentClient.logo_url) : 'icons/icon-192.png';
+    container.innerHTML = `
+      <div class="dash-empty">
+        <img src="${logoSrc}" alt="" onerror="this.style.display='none';" />
+        <div>${t('dashboardEmpty')}</div>
+      </div>
+    `;
+    return;
+  }
+
+  const pMeta = PLATFORM_META[post.platform] || { label: '', icon: '' };
+  const likes = (post.socialbot_post_metrics && post.socialbot_post_metrics.likes) || 0;
+  const dateLabel = formatPostDate(post.published_at || post.created_at);
+  const clientLogoSrc = currentClient.logo_url ? normalizeUrl(currentClient.logo_url) : null;
+  const avatarHtml = clientLogoSrc
+    ? `<img class="ig-avatar" src="${clientLogoSrc}" alt="" onerror="this.outerHTML='<div class=&quot;ig-avatar-fallback&quot;>${(currentClient.name||'M')[0].toUpperCase()}</div>';" />`
+    : `<div class="ig-avatar-fallback">${(currentClient.name||'M')[0].toUpperCase()}</div>`;
+
+  container.innerHTML = `
+    <div class="ig-card">
+      <div class="ig-head">
+        ${avatarHtml}
+        <div>
+          <div class="ig-headname">${currentClient.name || ''}</div>
+          <div class="ig-headplatform">${pMeta.icon} ${pMeta.label}</div>
+        </div>
+      </div>
+      ${post.media_url ? `<img class="ig-media" src="${post.media_url}" alt="" onerror="this.style.display='none';" />` : ''}
+      <div class="ig-actions">
+        <svg viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z"/></svg>
+      </div>
+      <div class="ig-likes">${likes} ${t('dashboardLikes')}</div>
+      ${post.caption ? `<div class="ig-caption"><b>${currentClient.name || ''}</b>${post.caption.slice(0,220)}${post.caption.length>220?'...':''}</div>` : ''}
+      <div class="ig-date">${dateLabel}</div>
+    </div>
+  `;
 }
 
 // ---------------------------------------------------------------------------
@@ -538,14 +765,31 @@ async function loadPending(){
     .select('*').eq('client_id', currentClient.id).eq('approval_status', 'pending')
     .order('created_at', { ascending:false });
 
-  const section = document.getElementById('pendingSection');
+  const navBtn = document.getElementById('navPendingBtn');
+  const navBadge = document.getElementById('navPendingBadge');
+  const banner = document.getElementById('pendingDashboardBanner');
   const list = document.getElementById('pendingList');
 
   if(!pending || pending.length === 0){
-    section.style.display = 'none';
+    navBtn.style.display = 'none';
+    navBadge.style.display = 'none';
+    banner.innerHTML = '';
+    // Si el usuario estaba parado en la pagina de aprobacion y ya no queda
+    // nada pendiente (por ej. acaba de aprobar el ultimo), lo mandamos de
+    // vuelta al dashboard para que no se quede viendo una pagina vacia.
+    if(document.getElementById('page-pending').classList.contains('active')){
+      showPage('dashboard');
+    }
     return;
   }
-  section.style.display = 'block';
+  navBtn.style.display = 'flex';
+  navBadge.style.display = 'block';
+  banner.innerHTML = `
+    <div class="pending-banner">
+      <span>${t('pendingBannerText')(pending.length)}</span>
+      <button type="button" onclick="showPage('pending')">${t('pendingBannerBtn')}</button>
+    </div>
+  `;
 
   const cards = await Promise.all(pending.map(async p => {
     let mediaHtml = '';
@@ -664,7 +908,7 @@ function renderPostsList(){
       </div>
       <div style="margin-top:8px;">${(p.caption||'').slice(0,160)}...</div>
       ${p.status==='failed' && p.error_message ? `<div style="margin-top:6px; font-size:12px; color:#8b0000; font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
-      ${p.permalink_url ? `<div style="margin-top:6px;"><a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px;">Ver publicación ↗</a></div>` : ''}
+      ${p.permalink_url ? `<div style="margin-top:6px;"><a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px; color:var(--gold); text-decoration:underline; display:inline-flex; align-items:center; gap:4px;">Ver publicación<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a></div>` : ''}
     </div>
   `;}).join('');
 }
@@ -724,6 +968,13 @@ async function loadLeads(){
       const stageBadge = stageMeta
         ? `<span style="display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; background:${stageMeta.color}; margin-bottom:4px;">${stageMeta.label}</span>`
         : '';
+      // El permalink puede venir directo en el lead (l.post_permalink) o, si
+      // no está, lo buscamos entre los posts ya cargados para este cliente
+      // (mismo post_id) — así el link funciona aunque el webhook no haya
+      // guardado el permalink en el lead en su momento (mismo criterio que
+      // usa el panel de agencia).
+      const originPost = l.post_id ? (window.__myPosts || []).find(p => p.id === l.post_id) : null;
+      const permalink = l.post_permalink || (originPost && originPost.permalink_url) || null;
       const statusMeta = LEAD_STATUS_META[l.status] || LEAD_STATUS_META.nuevo;
       const statusLabel = statusLabels[l.status] || statusLabels.nuevo;
       // Solo lectura: pill con el estado tal cual está en la base, sin
@@ -742,7 +993,7 @@ async function loadLeads(){
       <div class="meta-row">${text || ''}</div>
       ${l.source_text ? `<div class="meta-row" style="font-style:italic;">"${l.source_text.replace(/"/g,'&quot;').slice(0,140)}"</div>` : ''}
       <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${l.created_at ? new Date(l.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
-      ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${l.post_permalink ? `<a href="${l.post_permalink}" target="_blank" rel="noopener">${t('viewLink')}</a>` : `Post: ${l.post_id}`}</div>` : ''}
+      ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${permalink ? `<a href="${permalink}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:underline;">${t('viewLink')}</a>` : `Post: ${l.post_id}`}</div>` : ''}
     </div>
   `;}).join('');
 }
