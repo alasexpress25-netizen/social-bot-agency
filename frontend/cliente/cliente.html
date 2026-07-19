@@ -425,6 +425,7 @@ const I18N = {
     dashboardHint: 'Tu última publicación, tal como se ve en tus redes.',
     dashboardEmpty: 'Todavía no hay publicaciones para mostrar acá.',
     dashboardLikes: 'me gusta',
+    dashboardViewLive: 'Ver publicación en vivo',
     pendingBannerText: (n) => `Tenés ${n} post${n===1?'':'s'} esperando tu aprobación.`,
     pendingBannerBtn: 'Revisar ahora',
     metricsTitle: 'Métricas',
@@ -484,6 +485,7 @@ const I18N = {
     dashboardHint: 'Sua última publicação, do jeito que aparece nas suas redes.',
     dashboardEmpty: 'Ainda não há publicações para mostrar aqui.',
     dashboardLikes: 'curtidas',
+    dashboardViewLive: 'Ver publicação ao vivo',
     pendingBannerText: (n) => `Você tem ${n} post${n===1?'':'s'} aguardando sua aprovação.`,
     pendingBannerBtn: 'Revisar agora',
     metricsTitle: 'Métricas',
@@ -714,6 +716,7 @@ async function loadDashboard(){
       <div class="ig-likes">${likes} ${t('dashboardLikes')}</div>
       ${post.caption ? `<div class="ig-caption"><b>${currentClient.name || ''}</b>${post.caption.slice(0,220)}${post.caption.length>220?'...':''}</div>` : ''}
       <div class="ig-date">${dateLabel}</div>
+      ${post.permalink_url ? `<div style="padding:0 14px 14px;"><a href="${post.permalink_url}" target="_blank" rel="noopener" style="font-size:12px; color:var(--white); text-decoration:underline; display:inline-flex; align-items:center; gap:4px;">${t('dashboardViewLive')}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a></div>` : ''}
     </div>
   `;
 }
@@ -908,7 +911,7 @@ function renderPostsList(){
       </div>
       <div style="margin-top:8px;">${(p.caption||'').slice(0,160)}...</div>
       ${p.status==='failed' && p.error_message ? `<div style="margin-top:6px; font-size:12px; color:#8b0000; font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
-      ${p.permalink_url ? `<div style="margin-top:6px;"><a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px; color:var(--gold); text-decoration:underline; display:inline-flex; align-items:center; gap:4px;">Ver publicación<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a></div>` : ''}
+      ${p.permalink_url ? `<div style="margin-top:6px;"><a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px; color:var(--white); text-decoration:underline; display:inline-flex; align-items:center; gap:4px;">Ver publicación<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a></div>` : ''}
     </div>
   `;}).join('');
 }
@@ -993,7 +996,7 @@ async function loadLeads(){
       <div class="meta-row">${text || ''}</div>
       ${l.source_text ? `<div class="meta-row" style="font-style:italic;">"${l.source_text.replace(/"/g,'&quot;').slice(0,140)}"</div>` : ''}
       <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${l.created_at ? new Date(l.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
-      ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${permalink ? `<a href="${permalink}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:underline;">${t('viewLink')}</a>` : `Post: ${l.post_id}`}</div>` : ''}
+      ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${permalink ? `<a href="${permalink}" target="_blank" rel="noopener" style="color:var(--white); text-decoration:underline;">${t('viewLink')}</a>` : `Post: ${l.post_id}`}</div>` : ''}
     </div>
   `;}).join('');
 }
