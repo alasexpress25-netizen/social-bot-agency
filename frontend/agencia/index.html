@@ -782,6 +782,25 @@ async function publishNow(clientId, clientName){
   }
 }
 
+async function publishMediaNow(mediaId, clientId, clientName){
+  if(!confirm(`¿Publicar este medio puntual de ${clientName} ahora mismo? Se va a usar ESTE medio (no el que le tocaría por rotación) en todas las cuentas conectadas del cliente.`)) return;
+  const btn = event.target;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Disparando...';
+  try {
+    const { data, error } = await sb.functions.invoke('trigger-manual-publish', { body: { client_id: clientId, media_id: mediaId } });
+    if(error){ throw error; }
+    if(data && data.error){ throw new Error(data.error); }
+    alert(`Listo, se disparó el workflow para ${clientName} con este medio. Puede tardar 1-2 minutos en verse el resultado — revisá la pestaña Actions de GitHub, o volvé a entrar acá en un rato para ver el post nuevo.`);
+  } catch(err){
+    alert(`No se pudo disparar: ${err.message || err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
 async function createClient(e){
   e.preventDefault();
   const name = document.getElementById('newClientName').value;
@@ -1541,6 +1560,7 @@ async function loadClients(){
           <input name="hashtags_override" value="${(m.hashtags_override||'').replace(/"/g,'&quot;')}" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta)" />
           <div class="btn-row">
             <button type="submit" class="secondary">Guardar cambios</button>
+            <button type="button" onclick="publishMediaNow('${m.id}', '${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Publicar ahora</button>
             <button type="button" class="reject" onclick="deleteMedia('${m.id}', '${c.id}')">Eliminar</button>
           </div>
         </form>
