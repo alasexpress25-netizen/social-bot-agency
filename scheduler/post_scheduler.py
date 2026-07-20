@@ -1121,6 +1121,14 @@ def publish_approved_pending_posts():
             continue
         account = accounts[0]
 
+        # Cliente pausado (ej. no pago este mes): no publicar aunque el post
+        # ya haya quedado aprobado antes de la pausa. Se queda en pending y
+        # se publica solo cuando el cliente se reactiva (active=true).
+        clients = sb_get("socialbot_clients", {"id": f"eq.{account['client_id']}", "active": "eq.true"})
+        if not clients:
+            print(f"Cliente {account['client_id']} pausado, se salta post {post['id']} (queda pendiente)")
+            continue
+
         # Reconstruimos el media (si tiene) por referencia directa al
         # media_asset_id guardado en el post -- ya no adivinamos por 'url',
         # que ademas no alcanza para carruseles (no tienen una unica url).
