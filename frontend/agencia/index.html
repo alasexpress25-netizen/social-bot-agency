@@ -1527,7 +1527,7 @@ async function loadClients(){
           <span class="pill ${c.active ? '' : 'off'}">${c.active ? 'activo' : 'pausado'}</span>
         </div>
         <div>
-          <button class="secondary" onclick="toggleActive('${c.id}', ${c.active})">${c.active ? 'Pausar' : 'Reactivar'}</button>
+          <button class="secondary" onclick="toggleActive('${c.id}', ${c.active}, '${(c.name||'').replace(/'/g,"\\'")}')">${c.active ? 'Pausar' : 'Reactivar'}</button>
           <button class="reject" onclick="openDeleteClientModal('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Eliminar</button>
         </div>
       </div>
@@ -1944,7 +1944,14 @@ async function loadClients(){
   applyClientFilter();
 }
 
-async function toggleActive(clientId, current){
+async function toggleActive(clientId, current, clientName){
+  const name = clientName || 'este cliente';
+  const msg = current
+    ? `¿Pausar a ${name}?\n\nMientras esté pausado:\n• No se van a generar ni publicar posts nuevos (ni los ya aprobados en espera).\n• La IA va a dejar de contestar comentarios y mensajes directos en Facebook/Instagram.\n• No se va a gastar cuota de IA ni recursos para este cliente.\n\nSe reactiva todo apretando "Reactivar" en cualquier momento.`
+    : `¿Reactivar a ${name}?\n\nVuelve a publicar posts según su horario y la IA vuelve a contestar comentarios y mensajes automáticamente.`;
+
+  if(!confirm(msg)) return;
+
   await sb.from('socialbot_clients').update({ active: !current }).eq('id', clientId);
   loadClients();
 }
