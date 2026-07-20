@@ -524,6 +524,26 @@
   </div>
 </div>
 
+<!-- Modal: Eliminar cliente (requiere confirmar con la contraseña del usuario logueado) -->
+<div class="modal-overlay" id="deleteClientModal" onclick="if(event.target===this) closeDeleteClientModal()">
+  <div class="modal-box">
+    <div class="card-row">
+      <h2 style="margin:0;">Eliminar cliente</h2>
+      <button type="button" class="modal-close" onclick="closeDeleteClientModal()">✕</button>
+    </div>
+    <p class="meta-row" style="margin-bottom:14px;">
+      Vas a eliminar a <strong id="deleteClientName" style="color:var(--white);"></strong> y todos sus datos (posts, cuentas conectadas, leads, métricas, etc). Esta acción no se puede deshacer.
+    </p>
+    <form class="inline" onsubmit="confirmDeleteClient(event)">
+      <input type="hidden" id="deleteClientId" />
+      <label style="font-size:13px; color:var(--muted);">Ingresá tu contraseña para confirmar</label>
+      <input type="password" id="deleteClientPassword" placeholder="Tu contraseña" required autocomplete="current-password" />
+      <div id="deleteClientError" class="meta-row" style="color:var(--warn); display:none;"></div>
+      <button type="submit" class="reject">Eliminar definitivamente</button>
+    </form>
+  </div>
+</div>
+
 <script>
 // ⚠️ Completá con los datos de tu proyecto Supabase (Settings > API)
 const SUPABASE_URL = "https://redaqqxoeciycqgjhpbv.supabase.co";
@@ -1507,8 +1527,8 @@ async function loadClients(){
           <span class="pill ${c.active ? '' : 'off'}">${c.active ? 'activo' : 'pausado'}</span>
         </div>
         <div>
-          <button onclick="publishNow('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Publicar ahora</button>
           <button class="secondary" onclick="toggleActive('${c.id}', ${c.active})">${c.active ? 'Pausar' : 'Reactivar'}</button>
+          <button class="reject" onclick="openDeleteClientModal('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Eliminar</button>
         </div>
       </div>
       <div class="meta-row">Link de venta: ${c.sales_link || '—'}</div>
@@ -1927,6 +1947,69 @@ async function loadClients(){
 async function toggleActive(clientId, current){
   await sb.from('socialbot_clients').update({ active: !current }).eq('id', clientId);
   loadClients();
+}
+
+// ---------------------------------------------------------------------------
+// Eliminar cliente — requiere reingresar la contraseña del usuario logueado
+// (no solo un confirm()). Se valida re-autenticando contra Supabase Auth con
+// signInWithPassword usando el email de la sesión actual: si la contraseña
+// es incorrecta, Supabase devuelve error y no se borra nada. No hace falta
+// guardar la contraseña en ningún lado del código ni conocerla de antemano.
+// ---------------------------------------------------------------------------
+function openDeleteClientModal(clientId, clientName){
+  document.getElementById('deleteClientId').value = clientId;
+  document.getElementById('deleteClientName').textContent = clientName;
+  document.getElementById('deleteClientPassword').value = '';
+  document.getElementById('deleteClientError').style.display = 'none';
+  document.getElementById('deleteClientModal').classList.add('open');
+}
+
+function closeDeleteClientModal(){
+  document.getElementById('deleteClientModal').classList.remove('open');
+}
+
+async function confirmDeleteClient(e){
+  e.preventDefault();
+  const clientId = document.getElementById('deleteClientId').value;
+  const password = document.getElementById('deleteClientPassword').value;
+  const errBox = document.getElementById('deleteClientError');
+  errBox.style.display = 'none';
+
+  const btn = e.target.querySelector('button[type="submit"]');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Verificando...';
+
+  try {
+    const { data: { user } } = await sb.auth.getUser();
+    if(!user || !user.email){
+      throw new Error('No se pudo identificar tu sesión. Volvé a iniciar sesión.');
+    }
+
+    // Re-autentica al usuario actual con la contraseña ingresada. Esto NO
+    // crea una sesión nueva de otro usuario: es el mismo usuario logueado
+    // confirmando que conoce su propia contraseña antes de un borrado
+    // irreversible.
+    const { error: authError } = await sb.auth.signInWithPassword({
+      email: user.email,
+      password,
+    });
+    if(authError){
+      throw new Error('Contraseña incorrecta.');
+    }
+
+    const { error: deleteError } = await sb.from('socialbot_clients').delete().eq('id', clientId);
+    if(deleteError) throw deleteError;
+
+    closeDeleteClientModal();
+    loadClients();
+  } catch(err){
+    errBox.textContent = err.message || 'No se pudo eliminar el cliente.';
+    errBox.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 async function saveClientPortalAccess(e, clientId){
