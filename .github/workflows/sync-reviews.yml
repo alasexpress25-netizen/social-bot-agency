@@ -1,0 +1,20 @@
+name: Sync reviews (Google/Facebook)
+
+on:
+  schedule:
+    # Corre todos los dias a las 09:00 UTC (06:00 Brasilia).
+    # Ajusta la hora si preferis otro horario -- formato cron estandar.
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+    # Permite tambien dispararlo a mano desde la pestana "Actions" de GitHub,
+    # sin esperar al horario programado (util para probar cambios).
+
+jobs:
+  sync-reviews:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call sync-reviews edge function
+        run: |
+          curl -sS -X POST "https://redaqqxoeciycqgjhpbv.supabase.co/functions/v1/sync-reviews" \
+            -H "Content-Type: application/json" \
+            -d '{}'
