@@ -14,71 +14,10 @@
 //   Callback URL: https://<tu-proyecto>.supabase.co/functions/v1/meta-webhook
 //   Verify Token: el mismo valor que pongas en META_WEBHOOK_VERIFY_TOKEN
 //
-// NOTA (15/07/2026): esta version restaura la logica de IA (Fase 1) y de
-// deteccion de leads (Fase 2), suma la "base de conocimiento" del negocio
-// (knowledge_base), y CORRIGE UN BUCLE DE RESPUESTAS DUPLICADAS: la propia
-// respuesta del bot es, para Meta, un comentario nuevo -- si no se filtra,
-// el webhook de "comments" puede volver a dispararse para ESE comentario
-// (hecho por la propia cuenta) y el bot termina respondiendose a si mismo
-// en cadena. Se agregan dos protecciones:
-//   1) Se ignora cualquier comentario/mensaje cuyo senderId sea la propia
-//      cuenta (page_id / ig_business_id) -- nunca se responde a si mismo.
-//   2) El comentario se "reserva" en socialbot_interactions_log ANTES de
-//      generar la respuesta (insert con unique constraint), no despues.
-//      Asi, si Meta reenvia el mismo evento casi al mismo tiempo (redelivery
-//      por timeout, comun en webhooks), la segunda llamada lo ve ya
-//      reservado y no dispara una segunda respuesta -- antes esta reserva
-//      ocurria recien al final, dejando una ventana en la que dos llamadas
-//      concurrentes podian pasar la validacion "ya fue manejado" y las dos
-//      terminar respondiendo.
-//
-// NOTA (15/07/2026, mas tarde) -- respuesta de "piso": se detecto que un
-// cliente real agoto su limite diario de IA (30/30) en unos minutos, y a
-// partir de ahi CUALQUIER comentario que no matcheara una keyword de
-// auto_reply_rules quedaba sin ninguna respuesta (silencio total) -- se vio
-// en una captura real: varios comentarios/leads sin contestar. Se agrega un
-// tercer nivel de fallback, sin costo de IA: socialbot_ai_settings.
-// fallback_reply_template (o un texto generico por defecto si esta vacio),
-// que se usa cuando no hay cuota de IA Y ninguna keyword matcheo. Asi ya no
-// puede quedar un mensaje sin ningun tipo de respuesta.
-//
-// NOTA (16/07/2026): el idioma de respuesta estaba fijo en portugues de
-// Brasil para TODOS los clientes (tenia sentido cuando el unico cliente con
-// IA activa era Impacto 3D, 100% Brasil). Al sumar clientes bilingues
-// (ej. Alas Tecno, que atiende Argentina y Brasil), se reemplaza por
-// socialbot_ai_settings.reply_language: "pt-BR" o "es" fuerzan ese idioma
-// siempre, "auto" hace que la IA detecte el idioma del mensaje entrante y
-// responda en el mismo. Default "pt-BR" para no cambiar el comportamiento
-// de clientes ya configurados antes de este campo.
-//
-// NOTA (17/07/2026): se detecto que Alas Tecno tenia comentarios reales
-// pidiendo directamente el producto ("quero um aplicativo") que la IA
-// respondia bien, pero NUNCA quedaban guardados en socialbot_leads -- el
-// criterio de is_hot que le pasabamos a Groq no cubria explicitamente "me
-// esta pidiendo el producto/servicio", solo daba ejemplos genericos
-// ("pregunta precio", "quiere agendar", etc.). Se reescribe ese criterio
-// para que sea mucho mas exhaustivo (buildLeadInstructions), y sobre todo
-// UNIVERSAL: vive aca, en el codigo compartido de la funcion, y usa
-// aiSettings.topics (que ya es un campo por cliente) para saber el rubro de
-// cada negocio sin hardcodear nada de un cliente puntual -- un cambio aca
-// aplica a todos los clientes actuales y a los que se agreguen despues, sin
-// tener que retocar el system_prompt de cada uno.
-//
-// Ademas se agregan dos redes de seguridad que NO dependen de que la IA
-// responda bien (ni de que este disponible):
-//   1) heuristicLeadDetection(): deteccion por palabras clave / regex de
-//      contacto, en codigo. Se usa como red de seguridad en dos casos: (a)
-//      cuando tryAiReply() devuelve null -- sin cuota diaria de IA o sin
-//      GROQ_API_KEY -- antes ahi se perdia CUALQUIER deteccion de lead por
-//      completo (se vio en los logs: dias con "limite_diario_alcanzado"
-//      repetido sin un solo lead guardado); y (b) como refuerzo cuando la
-//      IA SI respondio pero dijo is_hot=false y el texto igual tiene una
-//      señal de compra clara (para no depender 100% del criterio de un
-//      modelo chico/gratuito).
-//   2) Reincidencia: si el mismo sender_id ya tiene un lead guardado antes
-//      para este cliente, se anota (actualiza) el lead igual aunque el
-//      mensaje puntual no dispare ninguna señal por si solo -- volver a
-//      escribir ya es, en si mismo, señal de interes sostenido.
+// NOTA (20/07/2026): se agrega el chequeo de socialbot_clients.active en
+// handleComment/handleDm -- si el cliente esta pausado (ej. no pago este
+// mes), este webhook ya no gasta cuota de IA ni procesa nada para el hasta
+// que se reactive desde el panel de agencia.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -339,12 +278,6 @@ interface GroqReplyResult {
   sentiment: "negativo" | "neutral" | "positivo";
 }
 
-// ---------------------------------------------------------------------------
-// Deteccion de leads (2026-07-17) -- ver nota extensa al principio del
-// archivo. Este bloque se arma UNA sola vez y se le agrega a la llamada de
-// Groq de TODOS los clientes por igual (usa aiSettings.topics, campo por
-// cliente, sin hardcodear ningun rubro puntual).
-// ---------------------------------------------------------------------------
 function buildLeadInstructions(topics: string | null): string {
   const topicsLine = topics
     ? `El rubro/los productos y servicios de este negocio son: ${topics}.`
@@ -375,16 +308,6 @@ function buildLeadInstructions(topics: string | null): string {
   ].join(" ");
 }
 
-// ---------------------------------------------------------------------------
-// Propuesta 10 (PROPUESTAS-AGENCIA.md, 18/07/2026): ademas de detectar
-// leads, la misma llamada de IA ahora clasifica el "sentiment" del mensaje.
-// Antes, una "queja sin relacion al negocio" solo servia para NO marcarla
-// como lead (buildLeadInstructions), pero igual se le mandaba una respuesta
-// automatica de tono generico -- que puede sonar tonta o hasta peor frente
-// a un cliente enojado. Con sentiment="negativo", handleComment() NO manda
-// ninguna respuesta automatica: guarda el comentario en una cola para que
-// un humano de la agencia lo conteste a mano (ver saveFlaggedComment).
-// ---------------------------------------------------------------------------
 function buildComplaintInstructions(): string {
   return [
     `Ademas, clasifica el "sentiment" general del mensaje en EXACTAMENTE uno de estos valores:`,
@@ -395,11 +318,6 @@ function buildComplaintInstructions(): string {
   ].join(" ");
 }
 
-
-// los clientes actuales: Argentina y Brasil). Lista deliberadamente amplia
-// -- es una red de seguridad, no el criterio principal (ese lo hace la IA
-// con buildLeadInstructions), asi que preferimos algun falso positivo de
-// mas antes que dejar pasar un lead real.
 const BUYING_PHRASES = [
   // Español
   "precio", "presupuesto", "cotizacion", "cotización", "cuanto sale", "cuánto sale",
@@ -415,10 +333,6 @@ const BUYING_PHRASES = [
   "uma reunião", "ja sou cliente", "já sou cliente", "tenho contratado", "suporte",
 ];
 
-// Verbos/frases con las que alguien suele preguntar si el negocio ofrece
-// algo ("tienen apps?", "vocês fazem aplicativo?"). Combinados con una
-// palabra del rubro (topics), cuentan como lead aunque no haya ninguna
-// BUYING_PHRASE explicita.
 const OFFER_QUESTION_WORDS = [
   "tienen", "tenes", "tenés", "hacen", "hacés", "haces", "venden", "vendes", "ofrecen",
   "tem", "têm", "fazem", "vendem", "trabalham com",
@@ -435,11 +349,6 @@ function extractTopicWords(topics: string | null): string[] {
     .filter((t) => t.length > 2);
 }
 
-// Red de seguridad por palabras clave, independiente de la IA. Se usa (a)
-// cuando no hubo respuesta de IA (sin cuota diaria, sin GROQ_API_KEY, o
-// error de Groq), para que el lead no se pierda por completo, y (b) como
-// refuerzo cuando la IA SI respondio pero dijo is_hot=false y el texto
-// igual tiene una señal de compra clara.
 function heuristicLeadDetection(text: string, topics: string | null): LeadDetection | null {
   const lower = text.toLowerCase();
   const hasBuyingPhrase = BUYING_PHRASES.some((p) => lower.includes(p));
@@ -473,21 +382,6 @@ function heuristicLeadDetection(text: string, topics: string | null): LeadDetect
   };
 }
 
-// Reincidencia: si este sender_id ya tiene un lead guardado antes para este
-// cliente, volver a escribir es en si mismo una señal de interes sostenido
-// -- lo anotamos igual, aunque el mensaje puntual no dispare ninguna señal
-// por si solo (ni de la IA ni de la heuristica).
-// ---------------------------------------------------------------------------
-// Propuesta 11 (PROPUESTAS-AGENCIA.md, 18/07/2026): daily_ai_reply_limit es
-// por cliente, no por persona -- un mismo sender_id insistiendo (spam, o
-// alguien probando el sistema) puede consumir todo el cupo diario de IA de
-// un cliente antes de que lleguen leads reales de otras personas. Se agrega
-// un chequeo simple e independiente del limite diario: si el mismo
-// sender_id ya tiene mas de ANTI_SPAM_HOURLY_LIMIT interacciones registradas
-// en la ultima hora para este cliente, se deja de autoresponder (ni IA, ni
-// keyword, ni fallback) -- solo se loguea la interaccion (claimInteraction
-// ya la registro) para no perder rastro de que paso.
-// ---------------------------------------------------------------------------
 const DEFAULT_ANTI_SPAM_HOURLY_LIMIT = 5;
 
 async function isSenderSpamming(clientId: string, senderId: string | undefined | null, aiSettings: any): Promise<boolean> {
@@ -535,12 +429,6 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
     ? `Informacion real del negocio (usala como fuente de verdad; si la pregunta no esta cubierta aca, respondé de forma general sin inventar precios ni datos que no esten en este texto):\n${aiSettings.knowledge_base}`
     : null;
 
-  // Idioma de respuesta por cliente (columna reply_language en
-  // socialbot_ai_settings). "pt-BR"/"es" fuerzan ese idioma siempre
-  // (clientes de un solo mercado); "auto" hace que la IA responda en el
-  // mismo idioma en el que le escribieron (clientes bilingues, ej. Alas
-  // Tecno que atiende Argentina y Brasil). Default "pt-BR" para no romper
-  // el comportamiento de clientes ya configurados antes de este campo.
   const replyLanguage = aiSettings?.reply_language ?? "pt-BR";
   const languageInstruction = replyLanguage === "auto"
     ? `Detectá el idioma del mensaje entrante y respondé en ese mismo idioma (si te escriben en español, respondé en español; si te escriben en portugués, respondé en portugués de Brasil), natural y cercano, como si fueras el dueno/a del negocio respondiendo personalmente.`
@@ -624,9 +512,6 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
 
     const leadRaw = parsed?.lead;
     const rawStage: string | null = leadRaw?.stage ?? null;
-    // Consistencia: si vino un stage distinto de "no_lead" lo tratamos como
-    // hot aunque is_hot haya venido mal seteado (el modelo a veces es
-    // inconsistente entre los dos campos).
     const isHot = !!(leadRaw?.is_hot || (rawStage && rawStage !== "no_lead"));
     const lead: LeadDetection | null = isHot
       ? {
@@ -655,19 +540,9 @@ async function callGroq(aiSettings: any, salesLink: string | null, incomingText:
 async function saveLead(clientId: string, platform: string, senderId: string, externalId: string | null, sourceText: string, lead: LeadDetection, postId: string | null = null, senderName: string | null = null) {
   if (!senderId) return;
 
-  // Guardamos el "stage" como tag al principio de interest (ej: "[potencial]
-  // pregunta por app de gestión") en vez de agregar una columna nueva -- asi
-  // el panel actual (que ya lee socialbot_leads.interest) no se rompe, y la
-  // agencia ve la etapa de un vistazo. status sigue siendo 100% manual (lo
-  // pone la agencia cuando cierra la venta) -- esto no lo toca.
   const stageTag = lead.stage && lead.stage !== "no_lead" ? `[${lead.stage}] ` : "";
   const interestText = lead.interest ? `${stageTag}${lead.interest}` : (stageTag || null);
 
-  // El nombre real del comentario (username de Instagram, o nombre de
-  // Facebook) que viene directo del webhook de Meta es mas confiable que
-  // cualquier nombre que la IA haya podido inferir del propio texto del
-  // mensaje (eso solo pasa si la persona se presento por su nombre) -- por
-  // eso senderName tiene prioridad; lead.name queda como respaldo.
   const resolvedName = senderName ?? lead.name ?? null;
 
   await supabase.from("socialbot_leads").upsert(
@@ -687,11 +562,6 @@ async function saveLead(clientId: string, platform: string, senderId: string, ex
   );
 }
 
-// Propuesta 10: guarda el comentario en la cola de "requiere atencion
-// humana" en vez de autoresponder. onConflict con la unique (platform,
-// external_id) por si el mismo comentario llegara a procesarse dos veces
-// (no deberia pasar gracias a claimInteraction, pero por las dudas no
-// rompe si ya estaba guardado).
 async function saveFlaggedComment(clientId: string, platform: string, externalId: string, senderId: string | undefined, text: string, reason: string | null) {
   await supabase.from("socialbot_flagged_comments").upsert(
     {
@@ -730,11 +600,6 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
   if (!aiReply) return null;
 
   await incrementUsage(clientId);
-  // El cache solo guarda el texto de la respuesta -- una pregunta repetida
-  // por otra persona no necesariamente tiene el mismo sentiment (ej: dos
-  // personas preguntando "cuanto sale" no son lo mismo que una queja), por
-  // eso los hits de cache arriba devuelven sentiment "neutral" fijo en vez
-  // de reusar el sentiment original.
   await saveCachedReply(clientId, normalized, aiReply.reply);
 
   return { reply: aiReply.reply, source: "ia", lead: aiReply.lead, sentiment: aiReply.sentiment };
@@ -747,6 +612,11 @@ async function handleComment(params: { platform: string; pageId: string; comment
 
   const account = await findSocialAccountAndClient(platform, pageId);
   if (!account) return;
+
+  // Cliente pausado (ej. no pago este mes): no gastar cuota de IA ni
+  // procesar nada para el, aunque su pagina siga recibiendo comentarios.
+  // Se reactiva solo al volver active=true desde el panel de agencia.
+  if (account.socialbot_clients?.active === false) return;
 
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
   const salesLink = account.socialbot_clients?.sales_link ?? null;
@@ -779,12 +649,6 @@ async function handleComment(params: { platform: string; pageId: string; comment
   // 1) Primero se intenta con IA (si hay cuota y esta configurada)
   const aiResult = await tryAiReply(account, text);
 
-  // Propuesta 10 (18/07/2026): si la IA detecto sentiment="negativo" (queja,
-  // reclamo, enojo), NO se autoresponde -- se guarda en la cola de
-  // "requiere atencion humana" y se notifica a la agencia (trigger de
-  // 0022_flagged_comments.sql). Evita que un cliente enojado reciba una
-  // respuesta automatica de tono generico, que puede sonar peor que no
-  // responder nada hasta que un humano lo atienda.
   if (aiResult?.sentiment === "negativo") {
     await saveFlaggedComment(account.client_id, platform, commentId, senderId, text, aiResult.lead?.interest ?? null);
     await finishInteraction(platform, commentId, "queja-escalada", false);
@@ -816,17 +680,10 @@ async function handleComment(params: { platform: string; pageId: string; comment
     }
   }
 
-  // Red de seguridad 1: si la IA no corrio (sin cuota / sin API key / error)
-  // o corrio pero dijo is_hot=false, probamos la deteccion por palabras
-  // clave antes de descartar el lead por completo.
   if (!leadToSave) {
     leadToSave = heuristicLeadDetection(text, aiSettings?.topics ?? null);
   }
 
-  // Red de seguridad 2: reincidencia. Si este sender_id ya escribio antes y
-  // ya quedo guardado como lead para este cliente, anotamos igual el nuevo
-  // contacto (upsert), aunque este mensaje puntual no haya disparado ninguna
-  // señal por si solo.
   if (!leadToSave && senderId) {
     const isReturning = await hasExistingLead(account.client_id, platform, senderId);
     if (isReturning) {
@@ -849,10 +706,6 @@ async function handleComment(params: { platform: string; pageId: string; comment
     body: new URLSearchParams({ message: replyText, access_token: account.page_access_token }),
   });
 
-  // Ademas del reply publico (que en Instagram queda oculto como "reply" anidado
-  // y nunca tiene links/telefonos clickeables), mandamos el mismo mensaje como
-  // "private reply": esto abre un DM con la persona que comento, donde el link
-  // SI se ve clickeable. Es best-effort: si falla, no rompe el flujo principal.
   if (replyResp.ok) {
     try {
       await fetch(
@@ -877,6 +730,10 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
 
   const account = await findSocialAccountAndClient(platform, pageId);
   if (!account) return;
+
+  // Cliente pausado: mismo criterio que handleComment, no gastar cuota de
+  // IA ni procesar nada mientras este pausado.
+  if (account.socialbot_clients?.active === false) return;
 
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
   const salesLink = account.socialbot_clients?.sales_link ?? null;
@@ -924,7 +781,6 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
     }
   }
 
-  // Mismas dos redes de seguridad que en handleComment (ver notas ahi).
   if (!leadToSave) {
     leadToSave = heuristicLeadDetection(text, aiSettings?.topics ?? null);
   }
