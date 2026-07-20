@@ -31,6 +31,17 @@ Ademas, en cada corrida:
 No requiere servidor: corre como un job de GitHub Actions y termina.
 Todas las credenciales sensibles viven en Supabase (por cliente) o en
 GitHub Secrets (claves generales: Supabase service key, OpenAI/Claude key).
+
+-----------------------------------------------------------------------------
+FIX 20/07/2026 (reportado por la agencia): las corridas manuales ("Publicar
+ahora" del panel, o workflow_dispatch a mano) generaban un post POR CADA
+horario activo del cliente de una sola vez -- si el cliente tenia, por
+ejemplo, 4 horarios cargados, un solo click de "Publicar ahora" terminaba
+publicando 4 posts x N redes conectadas, todos casi en simultaneo. Esto no
+es lo que espera quien aprieta el boton (espera UN post, ahora). El fix
+esta en run(): en corridas manuales, ahora se toma como maximo UN horario
+por cliente (el primero que aparece), sin importar cuantos tenga cargados.
+-----------------------------------------------------------------------------
 """
 
 import os
@@ -1218,6 +1229,17 @@ def run():
     es_corrida_automatica = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
 
     matching = []  # lista de (client_id, slot) -- un cliente puede tener mas de un horario por dia
+    # FIX 20/07/2026: en corridas MANUALES, antes se agregaba un post por
+    # CADA horario activo del cliente (4 horarios cargados = 4 posts x N
+    # redes de una sola vez), sin importar el dia/hora real -- eso no es lo
+    # que espera quien aprieta "Publicar ahora" (espera UN post, ahora).
+    # Este set trackea, SOLO para corridas manuales, que clientes ya
+    # quedaron agendados en esta corrida, para tomar como maximo un unico
+    # horario "disparador" por cliente (el slot en si ya no se usa para
+    # nada mas alla de esto -- process_client no depende de su hora/dia
+    # cuando la corrida es manual).
+    manual_clients_already_matched = set()
+
     for slot in slots:
         client = clients_by_id.get(slot["client_id"])
         if not client:
@@ -1232,9 +1254,14 @@ def run():
 
         if not es_corrida_automatica:
             # Corrida manual (workflow_dispatch o local): un humano la disparo
-            # a proposito, asi que no restringimos por dia de la semana ni por
-            # franja horaria -- se procesan todos los horarios activos del
-            # cliente, sin importar que hora sea ahora.
+            # a proposito para publicar UN post ahora -- no para volcar de una
+            # todos los horarios que el cliente tenga cargados. Por eso, a
+            # diferencia de antes, se toma como maximo UN slot por cliente
+            # (el primero que aparece); el resto de sus horarios activos se
+            # ignoran en esta corrida puntual.
+            if slot["client_id"] in manual_clients_already_matched:
+                continue
+            manual_clients_already_matched.add(slot["client_id"])
             matching.append((slot["client_id"], slot))
             continue
 
