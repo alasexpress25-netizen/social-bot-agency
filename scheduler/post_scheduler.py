@@ -1118,15 +1118,19 @@ def pick_media(client_id):
     # Si el ID no existe o no pertenece a este cliente, lo ignoramos y
     # caemos al criterio normal (no rompemos la corrida por un ID invalido).
     manual_media_id = os.environ.get("MANUAL_MEDIA_ID") or None
+    print(f"pick_media: client_id={client_id} MANUAL_MEDIA_ID={manual_media_id!r}")
     if manual_media_id:
         assets = sb_get("socialbot_media_assets", {"id": f"eq.{manual_media_id}", "client_id": f"eq.{client_id}"})
         if assets:
+            print(f"pick_media: FORZANDO medio puntual id={assets[0]['id']} times_used={assets[0]['times_used']} url={assets[0].get('url')}")
             return assets[0]
-        print(f"MANUAL_MEDIA_ID={manual_media_id} no encontrado para este cliente, se usa el criterio normal.")
+        print(f"pick_media: MANUAL_MEDIA_ID={manual_media_id} no encontrado para client_id={client_id} (no existe o pertenece a OTRO cliente), se usa el criterio normal.")
 
     assets = sb_get("socialbot_media_assets", {"client_id": f"eq.{client_id}", "order": "times_used.asc", "limit": "1"})
     if not assets:
+        print("pick_media: no hay ningun medio cargado para este cliente.")
         return None
+    print(f"pick_media: rotacion normal -> id={assets[0]['id']} times_used={assets[0]['times_used']} url={assets[0].get('url')}")
     return assets[0]
 
 
@@ -1551,7 +1555,11 @@ def process_client(client_id, slot):
     # con su times_used original y va a volver a ser el candidato mas
     # prioritario en el proximo intento.
     if media and media_published_ok:
-        sb_update("socialbot_media_assets", {"id": f"eq.{media['id']}"}, {"times_used": media["times_used"] + 1})
+        nuevo_times_used = media["times_used"] + 1
+        sb_update("socialbot_media_assets", {"id": f"eq.{media['id']}"}, {"times_used": nuevo_times_used})
+        print(f"times_used actualizado -> media id={media['id']} times_used={nuevo_times_used}")
+    elif media and not media_published_ok:
+        print(f"times_used NO actualizado (nada se publico con exito) -> media id={media['id']} sigue en times_used={media['times_used']}")
 
 
 if __name__ == "__main__":
