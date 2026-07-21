@@ -69,8 +69,9 @@ SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY_CONTENT_PLAN") or os.environ.get("GROQ_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY_CONTENT_PLAN") or os.environ.get("OPENAI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY_CONTENT_PLAN") or os.environ.get("CLAUDE_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY_CONTENT_PLAN") or os.environ.get("GEMINI_API_KEY")
 
-if not os.environ.get("GROQ_API_KEY_CONTENT_PLAN") and not os.environ.get("OPENAI_API_KEY_CONTENT_PLAN") and not os.environ.get("CLAUDE_API_KEY_CONTENT_PLAN"):
+if not os.environ.get("GROQ_API_KEY_CONTENT_PLAN") and not os.environ.get("OPENAI_API_KEY_CONTENT_PLAN") and not os.environ.get("CLAUDE_API_KEY_CONTENT_PLAN") and not os.environ.get("GEMINI_API_KEY_CONTENT_PLAN"):
     print("AVISO: no hay ninguna *_API_KEY_CONTENT_PLAN configurada como secret separado -- este cron va a compartir cuota con el webhook de comentarios y post_scheduler.py. Ver README (pedido 15/07/2026) para crear una key de Groq nueva y separarla.")
 
 SUPABASE_HEADERS = {
@@ -162,13 +163,40 @@ def _call_claude_json(system_prompt, user_prompt):
     return r.json()["content"][0]["text"].strip()
 
 
+def _call_gemini_json(system_prompt, user_prompt):
+    r = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        headers={"Content-Type": "application/json"},
+        params={"key": GEMINI_API_KEY},
+        json={
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.8, "responseMimeType": "application/json"},
+        },
+        timeout=90,
+    )
+    r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
 def call_ai_json(provider, system_prompt, user_prompt):
     if provider == "openai":
         raw = _call_openai_json(system_prompt, user_prompt)
     elif provider == "claude":
         raw = _call_claude_json(system_prompt, user_prompt)
+    elif provider == "gemini":
+        raw = _call_gemini_json(system_prompt, user_prompt)
     else:
-        raw = _call_groq_json(system_prompt, user_prompt)
+        # groq (default): si falla (ej. rate limit), cae a Gemini antes de
+        # abortar el plan semanal (pedido 21/07/2026).
+        try:
+            raw = _call_groq_json(system_prompt, user_prompt)
+        except Exception as e:
+            if GEMINI_API_KEY:
+                print(f"  ! Groq fallo ({e}), reintentando con Gemini...")
+                raw = _call_gemini_json(system_prompt, user_prompt)
+            else:
+                raise
     return json.loads(raw)
 
 

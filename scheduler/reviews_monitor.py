@@ -59,6 +59,7 @@ GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -149,6 +150,22 @@ def _call_claude(system_prompt, user_prompt):
     return r.json()["content"][0]["text"].strip()
 
 
+def _call_gemini(system_prompt, user_prompt):
+    r = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        headers={"Content-Type": "application/json"},
+        params={"key": GEMINI_API_KEY},
+        json={
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.6},
+        },
+        timeout=60,
+    )
+    r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
 def suggest_reply(provider, client_name, tone, reply_language, rating_or_reco, review_text):
     lang_note = {
         "pt-BR": "Respondé en portugués de Brasil.",
@@ -171,15 +188,23 @@ def suggest_reply(provider, client_name, tone, reply_language, rating_or_reco, r
     )
     user_prompt = f"Reseña del cliente: {review_text or '(sin texto, solo calificación)'}"
 
-    try:
-        if GROQ_API_KEY:
-            return _call_groq(system_prompt, user_prompt)
-        if OPENAI_API_KEY:
-            return _call_openai(system_prompt, user_prompt)
-        if CLAUDE_API_KEY:
-            return _call_claude(system_prompt, user_prompt)
-    except Exception as e:
-        print(f"  ! no se pudo generar sugerencia de respuesta con IA: {e}")
+    # Prueba cada provider configurado en orden hasta que uno responda.
+    # Antes se quedaba con el primero que tuviera key aunque fallara (ej.
+    # Groq rate-limiteado); ahora si Groq falla, sigue con Gemini/OpenAI/
+    # Claude en vez de perder la sugerencia (pedido 21/07/2026).
+    providers = [
+        ("Groq", GROQ_API_KEY, _call_groq),
+        ("Gemini", GEMINI_API_KEY, _call_gemini),
+        ("OpenAI", OPENAI_API_KEY, _call_openai),
+        ("Claude", CLAUDE_API_KEY, _call_claude),
+    ]
+    for name, key, fn in providers:
+        if not key:
+            continue
+        try:
+            return fn(system_prompt, user_prompt)
+        except Exception as e:
+            print(f"  ! {name} fallo generando sugerencia de respuesta: {e}")
 
     # Fallback sin IA (ningún provider configurado, o la llamada falló):
     # plantilla fija en vez de dejar la reseña sin sugerencia.

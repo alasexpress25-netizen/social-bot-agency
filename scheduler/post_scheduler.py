@@ -92,6 +92,7 @@ RETRY_COOLDOWN_HOURS = 24
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -179,8 +180,19 @@ def generate_caption(ai_settings, client_name, sales_link):
         return _call_openai(system_prompt, user_prompt)
     elif provider == "claude":
         return _call_claude(system_prompt, user_prompt)
+    elif provider == "gemini":
+        return _call_gemini(system_prompt, user_prompt)
     else:
-        return _call_groq(system_prompt, user_prompt)
+        # groq (default): si esta rate-limiteado o falla, cae a Gemini
+        # automaticamente en vez de dejar el post sin caption (pedido
+        # 21/07/2026: agregar Gemini como fallback gratuito de Groq).
+        try:
+            return _call_groq(system_prompt, user_prompt)
+        except Exception as e:
+            if GEMINI_API_KEY:
+                print(f"  ! Groq fallo ({e}), reintentando con Gemini...")
+                return _call_gemini(system_prompt, user_prompt)
+            raise
 
 
 def _call_groq(system_prompt, user_prompt):
@@ -199,6 +211,22 @@ def _call_groq(system_prompt, user_prompt):
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
+
+
+def _call_gemini(system_prompt, user_prompt):
+    r = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        headers={"Content-Type": "application/json"},
+        params={"key": GEMINI_API_KEY},
+        json={
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.9},
+        },
+        timeout=60,
+    )
+    r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 def _call_openai(system_prompt, user_prompt):
