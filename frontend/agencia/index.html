@@ -583,7 +583,19 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
                                   // así que no puede depender de una llave guardada en este navegador (PKCE)
 });
 let currentAgencyId = null;
-let selectedClientId = null; // siempre un cliente puntual — ya no existe el modo "todos"; se define apenas carga la lista de clientes (ver loadClients)
+
+// Se guarda en localStorage para que, si recargás la página o el service
+// worker actualiza la PWA sola, el panel vuelva a abrir con el mismo
+// cliente que estabas editando en vez de caer siempre al primero de la
+// lista. persistSelectedClientId() se llama cada vez que cambia (ver
+// onClientSelectorChange, createClient y loadClients).
+const SELECTED_CLIENT_STORAGE_KEY = 'lav_agencia_selected_client';
+let selectedClientId = localStorage.getItem(SELECTED_CLIENT_STORAGE_KEY) || null; // siempre un cliente puntual — ya no existe el modo "todos"; se define apenas carga la lista de clientes (ver loadClients)
+
+function persistSelectedClientId(){
+  if(selectedClientId) localStorage.setItem(SELECTED_CLIENT_STORAGE_KEY, selectedClientId);
+  else localStorage.removeItem(SELECTED_CLIENT_STORAGE_KEY);
+}
 
 // Guarda, por clientId, el cliente y su primera cuenta conectada (si tiene),
 // para poder abrir el modal "Editar cliente" sin volver a pedirle nada a
@@ -705,6 +717,7 @@ async function saveClientEdit(e){
 
 function onClientSelectorChange(){
   selectedClientId = document.getElementById('clientSelector').value;
+  persistSelectedClientId();
   loadClients();
 }
 
@@ -1270,6 +1283,7 @@ async function createClient(e){
   closeNewClientModal();
   // Seleccionamos automáticamente el cliente recién creado
   if(created && created[0]) selectedClientId = created[0].id;
+  persistSelectedClientId();
   loadClients();
 }
 
@@ -1704,7 +1718,10 @@ async function loadClients(){
   // existe, se cae al primero de la lista.
   const selector = document.getElementById('clientSelector');
   const stillExists = (clients||[]).some(c => c.id === selectedClientId);
-  if(!stillExists) selectedClientId = (clients && clients[0]) ? clients[0].id : null;
+  if(!stillExists){
+    selectedClientId = (clients && clients[0]) ? clients[0].id : null;
+    persistSelectedClientId();
+  }
   selector.innerHTML = (clients||[]).length
     ? (clients||[]).map(c => `<option value="${c.id}" ${c.id === selectedClientId ? 'selected' : ''}>${c.name}</option>`).join('')
     : '<option value="">Sin clientes todavía</option>';
