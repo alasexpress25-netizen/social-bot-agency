@@ -86,6 +86,17 @@
     content:''; position:absolute; left:0; top:6px; bottom:6px; width:3px;
     background:var(--gold); border-radius:0 3px 3px 0;
   }
+  /* Badge tipo "WhatsApp Web" con la cantidad de leads nuevos sin
+     contactar, sobre el ícono de Leads del sidebar. Se actualiza en
+     updateLeadsBadge(), llamada desde loadClients(). */
+  .sidebar button.nav-item{ overflow:visible; }
+  .nav-badge{
+    position:absolute; top:6px; left:50%; margin-left:2px;
+    min-width:16px; height:16px; padding:0 4px; border-radius:99px;
+    background:#e0393e; color:#fff; font-size:10px; font-weight:700;
+    line-height:16px; text-align:center; font-family:var(--font-body);
+    letter-spacing:0; text-transform:none; box-shadow:0 0 0 2px var(--dark2);
+  }
   main{ margin-left:84px; max-width:980px; padding:28px; width:100%; }
   .auth-box{ max-width:360px; margin:80px auto; text-align:center; }
   .auth-box input{
@@ -314,6 +325,7 @@
     </button>
     <button type="button" class="nav-item" data-view="leads" onclick="switchView('leads')">
       <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+      <span class="nav-badge" id="leadsBadge" style="display:none;">0</span>
       <span>Leads</span>
     </button>
     <button type="button" class="nav-item" data-view="reviews" onclick="switchView('reviews')">
@@ -1698,7 +1710,30 @@ function parseLeadStage(interestRaw) {
   return { stageKey: null, stageMeta: null, text: raw || '—' };
 }
 
+// Badge tipo "WhatsApp Web" en el ícono de Leads del sidebar: cuenta TODOS
+// los leads en status='nuevo' de TODOS los clientes de la agencia (no solo
+// el cliente elegido en el selector de arriba), para que sirva como
+// indicador global de "cosas sin atender" apenas uno entra al panel. La RLS
+// de socialbot_leads ("owner sees own leads") ya limita el conteo a los
+// clientes de la agencia logueada, así que no hace falta filtrar por
+// agency_id/client_id acá.
+async function updateLeadsBadge(){
+  const badge = document.getElementById('leadsBadge');
+  if(!badge) return;
+  const { count, error } = await sb.from('socialbot_leads').select('id', { count:'exact', head:true }).eq('status', 'nuevo');
+  if(error){ console.error('No se pudo traer el conteo de leads nuevos', error); return; }
+  if(count && count > 0){
+    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.style.display = 'flex';
+    badge.style.alignItems = 'center';
+    badge.style.justifyContent = 'center';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
 async function loadClients(){
+  updateLeadsBadge(); // en paralelo, no depende del cliente seleccionado
   const { data: clients } = await sb.from('socialbot_clients').select('*').order('created_at', { ascending:false });
   const container = document.getElementById('clientsList');
   container.innerHTML = '';
