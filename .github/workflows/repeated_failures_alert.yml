@@ -27,6 +27,6 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
-          REPEATED_FAILURES_THRESHOLD: ${{ secrets.REPEATED_FAILURES_THRESHOLD }}
-          REPEATED_FAILURES_HOURS: ${{ secrets.REPEATED_FAILURES_HOURS }}
+          REPEATED_FAILURES_THRESHOLD: "3"
+          REPEATED_FAILURES_HOURS: "48"
         run: python scheduler/repeated_failures_alert.py
