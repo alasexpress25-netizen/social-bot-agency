@@ -83,9 +83,13 @@
     content:''; position:absolute; left:0; top:6px; bottom:6px; width:3px;
     background:var(--gold); border-radius:0 3px 3px 0;
   }
+  .sidebar button.nav-item{ overflow:visible; }
   .sidebar button.nav-item .nav-badge{
-    position:absolute; top:6px; right:14px; width:8px; height:8px; border-radius:50%;
-    background:var(--warn); border:1.5px solid var(--dark2);
+    position:absolute; top:6px; left:50%; margin-left:2px;
+    min-width:16px; height:16px; padding:0 4px; border-radius:99px;
+    background:#e0393e; color:#fff; font-size:10px; font-weight:700;
+    line-height:16px; text-align:center; font-family:var(--font-body);
+    letter-spacing:0; text-transform:none; box-shadow:0 0 0 2px var(--dark2);
   }
   main{ margin-left:84px; flex:1; max-width:760px; padding:28px; width:100%; }
   .page{ display:none; }
@@ -262,6 +266,7 @@
       </button>
       <button class="nav-item" data-page="leads" onclick="showPage('leads')">
         <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        <span class="nav-badge" id="navLeadsBadge" style="display:none;"></span>
         <span data-i18n="navLeads">Contactos</span>
       </button>
       <button class="nav-item" data-page="prefs" onclick="showPage('prefs')">
@@ -786,7 +791,10 @@ async function loadPending(){
     return;
   }
   navBtn.style.display = 'flex';
-  navBadge.style.display = 'block';
+  navBadge.textContent = pending.length > 99 ? '99+' : String(pending.length);
+  navBadge.style.display = 'flex';
+  navBadge.style.alignItems = 'center';
+  navBadge.style.justifyContent = 'center';
   banner.innerHTML = `
     <div class="pending-banner">
       <span>${t('pendingBannerText')(pending.length)}</span>
@@ -950,6 +958,24 @@ async function loadLeads(){
     .select('*').eq('client_id', currentClient.id).order('created_at', { ascending:false });
 
   currentLeads = leads || [];
+
+  // Badge tipo "WhatsApp Web" en el ícono de Contactos: cantidad de leads
+  // propios en status='nuevo' (sin contactar todavía). La RLS ("client
+  // sees own leads") ya limita esto al propio cliente, y acá ya tenemos
+  // los leads cargados así que no hace falta una consulta aparte.
+  const navLeadsBadge = document.getElementById('navLeadsBadge');
+  if(navLeadsBadge){
+    const nuevos = currentLeads.filter(l => l.status === 'nuevo').length;
+    if(nuevos > 0){
+      navLeadsBadge.textContent = nuevos > 99 ? '99+' : String(nuevos);
+      navLeadsBadge.style.display = 'flex';
+      navLeadsBadge.style.alignItems = 'center';
+      navLeadsBadge.style.justifyContent = 'center';
+    } else {
+      navLeadsBadge.style.display = 'none';
+    }
+  }
+
   const list = document.getElementById('leadsList');
   if(!leads || leads.length === 0){
     list.innerHTML = `<div class="empty">${t('noLeadsYet')}</div>`;
