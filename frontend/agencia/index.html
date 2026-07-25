@@ -309,10 +309,12 @@
     </button>
     <button type="button" class="nav-item" data-view="clientes" onclick="switchView('clientes')">
       <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span class="nav-badge" id="clientesBadge" style="display:none;">0</span>
       <span>Clientes</span>
     </button>
     <button type="button" class="nav-item" data-view="plan" onclick="switchView('plan')">
       <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>
+      <span class="nav-badge" id="planBadge" style="display:none;">0</span>
       <span>Plan</span>
     </button>
     <button type="button" class="nav-item" data-view="metricas" onclick="switchView('metricas')">
@@ -1710,6 +1712,20 @@ function parseLeadStage(interestRaw) {
   return { stageKey: null, stageMeta: null, text: raw || '—' };
 }
 
+// Badge tipo "WhatsApp Web" en el ícono de Plan del sidebar: cuenta los
+// items del plan semanal (socialbot_content_plan_items) en status='proposed'
+// -- es decir, generados por la IA y todavía sin revisar -- de TODOS los
+// clientes de la agencia. Mismo criterio que updateLeadsBadge(): la RLS
+// ("owner sees own content_plan_items") ya limita esto a los clientes
+// propios, así que no hace falta filtrar por client_id acá.
+async function updatePlanBadge(){
+  const badge = document.getElementById('planBadge');
+  if(!badge) return;
+  const { count, error } = await sb.from('socialbot_content_plan_items').select('id', { count:'exact', head:true }).eq('status', 'proposed');
+  if(error){ console.error('No se pudo traer el conteo del plan sin aprobar', error); return; }
+  setBadgeCount(badge, count);
+}
+
 // Badge tipo "WhatsApp Web" en el ícono de Leads del sidebar: cuenta TODOS
 // los leads en status='nuevo' de TODOS los clientes de la agencia (no solo
 // el cliente elegido en el selector de arriba), para que sirva como
@@ -1722,6 +1738,12 @@ async function updateLeadsBadge(){
   if(!badge) return;
   const { count, error } = await sb.from('socialbot_leads').select('id', { count:'exact', head:true }).eq('status', 'nuevo');
   if(error){ console.error('No se pudo traer el conteo de leads nuevos', error); return; }
+  setBadgeCount(badge, count);
+}
+
+// Helper compartido: muestra/oculta un badge numérico según el conteo,
+// recortando a "99+" para que no rompa el layout del ícono.
+function setBadgeCount(badge, count){
   if(count && count > 0){
     badge.textContent = count > 99 ? '99+' : String(count);
     badge.style.display = 'flex';
@@ -1732,8 +1754,24 @@ async function updateLeadsBadge(){
   }
 }
 
+// Badge tipo "WhatsApp Web" en el ícono de Clientes del sidebar: cuenta los
+// posts en approval_status='pending' (normalmente los aprueba el cliente
+// desde su portal, pero la agencia también puede hacerlo desde la ficha
+// del cliente en esta misma pestaña) de TODOS los clientes de la agencia.
+// Mismo criterio que updateLeadsBadge/updatePlanBadge: la RLS ("owner sees
+// own posts") ya limita el conteo a los clientes propios.
+async function updateClientesBadge(){
+  const badge = document.getElementById('clientesBadge');
+  if(!badge) return;
+  const { count, error } = await sb.from('socialbot_posts').select('id', { count:'exact', head:true }).eq('approval_status', 'pending');
+  if(error){ console.error('No se pudo traer el conteo de posts pendientes de aprobación', error); return; }
+  setBadgeCount(badge, count);
+}
+
 async function loadClients(){
   updateLeadsBadge(); // en paralelo, no depende del cliente seleccionado
+  updatePlanBadge(); // en paralelo, no depende del cliente seleccionado
+  updateClientesBadge(); // en paralelo, no depende del cliente seleccionado
   const { data: clients } = await sb.from('socialbot_clients').select('*').order('created_at', { ascending:false });
   const container = document.getElementById('clientsList');
   container.innerHTML = '';
