@@ -37,13 +37,13 @@ SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.hostinger.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+SMTP_PORT = int(os.environ.get("SMTP_PORT") or "465")
 SMTP_USER = os.environ.get("SMTP_USER")
 SMTP_PASS = os.environ.get("SMTP_PASS")
 SMTP_FROM = os.environ.get("SMTP_FROM") or SMTP_USER
 
-REPEATED_FAILURES_THRESHOLD = int(os.environ.get("REPEATED_FAILURES_THRESHOLD", "3"))
-REPEATED_FAILURES_HOURS = int(os.environ.get("REPEATED_FAILURES_HOURS", "48"))
+REPEATED_FAILURES_THRESHOLD = int(os.environ.get("REPEATED_FAILURES_THRESHOLD") or "3")
+REPEATED_FAILURES_HOURS = int(os.environ.get("REPEATED_FAILURES_HOURS") or "48")
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
