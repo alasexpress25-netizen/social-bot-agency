@@ -297,6 +297,7 @@
   </div>
   <div class="right">
     <span class="tag" id="userTag"></span>
+    <button type="button" onclick="goToCrearApp()" style="padding:6px 14px; font-size:11px;">Crear Publicación</button>
     <button onclick="logout()" class="secondary" style="padding:6px 14px; font-size:11px;">Salir</button>
   </div>
 </div>
@@ -733,6 +734,18 @@ function onClientSelectorChange(){
   selectedClientId = document.getElementById('clientSelector').value;
   persistSelectedClientId();
   loadClients();
+}
+
+// Abre el editor de carruseles (lavisualmk.alastecno.com/crear/) en una
+// pestaña nueva, pasándole el cliente ya elegido acá arriba en el
+// selector (?client_id=...) para que del otro lado se autoseleccione y
+// traiga marca/web/logo/brief solo, sin tener que elegirlo de nuevo.
+function goToCrearApp(){
+  const base = 'https://lavisualmk.alastecno.com/crear/';
+  const url = (selectedClientId && selectedClientId !== 'all')
+    ? `${base}?client_id=${encodeURIComponent(selectedClientId)}`
+    : base;
+  window.open(url, '_blank');
 }
 
 // Ya no filtra "todos vs. uno": loadClients() ahora solo trae y renderiza
@@ -1598,18 +1611,18 @@ async function renderMetrics(clientId){
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
+  const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
+  const avgResponseMinutes = repliedWithTimes.length
+    ? Math.round(repliedWithTimes.reduce((sum, r) => sum + (new Date(r.replied_at) - new Date(r.created_at)) / 60000, 0) / repliedWithTimes.length)
+    : null;
+  const avgResponseLabel = avgResponseMinutes === null ? '—' : (avgResponseMinutes < 1 ? '<1' : avgResponseMinutes);
+
   // Item 1 de propuestas-30-07-2026.md: clics reales al link del cliente
   // (socialbot_link_clicks), abiertos por canal para ver por dónde entra
   // el trafico que de verdad importa (a diferencia de likes/comments).
   const clicksBySource = { comment_reply: 0, dm_reply: 0, fallback_reply: 0, ai_reply: 0 };
   (linkClicks || []).forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
   const totalClicks = Object.values(clicksBySource).reduce((s, n) => s + n, 0);
-
-  const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
-  const avgResponseMinutes = repliedWithTimes.length
-    ? Math.round(repliedWithTimes.reduce((sum, r) => sum + (new Date(r.replied_at) - new Date(r.created_at)) / 60000, 0) / repliedWithTimes.length)
-    : null;
-  const avgResponseLabel = avgResponseMinutes === null ? '—' : (avgResponseMinutes < 1 ? '<1' : avgResponseMinutes);
 
   const el = document.getElementById(`metrics-${clientId}`);
   if(!el) return;
@@ -1729,29 +1742,25 @@ function parseLeadStage(interestRaw) {
 
 // Badge tipo "WhatsApp Web" en el ícono de Plan del sidebar: cuenta los
 // items del plan semanal (socialbot_content_plan_items) en status='proposed'
-// -- es decir, generados por la IA y todavía sin revisar -- de TODOS los
-// clientes de la agencia. Mismo criterio que updateLeadsBadge(): la RLS
-// ("owner sees own content_plan_items") ya limita esto a los clientes
-// propios, así que no hace falta filtrar por client_id acá.
+// -- es decir, generados por la IA y todavía sin revisar -- del cliente
+// actualmente seleccionado en el selector de arriba (selectedClientId).
 async function updatePlanBadge(){
   const badge = document.getElementById('planBadge');
   if(!badge) return;
-  const { count, error } = await sb.from('socialbot_content_plan_items').select('id', { count:'exact', head:true }).eq('status', 'proposed');
+  if(!selectedClientId){ setBadgeCount(badge, 0); return; }
+  const { count, error } = await sb.from('socialbot_content_plan_items').select('id', { count:'exact', head:true }).eq('status', 'proposed').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo del plan sin aprobar', error); return; }
   setBadgeCount(badge, count);
 }
 
-// Badge tipo "WhatsApp Web" en el ícono de Leads del sidebar: cuenta TODOS
-// los leads en status='nuevo' de TODOS los clientes de la agencia (no solo
-// el cliente elegido en el selector de arriba), para que sirva como
-// indicador global de "cosas sin atender" apenas uno entra al panel. La RLS
-// de socialbot_leads ("owner sees own leads") ya limita el conteo a los
-// clientes de la agencia logueada, así que no hace falta filtrar por
-// agency_id/client_id acá.
+// Badge tipo "WhatsApp Web" en el ícono de Leads del sidebar: cuenta los
+// leads en status='nuevo' del cliente actualmente seleccionado en el
+// selector de arriba (selectedClientId).
 async function updateLeadsBadge(){
   const badge = document.getElementById('leadsBadge');
   if(!badge) return;
-  const { count, error } = await sb.from('socialbot_leads').select('id', { count:'exact', head:true }).eq('status', 'nuevo');
+  if(!selectedClientId){ setBadgeCount(badge, 0); return; }
+  const { count, error } = await sb.from('socialbot_leads').select('id', { count:'exact', head:true }).eq('status', 'nuevo').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo de leads nuevos', error); return; }
   setBadgeCount(badge, count);
 }
@@ -1772,21 +1781,18 @@ function setBadgeCount(badge, count){
 // Badge tipo "WhatsApp Web" en el ícono de Clientes del sidebar: cuenta los
 // posts en approval_status='pending' (normalmente los aprueba el cliente
 // desde su portal, pero la agencia también puede hacerlo desde la ficha
-// del cliente en esta misma pestaña) de TODOS los clientes de la agencia.
-// Mismo criterio que updateLeadsBadge/updatePlanBadge: la RLS ("owner sees
-// own posts") ya limita el conteo a los clientes propios.
+// del cliente en esta misma pestaña) del cliente actualmente seleccionado
+// en el selector de arriba (selectedClientId).
 async function updateClientesBadge(){
   const badge = document.getElementById('clientesBadge');
   if(!badge) return;
-  const { count, error } = await sb.from('socialbot_posts').select('id', { count:'exact', head:true }).eq('approval_status', 'pending');
+  if(!selectedClientId){ setBadgeCount(badge, 0); return; }
+  const { count, error } = await sb.from('socialbot_posts').select('id', { count:'exact', head:true }).eq('approval_status', 'pending').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo de posts pendientes de aprobación', error); return; }
   setBadgeCount(badge, count);
 }
 
 async function loadClients(){
-  updateLeadsBadge(); // en paralelo, no depende del cliente seleccionado
-  updatePlanBadge(); // en paralelo, no depende del cliente seleccionado
-  updateClientesBadge(); // en paralelo, no depende del cliente seleccionado
   const { data: clients } = await sb.from('socialbot_clients').select('*').order('created_at', { ascending:false });
   const container = document.getElementById('clientsList');
   container.innerHTML = '';
@@ -1814,6 +1820,12 @@ async function loadClients(){
     ? (clients||[]).map(c => `<option value="${c.id}" ${c.id === selectedClientId ? 'selected' : ''}>${c.name}</option>`).join('')
     : '<option value="">Sin clientes todavía</option>';
   if(selectedClientId) selector.value = selectedClientId;
+
+  // Los badges dependen del cliente elegido, así que se piden recién acá,
+  // una vez que selectedClientId quedó resuelto arriba (no antes).
+  updateLeadsBadge();
+  updatePlanBadge();
+  updateClientesBadge();
 
   // A partir de acá, todo lo pesado (cuentas, IA, horarios, medios, reglas,
   // posts, leads, plan de contenido, reseñas) se pide y se renderiza SOLO
