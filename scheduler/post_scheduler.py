@@ -151,7 +151,47 @@ def sb_upsert(table, rows, on_conflict):
 # ---------------------------------------------------------------------------
 # Generacion de texto con IA
 # ---------------------------------------------------------------------------
-def generate_caption(ai_settings, client_name, sales_link):
+# Item 2 de propuestas-30-07-2026.md: generate_caption() (la funcion de
+# respaldo que se usa cuando no hay item del plan semanal aprobado para hoy)
+# escribia a ciegas, sin ver captions anteriores ni metricas de que
+# funciono -- a diferencia de content_planner.py, que ya arma este mismo
+# contexto para el plan semanal. Esta funcion replica esa misma logica
+# (recent_captions + top/bottom posts por score de likes/comments/shares)
+# para que el fallback diario tenga la misma inteligencia.
+def build_recent_context(client_id):
+    recent_posts = sb_get(
+        "socialbot_posts",
+        {"client_id": f"eq.{client_id}", "order": "created_at.desc", "limit": "15", "select": "caption"},
+    )
+    recent_captions = [p["caption"] for p in recent_posts if p.get("caption")]
+
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    published = sb_get(
+        "socialbot_posts",
+        {
+            "client_id": f"eq.{client_id}",
+            "status": "eq.published",
+            "published_at": f"gte.{since}",
+            "select": "id,caption",
+        },
+    )
+    scored = []
+    for post in published:
+        metrics = sb_get("socialbot_post_metrics", {"post_id": f"eq.{post['id']}", "limit": "1"})
+        if not metrics:
+            continue
+        m = metrics[0]
+        score = (m.get("likes") or 0) + (m.get("comments") or 0) * 2 + (m.get("shares") or 0) * 3
+        scored.append({"caption": post["caption"], "score": score})
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    top_posts = [s["caption"] for s in scored[:3] if s["caption"]]
+    bottom_posts = [s["caption"] for s in scored[-3:] if s["caption"]] if len(scored) > 3 else []
+
+    return {"recent_captions": recent_captions, "top_posts": top_posts, "bottom_posts": bottom_posts}
+
+
+def generate_caption(ai_settings, client_name, sales_link, client_id=None):
     provider = ai_settings.get("provider", "groq")
     system_prompt = ai_settings.get("system_prompt") or "Sos un community manager experto."
     topics = ai_settings.get("topics") or ""
@@ -168,12 +208,36 @@ def generate_caption(ai_settings, client_name, sales_link):
         if knowledge_base else ""
     )
 
+    # Historial + performance (item 2 de propuestas-30-07-2026.md): mismo
+    # criterio que ya usa content_planner.py para el plan semanal, aplicado
+    # aca tambien para que este fallback diario no repita angulos ya usados
+    # y priorice lo que se sabe que funciona con este cliente.
+    history_lines = []
+    if client_id:
+        try:
+            ctx = build_recent_context(client_id)
+        except Exception as e:
+            print(f"  ! No se pudo armar el contexto de historial para generate_caption ({e}), se sigue sin el.")
+            ctx = None
+        if ctx:
+            if ctx["recent_captions"]:
+                sample = " | ".join(c[:120] for c in ctx["recent_captions"][:8])
+                history_lines.append(f"No repitas el mismo angulo ni frases parecidas a estos posts recientes: {sample}.")
+            if ctx["top_posts"]:
+                sample = " | ".join(c[:150] for c in ctx["top_posts"])
+                history_lines.append(f"Estos posts tuvieron el mejor enganche (likes/comments/shares) con este cliente -- inspirate en el estilo/enfoque que funciono, sin copiarlos textual: {sample}.")
+            if ctx["bottom_posts"]:
+                sample = " | ".join(c[:150] for c in ctx["bottom_posts"])
+                history_lines.append(f"Estos posts tuvieron el peor enganche -- evita ese mismo enfoque: {sample}.")
+    history_block = " ".join(history_lines)
+
     user_prompt = (
         f"Negocio: {client_name}. Temas/keywords: {topics}. Tono: {tone}. "
         f"{knowledge_line}"
         f"Escribi UNA publicacion nueva y distinta para Instagram/Facebook, maximo {max_chars} caracteres, "
         f"con un cierre que invite a comentar la palabra clave para recibir el link de compra. "
-        f"No incluyas el link directamente en el texto. No repitas frases genericas."
+        f"No incluyas el link directamente en el texto. No repitas frases genericas. "
+        f"{history_block}"
     )
 
     if provider == "openai":
