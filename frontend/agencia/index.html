@@ -2156,18 +2156,54 @@ async function loadClients(){
     // engagement real, calculada por content_planner.py y guardada en
     // socialbot_suggested_schedule. Solo informativo -- no cambia los
     // horarios activos hasta que la agencia toque "Usar este horario".
+    //
+    // AJUSTE 30/07/2026: la lista completa (sin distinguir top de resto,
+    // y mostrando solo "X posts") generaba confusion -- se veia como una
+    // lista sin orden claro, porque el ranking real es por ENGANCHE
+    // PROMEDIO (likes+comments*2+shares*3), no por cantidad de posts, y
+    // ese numero no se mostraba en ningun lado. Ahora se resaltan las 3
+    // mejores con medalla + barra relativa de enganche, y el resto queda
+    // colapsado atras de un "ver mas".
     const suggestedHtml = (suggestedSchedule && suggestedSchedule.length)
-      ? `
-        <div style="border:1px solid var(--gold); border-radius:8px; padding:12px; margin-bottom:14px; background:rgba(201,162,68,0.06);">
-          <div style="font-size:13px; color:var(--gold); margin-bottom:8px;">📊 Horario sugerido según enganche real (últimos 30 días)</div>
-          ${suggestedSchedule.map(s => `
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0;">
-              <span style="font-size:13px;">${_WEEKDAY_NAMES_ES_JS[s.day_of_week]} alrededor de las ${s.hour}hs <span style="color:var(--muted);">(${s.sample_size} posts)</span></span>
-              <button type="button" class="secondary" style="padding:4px 10px; font-size:12px;" onclick="useSuggestedSlot('${c.id}', ${s.hour}, ${s.day_of_week})">Usar este horario</button>
+      ? (() => {
+          const sorted = [...suggestedSchedule].sort((a, b) => Number(b.avg_score) - Number(a.avg_score));
+          const maxScore = Math.max(...sorted.map(s => Number(s.avg_score) || 0), 0.0001);
+          const medals = ['🥇', '🥈', '🥉'];
+          const renderRow = (s, idx) => {
+            const scoreNum = Number(s.avg_score) || 0;
+            const barPct = Math.max(4, Math.round((scoreNum / maxScore) * 100));
+            const rankPrefix = idx < 3 ? `${medals[idx]} ` : '';
+            return `
+              <div style="padding:6px 0; ${idx > 0 ? 'border-top:1px solid var(--line);' : ''}">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                  <span style="font-size:13px;">${rankPrefix}${_WEEKDAY_NAMES_ES_JS[s.day_of_week]} alrededor de las ${s.hour}hs</span>
+                  <button type="button" class="secondary" style="padding:4px 10px; font-size:12px; flex-shrink:0;" onclick="useSuggestedSlot('${c.id}', ${s.hour}, ${s.day_of_week})">Usar este horario</button>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+                  <div style="flex:1; max-width:160px; height:5px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
+                    <div style="height:100%; width:${barPct}%; background:var(--gold);"></div>
+                  </div>
+                  <span style="font-size:11px; color:var(--muted); white-space:nowrap;">enganche ${scoreNum.toFixed(1)} · ${s.sample_size} posts</span>
+                </div>
+              </div>
+            `;
+          };
+          const top3 = sorted.slice(0, 3);
+          const rest = sorted.slice(3);
+          return `
+            <div style="border:1px solid var(--gold); border-radius:8px; padding:12px; margin-bottom:14px; background:rgba(201,162,68,0.06);">
+              <div style="font-size:13px; color:var(--gold); margin-bottom:2px;">📊 Horario sugerido según enganche real (últimos 30 días)</div>
+              <div style="font-size:11px; color:var(--muted); margin-bottom:8px;">Ordenado por enganche promedio (likes/comentarios/compartidos) — no por cantidad de posts.</div>
+              ${top3.map(renderRow).join('')}
+              ${rest.length ? `
+                <details style="margin-top:6px;">
+                  <summary style="cursor:pointer; font-size:12px; color:var(--muted);">Ver ${rest.length} opción${rest.length > 1 ? 'es' : ''} más</summary>
+                  <div style="margin-top:4px;">${rest.map((s, i) => renderRow(s, i + 3)).join('')}</div>
+                </details>
+              ` : ''}
             </div>
-          `).join('')}
-        </div>
-      `
+          `;
+        })()
       : '';
     horariosDiv.innerHTML = `
       <div class="section-client-heading">${c.name} · ${sortedSlots.length}</div>
