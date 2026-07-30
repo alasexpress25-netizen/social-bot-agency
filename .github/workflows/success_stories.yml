@@ -1,0 +1,32 @@
+name: Casos de éxito mensuales
+
+on:
+  schedule:
+    # Dia 1 de cada mes, 10:00 America/Sao_Paulo (UTC-3) = 13:00 UTC.
+    # Corre despues de monthly_report.yml (12:00 UTC) para no pisarse.
+    - cron: "0 13 1 * *"
+  workflow_dispatch: {}   # permite dispararlo manualmente desde GitHub para probar
+
+jobs:
+  casos-de-exito:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r scheduler/requirements.txt
+
+      - name: Generar casos de éxito para todos los clientes activos
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          AGENCY_EMAIL: ${{ secrets.AGENCY_EMAIL }}
+        run: python scheduler/success_story_generator.py --all --days 90
