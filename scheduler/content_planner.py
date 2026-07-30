@@ -278,21 +278,11 @@ def build_hook_type_ranking(scored):
     return ranked
 
 
-def build_context(client, ai_settings):
-    client_id = client["id"]
-
-    recent_posts = sb_get(
-        "socialbot_posts",
-        {"client_id": f"eq.{client_id}", "order": "created_at.desc", "limit": "15", "select": "caption"},
-    )
-    recent_captions = [p["caption"] for p in recent_posts if p.get("caption")]
-
-    recent_leads = sb_get(
-        "socialbot_leads",
-        {"client_id": f"eq.{client_id}", "order": "created_at.desc", "limit": "20", "select": "interest,status"},
-    )
-    lead_interests = [l["interest"] for l in recent_leads if l.get("interest")]
-
+def compute_scored_posts(client_id):
+    """Extraido de build_context: junta los posts publicados de los ultimos
+    30 dias con sus metricas y calcula un score de enganche simple. Vive
+    aparte de build_context porque tambien lo necesita
+    refresh_suggested_schedule() -- ver comentario ahi para el motivo."""
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     published = sb_get(
         "socialbot_posts",
@@ -311,8 +301,26 @@ def build_context(client, ai_settings):
         m = metrics[0]
         score = (m.get("likes") or 0) + (m.get("comments") or 0) * 2 + (m.get("shares") or 0) * 3
         scored.append({"caption": post["caption"], "score": score, "metrics": m, "published_at": post.get("published_at")})
-
     scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored, published
+
+
+def build_context(client, ai_settings):
+    client_id = client["id"]
+
+    recent_posts = sb_get(
+        "socialbot_posts",
+        {"client_id": f"eq.{client_id}", "order": "created_at.desc", "limit": "15", "select": "caption"},
+    )
+    recent_captions = [p["caption"] for p in recent_posts if p.get("caption")]
+
+    recent_leads = sb_get(
+        "socialbot_leads",
+        {"client_id": f"eq.{client_id}", "order": "created_at.desc", "limit": "20", "select": "interest,status"},
+    )
+    lead_interests = [l["interest"] for l in recent_leads if l.get("interest")]
+
+    scored, published = compute_scored_posts(client_id)
     top_posts = scored[:3]
     bottom_posts = scored[-3:] if len(scored) > 3 else []
 
@@ -698,8 +706,31 @@ def split_caption_and_hashtags(raw_caption):
     return raw_caption, ""
 
 
+def refresh_suggested_schedule(client_id):
+    """BUGFIX 30/07/2026: antes, socialbot_suggested_schedule solo se
+    actualizaba dentro de build_context(), que generate_plan_for_client()
+    solo llama cuando genera un plan NUEVO -- si ya existe un plan
+    'proposed'/'approved'/'used' para la semana (el caso normal la mayoria
+    de las corridas, ver el 'se salta' de mas abajo), build_context() nunca
+    se ejecuta y la sugerencia de horario queda vacia indefinidamente,
+    aunque haya de sobra posts+metricas para calcularla. Se detecto
+    revisando produccion: los 3 clientes ya tenian el plan de esta semana
+    aprobado antes de que este feature se desplegara, asi que
+    socialbot_suggested_schedule seguia vacia para los tres.
+    Esta funcion se llama aparte, siempre, independientemente de si se
+    genera plan nuevo o no -- es liviana (no llama a la IA), asi que
+    correrla en cada pasada semanal del cron no tiene costo extra."""
+    scored, _ = compute_scored_posts(client_id)
+    best_times_from_scored(scored, client_id=client_id)
+
+
 def generate_plan_for_client(client):
     client_id = client["id"]
+
+    # Se refresca primero y siempre -- ver comentario en
+    # refresh_suggested_schedule() sobre por que no puede depender de si
+    # esta corrida termina generando un plan nuevo o no.
+    refresh_suggested_schedule(client_id)
 
     days = get_target_days(client_id)
     if not days:
