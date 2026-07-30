@@ -221,6 +221,58 @@ def get_target_days(client_id):
     return days[:MAX_IDEAS_PER_WEEK]
 
 
+# ---------------------------------------------------------------------------
+# Item 4 de propuestas-30-07-2026.md (30/07/2026): banco de "ganchos
+# ganadores" categorizados. En vez de solo mirar el texto crudo de los
+# ultimos posts (lo que ya hacia build_context), categorizamos que TIPO de
+# gancho tuvo cada post -- pregunta, oferta, testimonio, urgencia, dato
+# curioso -- y despues priorizamos en el prompt el patron que mejor
+# funciono con este cliente, no solo evitamos repetir frases.
+#
+# Heuristica local por palabras clave/signos (sin llamado extra a IA, para
+# no sumar costo ni latencia): mira el texto del caption y lo clasifica en
+# la primera categoria que matchee. Es imperfecta a proposito -- el
+# objetivo es una senal util para priorizar patrones, no una clasificacion
+# academica perfecta.
+# ---------------------------------------------------------------------------
+_HOOK_TYPE_KEYWORDS = {
+    "oferta": ["%", "descuento", "oferta", "promo", "2x1", "gratis", "precio especial", "cuotas"],
+    "urgencia": ["hoy", "ultimos", "últimos", "solo por", "se acaba", "apurate", "apúrate", "quedan", "esta semana"],
+    "testimonio": ["cliente", "nos escribio", "nos escribió", "reseña", "opinaron", "confia en nosotros", "confía en nosotros"],
+    "dato_curioso": ["sabias que", "sabías que", "dato", "curiosidad", "¿sabias", "¿sabías"],
+}
+
+
+def classify_hook_type(caption):
+    if not caption:
+        return "otro"
+    text = caption.lower()
+    if "?" in caption or "¿" in caption:
+        return "pregunta"
+    for hook_type, keywords in _HOOK_TYPE_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            return hook_type
+    return "otro"
+
+
+def build_hook_type_ranking(scored):
+    """Agrupa los posts puntuados (ver build_context) por tipo de gancho y
+    devuelve un ranking por score promedio, de mayor a menor -- solo tipos
+    con al menos 2 posts, para no sacar conclusiones de un dato suelto."""
+    buckets = {}
+    for item in scored:
+        hook_type = classify_hook_type(item["caption"])
+        buckets.setdefault(hook_type, []).append(item["score"])
+
+    ranked = [
+        {"hook_type": hook_type, "avg_score": sum(scores) / len(scores), "n": len(scores)}
+        for hook_type, scores in buckets.items()
+        if len(scores) >= 2
+    ]
+    ranked.sort(key=lambda r: r["avg_score"], reverse=True)
+    return ranked
+
+
 def build_context(client, ai_settings):
     client_id = client["id"]
 
@@ -286,6 +338,7 @@ def build_context(client, ai_settings):
         "posts_last_30_days": len(published),
         "best_times": best_times_from_scored(scored),
         "positive_reviews": positive_reviews,
+        "hook_type_ranking": build_hook_type_ranking(scored),
     }
 
 
@@ -416,6 +469,20 @@ def build_prompt(client, ai_settings, context, num_days):
             for p in context["top_posts"]
         )
         parts.append(f"Los posts que MEJOR engancharon en los ultimos 30 dias fueron: {top_txt}. Considera angulos similares (mismo tono/formato/gancho), sin copiar el texto.")
+
+    if context.get("hook_type_ranking"):
+        ranking_txt = " | ".join(
+            f"{r['hook_type']} (score prom. {r['avg_score']:.1f}, n={r['n']})"
+            for r in context["hook_type_ranking"]
+        )
+        best_type = context["hook_type_ranking"][0]["hook_type"]
+        parts.append(
+            f"Banco de ganchos ganadores (item 4 de propuestas): categorizando los posts de los ultimos 30 dias por TIPO "
+            f"de gancho (pregunta, oferta, testimonio, urgencia, dato_curioso, otro), este es el ranking por enganche "
+            f"promedio con este cliente puntual: {ranking_txt}. Priorizá el TIPO de gancho que mejor funciona ('{best_type}') "
+            f"en al menos una de las ideas de esta semana -- no se trata de repetir el mismo texto, sino el mismo patron "
+            f"de gancho que probadamente engancha a esta audiencia."
+        )
 
     if context["bottom_posts"]:
         bottom_txt = " || ".join(f"\"{p['caption'][:180]}\"" for p in context["bottom_posts"])
