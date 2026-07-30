@@ -231,9 +231,24 @@ def generate_caption(ai_settings, client_name, sales_link, client_id=None):
                 history_lines.append(f"Estos posts tuvieron el peor enganche -- evita ese mismo enfoque: {sample}.")
     history_block = " ".join(history_lines)
 
+    # Item 1.5 de propuestas-30-07-2026.md: se suma como instruccion aparte
+    # del system_prompt (que es configurable por cliente desde el panel, no
+    # queremos pisarlo) para que este fallback tambien escriba con los 5
+    # principios de biblia-marketing-confianza.md: especifico > generico,
+    # mostrar proceso real (no resultado embellecido), decir que pasa si
+    # algo sale mal, la cara humana como garantia, y nombrar la desconfianza
+    # del rubro en vez de esquivarla -- en vez de una venta generica.
+    confianza_line = (
+        "Escribi con criterio de 'marketing de confianza': un dato especifico y verificable pesa mas que un "
+        "adjetivo de venta; si podes, aludi al proceso real de trabajo (no a un resultado embellecido de stock); "
+        "si aplica, mencioná que pasa si algo no sale bien (garantia dicha simple, no en letra chica); evitá frases "
+        "de venta genericas que podria decir cualquiera. "
+    )
+
     user_prompt = (
         f"Negocio: {client_name}. Temas/keywords: {topics}. Tono: {tone}. "
         f"{knowledge_line}"
+        f"{confianza_line}"
         f"Escribi UNA publicacion nueva y distinta para Instagram/Facebook, maximo {max_chars} caracteres, "
         f"con un cierre que invite a comentar la palabra clave para recibir el link de compra. "
         f"No incluyas el link directamente en el texto. No repitas frases genericas. "
