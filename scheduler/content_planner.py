@@ -100,6 +100,11 @@ def sb_insert(table, rows):
     return r.json()
 
 
+def sb_delete(table, params):
+    r = requests.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers=SUPABASE_HEADERS, params=params, timeout=30)
+    r.raise_for_status()
+
+
 # ---------------------------------------------------------------------------
 # Llamadas a IA (mismos providers/criterio que post_scheduler.py; se
 # duplica aca en vez de importar porque cada script corre como job
@@ -336,9 +341,10 @@ def build_context(client, ai_settings):
         "top_posts": top_posts,
         "bottom_posts": bottom_posts,
         "posts_last_30_days": len(published),
-        "best_times": best_times_from_scored(scored),
+        "best_times": best_times_from_scored(scored, client_id=client_id),
         "positive_reviews": positive_reviews,
         "hook_type_ranking": build_hook_type_ranking(scored),
+        "recycle_candidate": get_recycle_candidate(client_id),
     }
 
 
@@ -363,7 +369,7 @@ _WEEKDAY_NAMES_ES = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabad
 MIN_SAMPLES_PER_BUCKET = 3
 
 
-def best_times_from_scored(scored, top_n=2):
+def best_times_from_scored(scored, top_n=2, client_id=None):
     buckets = {}  # (weekday, hour) -> lista de scores
     for item in scored:
         raw = item.get("published_at")
@@ -383,10 +389,96 @@ def best_times_from_scored(scored, top_n=2):
     ]
     ranked.sort(key=lambda r: r[1], reverse=True)
 
+    if client_id is not None:
+        persist_suggested_schedule(client_id, ranked)
+
     return [
         f"{_WEEKDAY_NAMES_ES[weekday]} alrededor de las {hour}hs (promedio de enganche mas alto, basado en {n} posts)"
         for (weekday, hour), _avg, n in ranked[:top_n]
     ]
+
+
+def persist_suggested_schedule(client_id, ranked):
+    """Reemplaza el ranking guardado en socialbot_suggested_schedule para
+    este cliente. Se borra todo y se reinserta en cada corrida -- no hay
+    historial, solo el ranking vigente (mismo criterio que ya se usa para
+    el plan semanal, que tampoco guarda versiones viejas). Esto es lo que
+    el panel de agencia lee para mostrar la sugerencia en la pestaña
+    "Horarios" (propuesta 5 de propuestas-30-07-2026.md)."""
+    sb_delete("socialbot_suggested_schedule", {"client_id": f"eq.{client_id}"})
+    if not ranked:
+        return
+    rows = [
+        {
+            "client_id": client_id,
+            "day_of_week": weekday,
+            "hour": hour,
+            "avg_score": avg,
+            "sample_size": n,
+        }
+        for (weekday, hour), avg, n in ranked
+    ]
+    sb_insert("socialbot_suggested_schedule", rows)
+
+
+# ---------------------------------------------------------------------------
+# Punto 6 de propuestas-30-07-2026.md: reciclado de contenido ganador. Un
+# post que funciono muy bien hace 3-4 meses, reformulado con angulo nuevo,
+# suele volver a funcionar -- se busca el post con mejor score de enganche
+# publicado entre RECYCLE_MIN_AGE_DAYS y RECYCLE_MAX_AGE_DAYS atras, se
+# descartan los ya sugeridos en los ultimos RECYCLE_COOLDOWN_DAYS (tabla
+# socialbot_recycle_suggestions), y el que sobrevive se pasa al prompt como
+# candidato a reciclar. No se fuerza a la IA a usarlo todas las semanas --
+# si no hay ningun candidato valido (cuenta muy nueva, o el mejor ya se
+# sugirio hace poco), esta parte del prompt simplemente se omite.
+# ---------------------------------------------------------------------------
+RECYCLE_MIN_AGE_DAYS = 90
+RECYCLE_MAX_AGE_DAYS = 200
+RECYCLE_COOLDOWN_DAYS = 45
+
+
+def get_recycle_candidate(client_id):
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=RECYCLE_MAX_AGE_DAYS)).isoformat()
+    until = (now - timedelta(days=RECYCLE_MIN_AGE_DAYS)).isoformat()
+
+    old_posts = sb_get(
+        "socialbot_posts",
+        {
+            "client_id": f"eq.{client_id}",
+            "status": "eq.published",
+            "and": f"(published_at.gte.{since},published_at.lte.{until})",
+            "select": "id,caption,published_at",
+        },
+    )
+    if not old_posts:
+        return None
+
+    scored = []
+    for post in old_posts:
+        metrics = sb_get("socialbot_post_metrics", {"post_id": f"eq.{post['id']}", "limit": "1"})
+        if not metrics:
+            continue
+        m = metrics[0]
+        score = (m.get("likes") or 0) + (m.get("comments") or 0) * 2 + (m.get("shares") or 0) * 3
+        scored.append({"id": post["id"], "caption": post["caption"], "published_at": post["published_at"], "score": score})
+    if not scored:
+        return None
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    cooldown_since = (now - timedelta(days=RECYCLE_COOLDOWN_DAYS)).isoformat()
+    recently_suggested = sb_get(
+        "socialbot_recycle_suggestions",
+        {"client_id": f"eq.{client_id}", "suggested_at": f"gte.{cooldown_since}", "select": "post_id"},
+    )
+    recently_suggested_ids = {r["post_id"] for r in (recently_suggested or [])}
+
+    candidate = next((p for p in scored if p["id"] not in recently_suggested_ids), None)
+    if not candidate:
+        return None
+
+    sb_insert("socialbot_recycle_suggestions", [{"client_id": client_id, "post_id": candidate["id"]}])
+    return candidate
 
 
 def build_prompt(client, ai_settings, context, num_days):
@@ -482,6 +574,20 @@ def build_prompt(client, ai_settings, context, num_days):
             f"promedio con este cliente puntual: {ranking_txt}. Priorizá el TIPO de gancho que mejor funciona ('{best_type}') "
             f"en al menos una de las ideas de esta semana -- no se trata de repetir el mismo texto, sino el mismo patron "
             f"de gancho que probadamente engancha a esta audiencia."
+        )
+
+    if context.get("recycle_candidate"):
+        rc = context["recycle_candidate"]
+        try:
+            age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(rc["published_at"].replace("Z", "+00:00"))).days
+        except ValueError:
+            age_days = None
+        age_txt = f", publicado hace {age_days} dias" if age_days is not None else ""
+        parts.append(
+            f"Punto 6 (reciclado de contenido ganador): este post funciono muy bien en su momento{age_txt}: "
+            f"\"{rc['caption'][:200]}\". Incluí UNA idea de la semana que lo reformule con un angulo nuevo "
+            f"(no copiar el texto, mismo gancho/tema pero redactado de cero) -- marcá esa idea puntual con "
+            f"\"angle\": \"reciclado\" en el JSON."
         )
 
     if context["bottom_posts"]:
