@@ -416,6 +416,7 @@
     <section class="view-section" id="view-referidos" style="display:none;">
       <h2>Referidos y reseñas sugeridas</h2>
       <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">Mensajes que se arman solos cuando un lead pasa a "Convertido" (punto 8 de propuestas-30-07-2026.md). Nunca se mandan sin aprobar acá primero.</p>
+      <div id="successStoryCard" style="margin-bottom:20px;"></div>
       <div id="referidosList"></div>
     </section>
 
@@ -1929,6 +1930,10 @@ async function loadClients(){
     // Punto 8 (propuestas-30-07-2026.md): sugerencias de mensaje de
     // referido/reseña armadas solas cuando un lead pasa a 'convertido'.
     const { data: referrals } = await sb.from('socialbot_referral_suggestions').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
+    // Punto 9 (propuestas-30-07-2026.md): último caso de éxito generado
+    // automáticamente cada mes (success_story_generator.py --all). Solo
+    // se guarda la fila más reciente por cliente (unique en client_id).
+    const { data: successStoryRows } = await sb.from('socialbot_success_stories').select('*').eq('client_id', c.id).maybeSingle();
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
     const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
     const { data: reviews } = await sb.from('socialbot_reviews').select('*').eq('client_id', c.id).order('review_created_at', { ascending:false }).limit(20);
@@ -2488,6 +2493,31 @@ async function loadClients(){
     `;
     referidosContainer.appendChild(referidosDiv);
 
+    // ── Tarjeta "Caso de éxito" (punto 9) ───────────────────────────────
+    // Solo mostramos un botón que pide un signed URL fresco al tocarlo --
+    // no guardamos ningún link ya armado en el HTML (el bucket es privado,
+    // RLS igual que el resto de las tablas socialbot_*, ver
+    // 0031_success_stories.sql).
+    const successStoryCard = document.getElementById('successStoryCard');
+    if(successStoryRows){
+      const generatedLabel = successStoryRows.generated_at
+        ? new Date(successStoryRows.generated_at).toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric' })
+        : '';
+      successStoryCard.innerHTML = `
+        <div class="card" style="padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+          <div>
+            <strong>📊 Caso de éxito de ${c.name}</strong>
+            <div class="meta-row" style="margin-top:2px;">Última versión generada el ${generatedLabel} · últimos ${successStoryRows.days} días</div>
+          </div>
+          <button type="button" onclick="openSuccessStory('${successStoryRows.storage_path}')">Ver / descargar</button>
+        </div>`;
+    } else {
+      successStoryCard.innerHTML = `
+        <div class="card" style="padding:12px 14px;">
+          <div class="meta-row">Todavía no se generó ningún caso de éxito automático para ${c.name} (corre el día 1 de cada mes para clientes activos con algo de actividad).</div>
+        </div>`;
+    }
+
     // Los chips de hashtags se pintan despues de insertar el HTML (necesitan
     // que el <input type="hidden"> ya exista en el DOM).
     renderHashtagChips(`hashtags-${c.id}`);
@@ -2725,6 +2755,16 @@ async function rejectReferralSuggestion(id){
   const { error } = await sb.from('socialbot_referral_suggestions').update({ status: 'rejected', updated_at: new Date().toISOString() }).eq('id', id);
   if(error){ alert('No se pudo descartar la sugerencia: ' + error.message); return; }
   loadClients();
+}
+
+// Punto 9 (propuestas-30-07-2026.md): el bucket 'success-stories' es
+// privado, así que en vez de guardar un link fijo pedimos un signed URL
+// nuevo cada vez que se toca el botón (dura 1 hora, tiempo de sobra para
+// abrirlo o descargarlo). La RLS de storage.objects ya filtra por dueño.
+async function openSuccessStory(storagePath){
+  const { data, error } = await sb.storage.from('success-stories').createSignedUrl(storagePath, 3600);
+  if(error || !data?.signedUrl){ alert('No se pudo generar el link: ' + (error?.message || 'desconocido')); return; }
+  window.open(data.signedUrl, '_blank');
 }
 
 async function useSuggestedSlot(clientId, hour, dayOfWeekPy){
