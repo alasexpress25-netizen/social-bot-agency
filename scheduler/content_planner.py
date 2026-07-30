@@ -278,6 +278,39 @@ def build_hook_type_ranking(scored):
     return ranked
 
 
+def persist_hook_type_ranking(client_id, ranked):
+    """Reemplaza el ranking guardado en socialbot_hook_type_ranking para
+    este cliente. Se borra todo y se reinserta en cada corrida -- mismo
+    criterio que persist_suggested_schedule (propuesta 5): no hay
+    historial, solo el ranking vigente. Esto es lo que el panel de
+    agencia lee para mostrar el banco de ganchos ganadores en la pestaña
+    "Plan" (propuesta 15 de propuestas-30-07-2026.md)."""
+    sb_delete("socialbot_hook_type_ranking", {"client_id": f"eq.{client_id}"})
+    if not ranked:
+        return
+    rows = [
+        {
+            "client_id": client_id,
+            "hook_type": r["hook_type"],
+            "avg_score": r["avg_score"],
+            "sample_size": r["n"],
+        }
+        for r in ranked
+    ]
+    sb_insert("socialbot_hook_type_ranking", rows)
+
+
+def refresh_hook_type_ranking(client_id, scored):
+    """Mismo motivo que refresh_suggested_schedule: build_hook_type_ranking
+    solo corria antes dentro de build_context(), que generate_plan_for_client()
+    solo llama cuando genera un plan NUEVO. Se separa para que el ranking
+    persistido (socialbot_hook_type_ranking) se actualice siempre, exista o
+    no un plan nuevo esta semana."""
+    ranked = build_hook_type_ranking(scored)
+    persist_hook_type_ranking(client_id, ranked)
+    return ranked
+
+
 def compute_scored_posts(client_id):
     """Extraido de build_context: junta los posts publicados de los ultimos
     30 dias con sus metricas y calcula un score de enganche simple. Vive
@@ -719,9 +752,15 @@ def refresh_suggested_schedule(client_id):
     socialbot_suggested_schedule seguia vacia para los tres.
     Esta funcion se llama aparte, siempre, independientemente de si se
     genera plan nuevo o no -- es liviana (no llama a la IA), asi que
-    correrla en cada pasada semanal del cron no tiene costo extra."""
+    correrla en cada pasada semanal del cron no tiene costo extra.
+
+    Punto 15 (propuestas-30-07-2026.md): mismo problema le pasaba al banco
+    de ganchos ganadores (socialbot_hook_type_ranking) -- se calcula acá
+    mismo, reutilizando el `scored` que ya se junto para los horarios, en
+    vez de agregar otra consulta aparte."""
     scored, _ = compute_scored_posts(client_id)
     best_times_from_scored(scored, client_id=client_id)
+    refresh_hook_type_ranking(client_id, scored)
 
 
 def generate_plan_for_client(client):
