@@ -463,7 +463,8 @@ const I18N = {
     prefsSaved: 'Preferencias guardadas.', hashtagsSaved: 'Texto y hashtags guardados.',
     weekBtn: 'Semanal', monthBtn: 'Mensual',
     totalsLabel: (w) => `Totales de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
-    kpiLeads: '📩 Consultas recibidas', kpiConverted: '🤝 Clientes nuevos', kpiLikes: '❤️ Me gusta',
+    kpiLeads: '📩 Consultas recibidas', kpiConverted: '🤝 Clientes nuevos', kpiLikes: '❤️ Me gusta', kpiReach: '👀 Te vieron',
+    reachFootnote: 'Todavía no tenemos este dato para algunas publicaciones recientes.',
     clicksLabel: (n, w) => `🔗 Clics al link (${n} en total, ${w}):`,
     kpiClicksComment: '💬 Comentarios', kpiClicksDm: '✉️ Mensajes directos', kpiClicksAi: '🤖 Respuesta IA', kpiClicksKeyword: '🔤 Palabra clave',
     chartLeadsTitle: 'Consultas recibidas', chartConvertedTitle: 'Clientes nuevos (convertidos)',
@@ -525,7 +526,8 @@ const I18N = {
     prefsSaved: 'Preferências salvas.', hashtagsSaved: 'Texto e hashtags salvos.',
     weekBtn: 'Semanal', monthBtn: 'Mensal',
     totalsLabel: (w) => `Totais de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
-    kpiLeads: '📩 Consultas recebidas', kpiConverted: '🤝 Clientes novos', kpiLikes: '❤️ Curtidas',
+    kpiLeads: '📩 Consultas recebidas', kpiConverted: '🤝 Clientes novos', kpiLikes: '❤️ Curtidas', kpiReach: '👀 Te viram',
+    reachFootnote: 'Ainda não temos esse dado para algumas publicações recentes.',
     clicksLabel: (n, w) => `🔗 Cliques no link (${n} no total, ${w}):`,
     kpiClicksComment: '💬 Comentários', kpiClicksDm: '✉️ Mensagens diretas', kpiClicksAi: '🤖 Resposta IA', kpiClicksKeyword: '🔤 Palavra-chave',
     chartLeadsTitle: 'Consultas recebidas', chartConvertedTitle: 'Clientes novos (convertidos)',
@@ -1228,7 +1230,7 @@ async function loadMetrics(){
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes, reach)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', currentClient.id).gte('clicked_at', windowStartIso),
   ]);
 
@@ -1236,6 +1238,9 @@ async function loadMetrics(){
   const postsRows = (postsWithMetrics||[]).map(p => ({
     published_at: p.published_at,
     likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
+    // Punto 11 de propuestas-30-07-2026.md: solo el total, sin gráfico ni
+    // vocabulario técnico -- acá alcanza con un KPI simple y motivador.
+    reach: (p.socialbot_post_metrics && p.socialbot_post_metrics.reach) ?? null,
   }));
 
   const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
@@ -1247,6 +1252,8 @@ async function loadMetrics(){
   const totalLeads = leadsRows.length;
   const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
+  const postsWithReach = postsRows.filter(p => p.reach !== null);
+  const totalReach = postsWithReach.reduce((s, p) => s + p.reach, 0);
   const windowLabel = period === 'week' ? t('last8weeks') : t('last6months');
 
   // Item 1 de propuestas-30-07-2026.md: clics reales al link del cliente,
@@ -1262,11 +1269,13 @@ async function loadMetrics(){
       <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('month')">${t('monthBtn')}</button>
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('totalsLabel')(windowLabel)}</div>
-    <div class="kpi-row">
+    <div class="kpi-row kpi-row-4">
       <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">${t('kpiLeads')}</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">${t('kpiConverted')}</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">${t('kpiLikes')}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${postsWithReach.length ? totalReach : '—'}</div><div class="kpi-label">${t('kpiReach')}</div></div>
     </div>
+    ${postsWithReach.length < postsRows.length ? `<div class="meta-row" style="margin-top:-6px; font-size:11px;">${t('reachFootnote')}</div>` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('clicksLabel')(totalClicks, windowLabel)}</div>
     <div class="kpi-row kpi-row-4">
       <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}</div><div class="kpi-label">${t('kpiClicksComment')}</div></div>
