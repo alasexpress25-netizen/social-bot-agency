@@ -1981,6 +1981,12 @@ async function loadClients(){
     // sentimiento negativo (ya no se autoresponden, quedan acá esperando
     // que la agencia los atienda).
     const { data: flaggedComments } = await sb.from('socialbot_flagged_comments').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
+    // Punto 13 (propuestas-30-07-2026.md): cuántas respuestas con IA ya
+    // se usaron hoy, para compararlas contra el límite diario del cliente
+    // (socialbot_ai_settings.daily_ai_reply_limit) antes de que caiga solo
+    // a la plantilla fija sin avisar a nadie.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const { data: aiUsageRow } = await sb.from('socialbot_ai_usage_log').select('call_count').eq('client_id', c.id).eq('usage_date', todayIso).maybeSingle();
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
     const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
     const { data: reviews } = await sb.from('socialbot_reviews').select('*').eq('client_id', c.id).order('review_created_at', { ascending:false }).limit(20);
@@ -2165,8 +2171,23 @@ async function loadClients(){
     const iaDiv = document.createElement('div');
     iaDiv.className = 'card client-card';
     iaDiv.dataset.clientId = c.id;
+    // Punto 13: barra de uso de IA de hoy vs el límite diario configurado
+    // (default 30, mismo valor que usa meta-webhook si no hay nada cargado).
+    const aiDailyLimit = ai.daily_ai_reply_limit || 30;
+    const aiUsedToday = (aiUsageRow && aiUsageRow.call_count) || 0;
+    const aiUsagePct = Math.min(100, Math.round((aiUsedToday / aiDailyLimit) * 100));
+    const aiUsageColor = aiUsagePct >= 100 ? '#ef4444' : (aiUsagePct >= 80 ? 'var(--gold)' : '#22c55e');
     iaDiv.innerHTML = `
       <div class="section-client-heading">${c.name} · ${ai.provider || 'sin configurar'}</div>
+      <div class="card" style="padding:10px 14px; margin-bottom:14px;">
+        <div class="meta-row" style="margin-top:0; display:flex; justify-content:space-between;">
+          <span>🤖 Respuestas con IA hoy</span>
+          <strong>${aiUsedToday} / ${aiDailyLimit}${aiUsagePct >= 100 ? ' · límite alcanzado, cayendo a plantilla fija' : ''}</strong>
+        </div>
+        <div style="background:rgba(255,255,255,0.08); border-radius:999px; height:8px; margin-top:8px; overflow:hidden;">
+          <div style="width:${aiUsagePct}%; height:100%; background:${aiUsageColor};"></div>
+        </div>
+      </div>
       <form class="inline" onsubmit="saveAi(event, '${c.id}')">
         <div class="grid2">
           <select name="provider">
@@ -2176,6 +2197,8 @@ async function loadClients(){
           </select>
           <input name="tone" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
         </div>
+        <label style="font-size:13px; color:var(--muted);">Límite de respuestas con IA por día — al llegar acá, el bot sigue respondiendo pero con una plantilla fija en vez de generar con IA</label>
+        <input name="daily_ai_reply_limit" type="number" min="1" placeholder="30" value="${ai.daily_ai_reply_limit || ''}" />
         <label style="font-size:13px; color:var(--muted);">Modelo para el plan semanal de contenido (Fase 6) — independiente del de arriba, para no compartir cuota gratuita con las respuestas automáticas</label>
         <select name="content_plan_provider">
           <option value="groq" ${ai.content_plan_provider==='groq'?'selected':''}>IA (gratis)</option>
@@ -2752,6 +2775,7 @@ async function saveAi(e, clientId){
     provider: f.get('provider'),
     content_plan_provider: f.get('content_plan_provider'),
     tone: f.get('tone'),
+    daily_ai_reply_limit: f.get('daily_ai_reply_limit') ? parseInt(f.get('daily_ai_reply_limit'), 10) : null,
     default_hashtags: f.get('default_hashtags'),
     topics: f.get('topics'),
     knowledge_base: f.get('knowledge_base'),
