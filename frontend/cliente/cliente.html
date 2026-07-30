@@ -145,6 +145,8 @@
   .chart-label{ font-size:10px; color:var(--muted); margin-top:4px; }
   .metric-title{ font-size:12px; color:var(--muted); margin-bottom:4px; }
   .kpi-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
+  .kpi-row-4{ grid-template-columns:repeat(4, 1fr); }
+  @media (max-width:520px){ .kpi-row-4{ grid-template-columns:repeat(2, 1fr); } }
   .kpi-card{ background:var(--accent-soft); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; text-align:center; }
   .kpi-value{ font-size:22px; font-weight:700; color:var(--gold); line-height:1.1; font-family:var(--font-title); }
   .kpi-label{ font-size:11px; color:var(--muted); margin-top:4px; }
@@ -462,6 +464,8 @@ const I18N = {
     weekBtn: 'Semanal', monthBtn: 'Mensual',
     totalsLabel: (w) => `Totales de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
     kpiLeads: '📩 Consultas recibidas', kpiConverted: '🤝 Clientes nuevos', kpiLikes: '❤️ Me gusta',
+    clicksLabel: (n, w) => `🔗 Clics al link (${n} en total, ${w}):`,
+    kpiClicksComment: '💬 Comentarios', kpiClicksDm: '✉️ Mensajes directos', kpiClicksAi: '🤖 Respuesta IA', kpiClicksKeyword: '🔤 Palabra clave',
     chartLeadsTitle: 'Consultas recibidas', chartConvertedTitle: 'Clientes nuevos (convertidos)',
     chartLikesTitle: 'Me gusta en publicaciones', chartPostsTitle: 'Publicaciones', chartReplyTitle: 'Tasa de respuesta automática (%)',
     installText: 'Instalá la app para acceso más rápido, sin buscarla en el navegador cada vez.',
@@ -522,6 +526,8 @@ const I18N = {
     weekBtn: 'Semanal', monthBtn: 'Mensal',
     totalsLabel: (w) => `Totais de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
     kpiLeads: '📩 Consultas recebidas', kpiConverted: '🤝 Clientes novos', kpiLikes: '❤️ Curtidas',
+    clicksLabel: (n, w) => `🔗 Cliques no link (${n} no total, ${w}):`,
+    kpiClicksComment: '💬 Comentários', kpiClicksDm: '✉️ Mensagens diretas', kpiClicksAi: '🤖 Resposta IA', kpiClicksKeyword: '🔤 Palavra-chave',
     chartLeadsTitle: 'Consultas recebidas', chartConvertedTitle: 'Clientes novos (convertidos)',
     chartLikesTitle: 'Curtidas nas publicações', chartPostsTitle: 'Publicações', chartReplyTitle: 'Taxa de resposta automática (%)',
     installText: 'Instale o app para um acesso mais rápido, sem precisar procurar no navegador toda vez.',
@@ -1219,10 +1225,11 @@ async function loadMetrics(){
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', currentClient.id).gte('clicked_at', windowStartIso),
   ]);
 
   const leadsRows = leads || [];
@@ -1242,6 +1249,12 @@ async function loadMetrics(){
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
   const windowLabel = period === 'week' ? t('last8weeks') : t('last6months');
 
+  // Item 1 de propuestas-30-07-2026.md: clics reales al link del cliente,
+  // abiertos por canal (mismo criterio que en el panel de agencia).
+  const clicksBySource = { comment_reply: 0, dm_reply: 0, fallback_reply: 0, ai_reply: 0 };
+  (linkClicks || []).forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
+  const totalClicks = Object.values(clicksBySource).reduce((s, n) => s + n, 0);
+
   const el = document.getElementById('metricsBox');
   el.innerHTML = `
     <div class="period-toggle">
@@ -1253,6 +1266,13 @@ async function loadMetrics(){
       <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">${t('kpiLeads')}</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">${t('kpiConverted')}</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">${t('kpiLikes')}</div></div>
+    </div>
+    <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('clicksLabel')(totalClicks, windowLabel)}</div>
+    <div class="kpi-row kpi-row-4">
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}</div><div class="kpi-label">${t('kpiClicksComment')}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.dm_reply}</div><div class="kpi-label">${t('kpiClicksDm')}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.ai_reply}</div><div class="kpi-label">${t('kpiClicksAi')}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.fallback_reply}</div><div class="kpi-label">${t('kpiClicksKeyword')}</div></div>
     </div>
     <div class="card">
       <div class="metric-title">${t('chartLeadsTitle')}</div>
