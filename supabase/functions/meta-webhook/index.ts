@@ -43,6 +43,23 @@ const DEFAULT_FALLBACK_REPLY =
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+// Item 1 de propuestas-30-07-2026.md: en vez de mandar el sales_link crudo
+// del cliente adentro de {{sales_link}}, mandamos un link a nuestro propio
+// Edge Function track-click, que registra el clic en
+// socialbot_link_clicks y despues redirige al link real. Asi sabemos
+// cuantos clics reales genera cada tipo de respuesta (y con que keyword),
+// en vez de solo medir likes/comments/shares.
+function buildTrackedLink(
+  clientId: string,
+  source: "comment_reply" | "dm_reply" | "fallback_reply" | "ai_reply",
+  opts: { externalPostId?: string | null; matchedKeyword?: string | null } = {},
+): string {
+  const params = new URLSearchParams({ c: clientId, src: source });
+  if (opts.externalPostId) params.set("post", opts.externalPostId);
+  if (opts.matchedKeyword) params.set("kw", opts.matchedKeyword);
+  return `${SUPABASE_URL}/functions/v1/track-click?${params.toString()}`;
+}
+
 async function debugLog(clientId: string | null, stage: string, detail: string) {
   try {
     await supabase.from("socialbot_ai_debug_log").insert({ client_id: clientId, stage, detail });
@@ -144,9 +161,9 @@ function matchKeyword(text: string, rules: any[]) {
 // GROQ_API_KEY configurada, o error de Groq). No consume cuota de IA -- es
 // una plantilla fija, igual que las reglas de palabra clave, para que nunca
 // quede un mensaje sin ningun tipo de respuesta.
-function buildFallbackReply(aiSettings: any, salesLink: string | null): string {
+function buildFallbackReply(aiSettings: any, clientId: string): string {
   const template = (aiSettings?.fallback_reply_template as string | null) || DEFAULT_FALLBACK_REPLY;
-  return template.replace("{{sales_link}}", salesLink ?? "");
+  return template.replace("{{sales_link}}", buildTrackedLink(clientId, "fallback_reply"));
 }
 
 // Intenta "reservar" el comentario/mensaje ANTES de procesarlo (insert con
@@ -580,7 +597,15 @@ async function saveFlaggedComment(clientId: string, platform: string, externalId
 async function tryAiReply(account: any, incomingText: string): Promise<{ reply: string; source: "ia" | "ia-cache"; lead: LeadDetection | null; sentiment: "negativo" | "neutral" | "positivo" } | null> {
   const clientId = account.client_id;
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
-  const salesLink = account.socialbot_clients?.sales_link ?? null;
+  // Antes se mandaba account.socialbot_clients?.sales_link crudo -- ahora
+  // un link con tracking (item 1 de propuestas-30-07-2026.md), para que
+  // este canal (probablemente el de mayor volumen, ya que la IA se intenta
+  // ANTES que el fallback por keyword) tambien quede medido. No se manda
+  // externalPostId porque esta respuesta se cachea por pregunta
+  // normalizada (getCachedReply) y se reutiliza entre distintos posts.
+  const salesLink = account.socialbot_clients?.sales_link
+    ? buildTrackedLink(clientId, "ai_reply", {})
+    : null;
 
   const limit = aiSettings?.daily_ai_reply_limit || DEFAULT_DAILY_AI_LIMIT;
 
@@ -619,7 +644,6 @@ async function handleComment(params: { platform: string; pageId: string; comment
   if (account.socialbot_clients?.active === false) return;
 
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
-  const salesLink = account.socialbot_clients?.sales_link ?? null;
 
   // Nunca responder a un comentario hecho por la propia cuenta (evita el
   // bucle: la respuesta del bot es en si misma un comentario nuevo, que
@@ -669,13 +693,16 @@ async function handleComment(params: { platform: string; pageId: string; comment
 
     const rule = matchKeyword(text, rules ?? []);
     if (rule) {
-      replyText = rule.reply_template.replace("{{sales_link}}", salesLink ?? "");
+      replyText = rule.reply_template.replace(
+        "{{sales_link}}",
+        buildTrackedLink(account.client_id, "comment_reply", { externalPostId: postId, matchedKeyword: rule.keyword }),
+      );
       matchedLabel = rule.keyword;
     } else {
       // 3) Respuesta de piso: ninguna keyword matcheo y no hubo IA (sin
       // cuota o sin configurar). Se manda igual una respuesta fija, sin
       // costo de IA, para que el comentario nunca quede sin contestar.
-      replyText = buildFallbackReply(aiSettings, salesLink);
+      replyText = buildFallbackReply(aiSettings, account.client_id);
       matchedLabel = "fallback-piso";
     }
   }
@@ -736,7 +763,6 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
   if (account.socialbot_clients?.active === false) return;
 
   const aiSettings = account.socialbot_clients?.socialbot_ai_settings;
-  const salesLink = account.socialbot_clients?.sales_link ?? null;
 
   // Nunca responder a un DM que en realidad mando la propia cuenta.
   if (senderId && (senderId === account.page_id || senderId === account.ig_business_id)) {
@@ -759,6 +785,20 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
   let leadToSave: LeadDetection | null = null;
 
   const aiResult = await tryAiReply(account, text);
+
+  // Punto 7 de propuestas-30-07-2026.md: handleComment ya escalaba quejas
+  // (sentiment negativo) a socialbot_flagged_comments en vez de
+  // autoresponder generico, pero handleDm nunca hacia este chequeo -- una
+  // queja por mensaje directo se autorespondia igual que cualquier otra
+  // cosa. Mismo criterio que en handleComment: se corta aca, no se manda
+  // respuesta automatica, y notify-flagged-comment avisa a la agencia via
+  // el trigger existente (no hace falta tocar nada de eso).
+  if (aiResult?.sentiment === "negativo") {
+    await saveFlaggedComment(account.client_id, platform, dmId, senderId, text, aiResult.lead?.interest ?? null);
+    await finishInteraction(platform, dmId, "queja-escalada", false);
+    return;
+  }
+
   if (aiResult) {
     replyText = aiResult.reply;
     matchedLabel = aiResult.source;
@@ -772,11 +812,14 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
 
     const rule = matchKeyword(text, rules ?? []);
     if (rule) {
-      replyText = rule.reply_template.replace("{{sales_link}}", salesLink ?? "");
+      replyText = rule.reply_template.replace(
+        "{{sales_link}}",
+        buildTrackedLink(account.client_id, "dm_reply", { matchedKeyword: rule.keyword }),
+      );
       matchedLabel = rule.keyword;
     } else {
       // Respuesta de piso, igual que en handleComment.
-      replyText = buildFallbackReply(aiSettings, salesLink);
+      replyText = buildFallbackReply(aiSettings, account.client_id);
       matchedLabel = "fallback-piso";
     }
   }
