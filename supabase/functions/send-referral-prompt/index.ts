@@ -92,7 +92,7 @@ Deno.serve(async (req: Request) => {
       console.error("Error enviando mensaje de referido:", errText);
       await supabase
         .from("socialbot_referral_suggestions")
-        .update({ status: "failed", send_error: errText.slice(0, 500), updated_at: new Date().toISOString() })
+        .update({ status: "failed", send_error: humanizeSendError(errText), updated_at: new Date().toISOString() })
         .eq("id", suggestionId);
       return new Response("error enviando, marcado como failed", { status: 200 });
     }
@@ -105,3 +105,31 @@ Deno.serve(async (req: Request) => {
     return new Response("excepcion, marcado como failed", { status: 200 });
   }
 });
+
+// BUGFIX 30/07/2026: el error mas comun que devuelve Meta aca no es un
+// problema nuestro -- es el (#551) "Esta persona no esta disponible en
+// este momento" (error_subcode 1545041), que en la practica significa que
+// se cerro la ventana de 24hs de Messenger para mandarle un mensaje
+// espontaneo a ese usuario (el lead no le escribio a la pagina en las
+// ultimas 24hs). Reintentar de inmediato va a fallar de nuevo con el
+// mismo error -- solo funciona si el lead vuelve a escribirle a la pagina.
+// Se traduce el mensaje para que quede claro en el panel que no es un
+// error tecnico transitorio, y para no invitar a un reintento inutil.
+function humanizeSendError(rawErrText: string): string {
+  try {
+    const parsed = JSON.parse(rawErrText);
+    const err = parsed?.error;
+    if (err?.code === 551 || err?.error_subcode === 1545041) {
+      return (
+        "No se pudo enviar: se cerro la ventana de 24hs de Messenger para este lead " +
+        "(no le escribio a la pagina recientemente). Reintentar ahora va a fallar de nuevo -- " +
+        "solo va a funcionar si el lead vuelve a escribir. Mientras tanto, conviene contactarlo " +
+        "por otro medio (llamada, WhatsApp personal, etc.) si hace falta pedirle la reseña/referido."
+      );
+    }
+    if (err?.message) return err.message.slice(0, 500);
+  } catch {
+    // no era JSON parseable, se usa el texto crudo tal cual
+  }
+  return rawErrText.slice(0, 500);
+}
