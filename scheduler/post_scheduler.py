@@ -453,18 +453,28 @@ def _build_permalink(platform, raw_external_id, access_token):
 
 
 def _fetch_facebook_post_insights(post_id, access_token):
-    """Reach/impressions de un post de Pagina. Best-effort: si Meta no tiene
-    el dato todavia (posts muy recientes) o el permiso no alcanza, no rompe
-    nada -- simplemente esas columnas quedan en null."""
+    """Reach de un post de Pagina. Best-effort: si Meta no tiene el dato
+    todavia (posts muy recientes) o el permiso no alcanza, no rompe nada --
+    simplemente esas columnas quedan en null.
+
+    Item 3 de propuestas-30-07-2026.md (30/07/2026): Meta deprecó
+    'post_impressions' y 'post_impressions_unique' el 15/06/2026 (quedan
+    invalidos para todas las versiones de la API) -- por eso este fetch
+    venia devolviendo siempre None,None para Facebook sin ningun error
+    visible (el except silencioso se comia el "invalid metric"). El
+    reemplazo oficial de Meta es 'post_total_media_view_unique' (alcance
+    unico del post); no hay un reemplazo directo para "impressions" totales,
+    asi que esa columna queda sin dato por ahora.
+    """
     try:
         r = requests.get(
             f"https://graph.facebook.com/{GRAPH_API_VERSION}/{post_id}/insights",
-            params={"metric": "post_impressions,post_impressions_unique", "access_token": access_token},
+            params={"metric": "post_total_media_view_unique", "access_token": access_token},
             timeout=30,
         )
         r.raise_for_status()
         values = {d["name"]: d["values"][0]["value"] for d in r.json().get("data", []) if d.get("values")}
-        return values.get("post_impressions_unique"), values.get("post_impressions")
+        return values.get("post_total_media_view_unique"), None
     except Exception:
         return None, None
 
