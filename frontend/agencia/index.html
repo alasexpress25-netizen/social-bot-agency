@@ -1966,6 +1966,11 @@ async function loadClients(){
     const { data: aiRows } = await sb.from('socialbot_ai_settings').select('*').eq('client_id', c.id);
     const { data: slots } = await sb.from('socialbot_schedule_slots').select('*').eq('client_id', c.id).order('hour');
     const { data: suggestedSchedule } = await sb.from('socialbot_suggested_schedule').select('*').eq('client_id', c.id).order('avg_score', { ascending: false });
+    // Punto 15 (propuestas-30-07-2026.md): ranking de ganchos ganadores ya
+    // calculado por content_planner.py (punto 4) pero solo usado dentro
+    // del prompt de la IA -- se persiste en socialbot_hook_type_ranking
+    // para poder mostrarlo acá.
+    const { data: hookTypeRanking } = await sb.from('socialbot_hook_type_ranking').select('*').eq('client_id', c.id).order('avg_score', { ascending: false });
     const { data: media } = await sb.from('socialbot_media_assets').select('*').eq('client_id', c.id).order('created_at', {ascending:false});
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
     const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
@@ -2084,13 +2089,47 @@ async function loadClients(){
     `;
     container.appendChild(div);
 
+    // Punto 15 (propuestas-30-07-2026.md): mismo estilo visual que la
+    // sugerencia de horarios (medallas + barra relativa de enganche),
+    // pero para el ranking de tipo de gancho (pregunta/oferta/testimonio/
+    // urgencia/dato curioso) en vez de dia+hora. Es puramente informativo,
+    // sin boton de accion -- ya se usa solo dentro del prompt de la IA
+    // (content_planner.py lo prioriza automaticamente), esto es la parte
+    // visual que faltaba del dato que ya se calculaba.
+    const hookTypeLabels = { pregunta:'❓ Pregunta', oferta:'🏷️ Oferta', testimonio:'💬 Testimonio', urgencia:'⏰ Urgencia', dato_curioso:'💡 Dato curioso', otro:'📄 Otro' };
+    const hookRankingHtml = (hookTypeRanking && hookTypeRanking.length)
+      ? (() => {
+          const sorted = [...hookTypeRanking].sort((a, b) => Number(b.avg_score) - Number(a.avg_score));
+          const maxScore = Math.max(...sorted.map(s => Number(s.avg_score) || 0), 0.0001);
+          const medals = ['🥇', '🥈', '🥉'];
+          const rows = sorted.map((s, idx) => {
+            const scoreNum = Number(s.avg_score) || 0;
+            const barPct = Math.max(4, Math.round((scoreNum / maxScore) * 100));
+            const rankPrefix = idx < 3 ? `${medals[idx]} ` : '';
+            return `
+              <div style="padding:6px 0; ${idx > 0 ? 'border-top:1px solid var(--line);' : ''}">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                  <span style="font-size:13px;">${rankPrefix}${hookTypeLabels[s.hook_type] || s.hook_type}</span>
+                  <span style="font-size:11px; color:var(--muted); white-space:nowrap;">enganche ${scoreNum.toFixed(1)} · ${s.sample_size} posts</span>
+                </div>
+                <div style="margin-top:4px; max-width:220px; height:5px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
+                  <div style="height:100%; width:${barPct}%; background:var(--gold);"></div>
+                </div>
+              </div>
+            `;
+          }).join('');
+          return `
+            <div style="border:1px solid var(--gold); border-radius:8px; padding:12px; margin-bottom:14px; background:rgba(201,162,68,0.06);">
+              <div style="font-size:13px; color:var(--gold); margin-bottom:2px;">🎣 Banco de ganchos ganadores (últimos 30 días)</div>
+              <div style="font-size:11px; color:var(--muted); margin-bottom:8px;">Tipo de gancho por enganche promedio — la IA ya prioriza el mejor al armar el plan semanal.</div>
+              ${rows}
+            </div>
+          `;
+        })()
+      : '';
+
     // ── Pestaña "Plan" ────────────────────────────────────────────────
-    if((planItems||[]).length){
-      const planDiv = document.createElement('div');
-      planDiv.className = 'card client-card';
-      planDiv.dataset.clientId = c.id;
-      planDiv.innerHTML = `
-        <div class="section-client-heading">${c.name} · ${planItems.length} idea(s)</div>
+    const planItemsSectionHtml = (planItems||[]).length ? `
         <div class="meta-row" style="margin-bottom:8px;">
           POST DE PUBLICACION (texto que va debajo del video, junto con los hashtags), generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá/rechaza o edita cada uno — el que quede aprobado se publica solo el día sugerido, con este texto y ese Hashtag.
         </div>
@@ -2128,6 +2167,16 @@ async function loadClients(){
           </div>
         `).join('')}
         </div>
+      ` : '';
+
+    if((planItems||[]).length || hookRankingHtml){
+      const planDiv = document.createElement('div');
+      planDiv.className = 'card client-card';
+      planDiv.dataset.clientId = c.id;
+      planDiv.innerHTML = `
+        <div class="section-client-heading">${c.name} · ${(planItems||[]).length} idea(s)</div>
+        ${hookRankingHtml}
+        ${planItemsSectionHtml}
       `;
       planContainer.appendChild(planDiv);
     }
