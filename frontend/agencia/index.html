@@ -331,6 +331,11 @@
       <span class="nav-badge" id="leadsBadge" style="display:none;">0</span>
       <span>Leads</span>
     </button>
+    <button type="button" class="nav-item" data-view="referidos" onclick="switchView('referidos')">
+      <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span class="nav-badge" id="referidosBadge" style="display:none;">0</span>
+      <span>Referidos</span>
+    </button>
     <button type="button" class="nav-item" data-view="reviews" onclick="switchView('reviews')">
       <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
       <span>Reseñas</span>
@@ -406,6 +411,12 @@
     <section class="view-section" id="view-leads" style="display:none;">
       <h2>Leads capturados</h2>
       <div id="leadsList"></div>
+    </section>
+
+    <section class="view-section" id="view-referidos" style="display:none;">
+      <h2>Referidos y reseñas sugeridas</h2>
+      <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">Mensajes que se arman solos cuando un lead pasa a "Convertido" (punto 8 de propuestas-30-07-2026.md). Nunca se mandan sin aprobar acá primero.</p>
+      <div id="referidosList"></div>
     </section>
 
     <section class="view-section" id="view-reviews" style="display:none;">
@@ -1825,6 +1836,18 @@ async function updateLeadsBadge(){
   setBadgeCount(badge, count);
 }
 
+// Badge de "Referidos": cuenta las sugerencias en status='proposed' del
+// cliente seleccionado -- son las que esperan revisión/aprobación de la
+// agencia (punto 8 de propuestas-30-07-2026.md).
+async function updateReferidosBadge(){
+  const badge = document.getElementById('referidosBadge');
+  if(!badge) return;
+  if(!selectedClientId){ setBadgeCount(badge, 0); return; }
+  const { count, error } = await sb.from('socialbot_referral_suggestions').select('id', { count:'exact', head:true }).eq('status', 'proposed').eq('client_id', selectedClientId);
+  if(error){ console.error('No se pudo traer el conteo de referidos pendientes', error); return; }
+  setBadgeCount(badge, count);
+}
+
 // Helper compartido: muestra/oculta un badge numérico según el conteo,
 // recortando a "99+" para que no rompa el layout del ícono.
 function setBadgeCount(badge, count){
@@ -1864,6 +1887,7 @@ async function loadClients(){
   const postsContainer = document.getElementById('postsListAll'); postsContainer.innerHTML = '';
   const metricasContainer = document.getElementById('metricasList'); metricasContainer.innerHTML = '';
   const leadsContainer = document.getElementById('leadsList'); leadsContainer.innerHTML = '';
+  const referidosContainer = document.getElementById('referidosList'); referidosContainer.innerHTML = '';
   const reviewsContainer = document.getElementById('reviewsList'); reviewsContainer.innerHTML = '';
 
   // Armamos el selector de clientes de la topbar, preservando la selección
@@ -1886,6 +1910,7 @@ async function loadClients(){
   updateLeadsBadge();
   updatePlanBadge();
   updateClientesBadge();
+  updateReferidosBadge();
 
   // A partir de acá, todo lo pesado (cuentas, IA, horarios, medios, reglas,
   // posts, leads, plan de contenido, reseñas) se pide y se renderiza SOLO
@@ -1901,6 +1926,9 @@ async function loadClients(){
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
     const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
+    // Punto 8 (propuestas-30-07-2026.md): sugerencias de mensaje de
+    // referido/reseña armadas solas cuando un lead pasa a 'convertido'.
+    const { data: referrals } = await sb.from('socialbot_referral_suggestions').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
     const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
     const { data: reviews } = await sb.from('socialbot_reviews').select('*').eq('client_id', c.id).order('review_created_at', { ascending:false }).limit(20);
@@ -2375,6 +2403,55 @@ async function loadClients(){
     `;
     leadsContainer.appendChild(leadsDiv);
 
+    // ── Pestaña "Referidos" ───────────────────────────────────────────
+    // Punto 8 de propuestas-30-07-2026.md: cuando un lead pasa a
+    // 'convertido', el trigger trg_create_referral_suggestion arma un
+    // mensaje sugerido acá (status='proposed') y avisa por mail. La
+    // agencia lo revisa, lo puede editar, y recién al aprobar (status
+    // pasa a 'approved') el trigger trg_send_referral_suggestion dispara
+    // send-referral-prompt, que lo manda como DM real. Nunca se manda
+    // solo.
+    const referidosDiv = document.createElement('div');
+    referidosDiv.className = 'card client-card';
+    referidosDiv.dataset.clientId = c.id;
+    const REFERRAL_STATUS_META = {
+      proposed: { label: 'Pendiente de revisión', color: 'var(--gold)' },
+      approved: { label: 'Aprobado, enviando…', color: '#3b82f6' },
+      sent:     { label: 'Enviado', color: '#22c55e' },
+      rejected: { label: 'Descartado', color: 'var(--muted)' },
+      failed:   { label: 'Error al enviar', color: '#ef4444' },
+    };
+    referidosDiv.innerHTML = `
+      <div class="section-client-heading">${c.name} · ${(referrals||[]).length}</div>
+      ${(referrals||[])
+        .map(r => {
+          const meta = REFERRAL_STATUS_META[r.status] || { label: r.status, color: 'var(--muted)' };
+          const editable = r.status === 'proposed';
+          const relatedLead = (leads||[]).find(l => l.id === r.lead_id);
+          return `
+        <div class="card" style="margin-top:8px; padding:12px 14px;">
+          <div class="card-row">
+            <div>
+              <strong>${relatedLead?.name || 'Lead sin nombre'}</strong>
+              <div class="meta-row" style="margin-top:2px;">${r.platform === 'facebook' ? 'Facebook' : 'Instagram'} · ${relatedLead?.contact || 'sin contacto'}</div>
+            </div>
+            <span style="display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; background:${meta.color};">${meta.label}</span>
+          </div>
+          <textarea id="referral-msg-${r.id}" ${editable ? '' : 'disabled'} style="width:100%; min-height:70px; margin-top:8px; ${editable ? '' : 'opacity:0.7;'}">${(r.message||'').replace(/</g,'&lt;')}</textarea>
+          ${r.status === 'failed' && r.send_error ? `<div class="meta-row" style="color:#ef4444; font-size:12px;">Motivo: ${r.send_error}</div>` : ''}
+          <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${r.created_at ? new Date(r.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            ${r.status === 'proposed' ? `
+              <button type="button" onclick="approveReferralSuggestion('${r.id}')">Aprobar y enviar</button>
+              <button type="button" class="secondary" onclick="rejectReferralSuggestion('${r.id}')">Descartar</button>
+            ` : ''}
+            ${r.status === 'failed' ? `<button type="button" onclick="approveReferralSuggestion('${r.id}')">Reintentar envío</button>` : ''}
+          </div>
+        </div>
+      `;}).join('') || '<div class="meta-row">sin sugerencias de referido todavía</div>'}
+    `;
+    referidosContainer.appendChild(referidosDiv);
+
     // Los chips de hashtags se pintan despues de insertar el HTML (necesitan
     // que el <input type="hidden"> ya exista en el DOM).
     renderHashtagChips(`hashtags-${c.id}`);
@@ -2591,6 +2668,29 @@ async function deleteSlot(slotId, clientId){
 // guardada en socialbot_suggested_schedule. dayOfWeekPy viene en formato
 // Python weekday() (0=lunes..6=domingo); el selector de horarios usa
 // 1=lunes..7=domingo, de ahí el +1.
+// Punto 8 (propuestas-30-07-2026.md): al aprobar, primero se guarda el
+// texto tal como haya quedado editado en el textarea (por si la agencia
+// lo tocó) y recién ahí se pasa a 'approved' -- ese cambio de estado es
+// lo que dispara trg_send_referral_suggestion -> send-referral-prompt,
+// que manda el DM real. También sirve para "Reintentar envío" sobre una
+// sugerencia en 'failed': vuelve a poner 'approved' y el trigger la
+// reintenta.
+async function approveReferralSuggestion(id){
+  const textarea = document.getElementById(`referral-msg-${id}`);
+  const message = textarea ? textarea.value : undefined;
+  const update = { status: 'approved', updated_at: new Date().toISOString() };
+  if(message !== undefined) update.message = message;
+  const { error } = await sb.from('socialbot_referral_suggestions').update(update).eq('id', id);
+  if(error){ alert('No se pudo aprobar la sugerencia: ' + error.message); return; }
+  loadClients();
+}
+
+async function rejectReferralSuggestion(id){
+  const { error } = await sb.from('socialbot_referral_suggestions').update({ status: 'rejected', updated_at: new Date().toISOString() }).eq('id', id);
+  if(error){ alert('No se pudo descartar la sugerencia: ' + error.message); return; }
+  loadClients();
+}
+
 async function useSuggestedSlot(clientId, hour, dayOfWeekPy){
   await sb.from('socialbot_schedule_slots').insert({
     client_id: clientId,
