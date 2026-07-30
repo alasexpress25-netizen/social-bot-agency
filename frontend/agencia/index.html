@@ -614,6 +614,11 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 let currentAgencyId = null;
 
+// Mismo orden que _WEEKDAY_NAMES_ES en content_planner.py (Python
+// weekday(): 0=lunes..6=domingo) -- usado para mostrar la sugerencia de
+// horario de socialbot_suggested_schedule (propuesta 5).
+const _WEEKDAY_NAMES_ES_JS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+
 // Se guarda en localStorage para que, si recargás la página o el service
 // worker actualiza la PWA sola, el panel vuelva a abrir con el mismo
 // cliente que estabas editando en vez de caer siempre al primero de la
@@ -1891,6 +1896,7 @@ async function loadClients(){
     const { data: accounts } = await sb.from('socialbot_social_accounts').select('*').eq('client_id', c.id);
     const { data: aiRows } = await sb.from('socialbot_ai_settings').select('*').eq('client_id', c.id);
     const { data: slots } = await sb.from('socialbot_schedule_slots').select('*').eq('client_id', c.id).order('hour');
+    const { data: suggestedSchedule } = await sb.from('socialbot_suggested_schedule').select('*').eq('client_id', c.id).order('avg_score', { ascending: false });
     const { data: media } = await sb.from('socialbot_media_assets').select('*').eq('client_id', c.id).order('created_at', {ascending:false});
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
     const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
@@ -2118,8 +2124,26 @@ async function loadClients(){
       if(a.hour !== b.hour) return a.hour - b.hour;
       return a.minute - b.minute;
     });
+    // Propuesta 5 (propuestas-30-07-2026.md): sugerencia de horario segun
+    // engagement real, calculada por content_planner.py y guardada en
+    // socialbot_suggested_schedule. Solo informativo -- no cambia los
+    // horarios activos hasta que la agencia toque "Usar este horario".
+    const suggestedHtml = (suggestedSchedule && suggestedSchedule.length)
+      ? `
+        <div style="border:1px solid var(--gold); border-radius:8px; padding:12px; margin-bottom:14px; background:rgba(201,162,68,0.06);">
+          <div style="font-size:13px; color:var(--gold); margin-bottom:8px;">📊 Horario sugerido según enganche real (últimos 30 días)</div>
+          ${suggestedSchedule.map(s => `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0;">
+              <span style="font-size:13px;">${_WEEKDAY_NAMES_ES_JS[s.day_of_week]} alrededor de las ${s.hour}hs <span style="color:var(--muted);">(${s.sample_size} posts)</span></span>
+              <button type="button" class="secondary" style="padding:4px 10px; font-size:12px;" onclick="useSuggestedSlot('${c.id}', ${s.hour}, ${s.day_of_week})">Usar este horario</button>
+            </div>
+          `).join('')}
+        </div>
+      `
+      : '';
     horariosDiv.innerHTML = `
       <div class="section-client-heading">${c.name} · ${sortedSlots.length}</div>
+      ${suggestedHtml}
       <form class="inline" onsubmit="saveAllSlots(event, '${c.id}')">
         ${sortedSlots.map(s => `
           <div class="slot-card" data-slot-id="${s.id}" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
@@ -2559,6 +2583,21 @@ async function saveAllSlots(e, clientId){
 async function deleteSlot(slotId, clientId){
   if(!confirm('¿Eliminar este horario?')) return;
   await sb.from('socialbot_schedule_slots').delete().eq('id', slotId);
+  loadClients();
+}
+
+// Propuesta 5 (propuestas-30-07-2026.md): agrega como horario activo la
+// sugerencia calculada por content_planner.py (best_times_from_scored),
+// guardada en socialbot_suggested_schedule. dayOfWeekPy viene en formato
+// Python weekday() (0=lunes..6=domingo); el selector de horarios usa
+// 1=lunes..7=domingo, de ahí el +1.
+async function useSuggestedSlot(clientId, hour, dayOfWeekPy){
+  await sb.from('socialbot_schedule_slots').insert({
+    client_id: clientId,
+    hour,
+    minute: 0,
+    day_of_week: dayOfWeekPy + 1,
+  });
   loadClients();
 }
 
