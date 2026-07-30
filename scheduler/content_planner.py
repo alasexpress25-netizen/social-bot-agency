@@ -259,6 +259,25 @@ def build_context(client, ai_settings):
     top_posts = scored[:3]
     bottom_posts = scored[-3:] if len(scored) > 3 else []
 
+    # Item 1.5 de propuestas-30-07-2026.md (biblia-marketing-confianza.md,
+    # pilar 3 "Testimonio de cliente real"): resenas reales positivas ya
+    # capturadas por reviews_monitor.py, listas para reciclar como material
+    # de contenido (nombre real + texto real, no un testimonio inventado).
+    recent_reviews_raw = sb_get(
+        "socialbot_reviews",
+        {
+            "client_id": f"eq.{client_id}",
+            "rating": "gte.4",
+            "order": "review_created_at.desc",
+            "limit": "5",
+            "select": "author_name,rating,review_text",
+        },
+    )
+    positive_reviews = [
+        r for r in (recent_reviews_raw or [])
+        if r.get("review_text") and r.get("author_name")
+    ]
+
     return {
         "recent_captions": recent_captions,
         "lead_interests": lead_interests,
@@ -266,6 +285,7 @@ def build_context(client, ai_settings):
         "bottom_posts": bottom_posts,
         "posts_last_30_days": len(published),
         "best_times": best_times_from_scored(scored),
+        "positive_reviews": positive_reviews,
     }
 
 
@@ -327,18 +347,60 @@ def build_prompt(client, ai_settings, context, num_days):
     default_hashtags = ai_settings.get("client_hashtags") or ai_settings.get("default_hashtags") or ""
     sales_link = client.get("sales_link") or ""
 
+    # Item 1.5 de propuestas-30-07-2026.md: system_prompt reescrito segun
+    # biblia-marketing-confianza.md. Idea central del documento: quien ve un
+    # anuncio hoy no piensa "¿me sirve?" sino "¿me van a estafar?", y ninguna
+    # frase de venta linda revierte eso -- solo prueba verificable lo hace.
+    # Instagram/Facebook son vidriera de entretenimiento, no de venta
+    # directa; el trabajo del contenido es acumular confianza para que la
+    # persona de el primer paso (comentar la keyword / escribir).
     system_prompt = (
-        "Sos un estratega de contenido para redes sociales de una agencia. "
+        "Sos un estratega de contenido para redes sociales de una agencia que trabaja con la filosofia del "
+        "'marketing de confianza': en mercados con mucha oferta trucha, quien ve un post no piensa '¿me sirve?' "
+        "sino '¿me van a estafar?', y ninguna frase de venta prolija revierte ese reflejo -- solo la prueba "
+        "verificable lo hace. Instagram/Facebook son vidriera de entretenimiento, no de venta directa: el unico "
+        "trabajo de cada post es acumular la confianza necesaria para que la persona de un primer paso chico "
+        "(comentar la keyword para pedir el link), no para 'cerrar la venta' en el texto. "
+        "Al redactar cada caption aplicá estos 5 principios: "
+        "(1) especifico vence a generico -- un dato concreto y verificable pesa mas que un adjetivo de venta; "
+        "(2) mostrar el proceso real, no un resultado embellecido de stock; "
+        "(3) decir explicitamente que pasa si algo sale mal (garantia dicha en criollo, no en letra chica); "
+        "(4) la cara humana (el dueno/a, su nombre, su voz) es la garantia mas fuerte que hay; "
+        "(5) nombrar la desconfianza en vez de esquivarla ('sabemos que hay mucha oferta trucha, por eso te "
+        "mostramos como trabajamos') genera alivio, no rechazo. "
         "Tu trabajo es proponer, con criterio real (no generico), que publicar esta semana para un cliente puntual, "
-        "basandote en que temas le interesan a su audiencia real y que tipo de post funciono mejor antes. "
+        "basandote en que temas le interesan a su audiencia real, que tipo de post funciono mejor antes, y rotando "
+        "entre los pilares de contenido (ver mas abajo) para no repetir siempre el mismo tipo de post. "
         "Cada idea debe incluir el TEXTO FINAL del post, listo para publicar, no solo el tema."
     )
 
     parts = [
         f"Negocio: {client['name']}. Temas/keywords habituales: {topics or '(sin cargar)'}. Tono de marca: {tone}.",
     ]
+
+    parts.append(
+        "Pilares de contenido disponibles (rotá entre estos a lo largo de la semana, no repitas el mismo pilar en "
+        "dos ideas de la misma tanda salvo que no haya otra opcion viable con los datos disponibles): "
+        "1) Antes/despues real (filmado/fotografiado por el propio negocio, con lugar y fecha reconocibles); "
+        "2) Proceso/detras de escena (el trabajo mientras se hace, no el resultado pulido); "
+        "3) Testimonio de cliente real (nombre real, reseña real -- ver mas abajo si hay disponibles); "
+        "4) Nombrar el miedo del mercado (la desconfianza tipica del rubro, contrastada con la forma de trabajar "
+        "propia); 5) Ayuda comunitaria/aporte real (mostrar que el negocio ayuda a su gente, no solo que vende); "
+        "6) Reversion de riesgo (la garantia dicha en criollo)."
+    )
     if knowledge_base:
         parts.append(f"Informacion real del negocio (fuente de verdad, no inventes precios/datos fuera de esto): {knowledge_base}.")
+
+    if context.get("positive_reviews"):
+        reviews_txt = " || ".join(
+            f"{r['author_name']} ({r['rating']}★): \"{r['review_text'][:180]}\""
+            for r in context["positive_reviews"]
+        )
+        parts.append(
+            f"Reseñas reales positivas recientes de este negocio (Google/Facebook), material listo para el pilar "
+            f"'testimonio de cliente real' -- si usás alguna, citá el nombre real y una idea concreta del texto "
+            f"(no inventes una reseña distinta): {reviews_txt}."
+        )
 
     if context["lead_interests"]:
         parts.append(
@@ -406,7 +468,7 @@ def build_prompt(client, ai_settings, context, num_days):
 
     parts.append(
         'Respondé EXCLUSIVAMENTE con un JSON valido (sin texto antes ni despues, sin markdown, sin ```), con esta forma exacta: '
-        '{"ideas": [{"day_offset": 0, "angle": "<angulo/pilar en pocas palabras>", '
+        '{"ideas": [{"day_offset": 0, "angle": "<pilar usado (uno de los 6 de arriba, en pocas palabras) + angulo concreto>", '
         '"based_on": "<por que se sugiere esto, en una frase corta y concreta, citando el dato real: lead, metrica o vacio de contenido>", '
         '"caption": "<texto final del post, terminando con los hashtags en el ultimo renglon>", '
         '"keyword": "<la palabra clave del cierre, en minuscula, una sola palabra>", '
