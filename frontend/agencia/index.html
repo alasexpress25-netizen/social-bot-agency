@@ -154,7 +154,8 @@
   button.reject:hover{ background:#d66a5d; }
   .kpi-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
   .kpi-row-4{ grid-template-columns:repeat(4, 1fr); }
-  @media (max-width:520px){ .kpi-row-4{ grid-template-columns:repeat(2, 1fr); } }
+  .kpi-row-5{ grid-template-columns:repeat(5, 1fr); }
+  @media (max-width:520px){ .kpi-row-4{ grid-template-columns:repeat(2, 1fr); } .kpi-row-5{ grid-template-columns:repeat(2, 1fr); } }
   .kpi-card{ background:var(--accent-soft); border-radius:var(--radius); padding:12px 14px; text-align:center; }
   .kpi-value{ font-size:24px; font-weight:700; color:var(--gold); line-height:1.1; }
   .kpi-label{ font-size:11.5px; color:var(--muted); margin-top:4px; }
@@ -336,6 +337,11 @@
       <span class="nav-badge" id="referidosBadge" style="display:none;">0</span>
       <span>Referidos</span>
     </button>
+    <button type="button" class="nav-item" data-view="quejas" onclick="switchView('quejas')">
+      <svg viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span class="nav-badge" id="quejasBadge" style="display:none;">0</span>
+      <span>Quejas</span>
+    </button>
     <button type="button" class="nav-item" data-view="reviews" onclick="switchView('reviews')">
       <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
       <span>Reseñas</span>
@@ -418,6 +424,12 @@
       <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">Mensajes que se arman solos cuando un lead pasa a "Convertido" (punto 8 de propuestas-30-07-2026.md). Nunca se mandan sin aprobar acá primero.</p>
       <div id="successStoryCard" style="margin-bottom:20px;"></div>
       <div id="referidosList"></div>
+    </section>
+
+    <section class="view-section" id="view-quejas" style="display:none;">
+      <h2>Quejas y comentarios negativos</h2>
+      <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">Comentarios y DMs que la IA detectó como queja/sentimiento negativo (punto 7 de propuestas-30-07-2026.md) — se guardan acá en vez de autoresponder, y ya se avisó por mail. Marcalos como resueltos cuando los atendiste.</p>
+      <div id="quejasList"></div>
     </section>
 
     <section class="view-section" id="view-reviews" style="display:none;">
@@ -1662,7 +1674,7 @@ async function renderMetrics(clientId){
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes, reach)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', clientId).gte('clicked_at', windowStartIso),
   ]);
 
@@ -1670,17 +1682,29 @@ async function renderMetrics(clientId){
   const postsRows = (postsWithMetrics||[]).map(p => ({
     published_at: p.published_at,
     likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
+    // Punto 11 de propuestas-30-07-2026.md: reach real (ya corregido el bug
+    // de Facebook que lo dejaba en null). Puede venir null si a esta altura
+    // todavia no se pudo pedir la metrica -- se cuenta como 0 en la suma,
+    // pero se guarda aparte cuantos posts SI tienen dato para no mostrar
+    // "0 de alcance" cuando en realidad es "todavia no tenemos el dato".
+    reach: (p.socialbot_post_metrics && p.socialbot_post_metrics.reach) ?? null,
   }));
 
   const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
   const convertedBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at', { filterFn: r => r.status === 'convertido' });
   const postsBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at');
   const likesBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at', { sumField: 'likes' });
+  // Punto 11: fillBuckets suma r.reach || 0, lo cual esta bien para el
+  // grafico (un post sin dato todavia no suma nada), pero para el total y
+  // el KPI necesitamos distinguir "0 de alcance real" de "sin dato".
+  const reachBuckets = fillBuckets(buildPeriodBuckets(period), postsRows.map(p => ({ ...p, reach: p.reach || 0 })), 'published_at', { sumField: 'reach' });
+  const postsWithReach = postsRows.filter(p => p.reach !== null);
   const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactions || [], 'created_at', { replyField: 'replied' });
 
   const totalLeads = leadsRows.length;
   const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
+  const totalReach = postsWithReach.reduce((s, p) => s + p.reach, 0);
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
   const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
@@ -1704,12 +1728,14 @@ async function renderMetrics(clientId){
       <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('${clientId}','month')">Mensual</button>
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
-    <div class="kpi-row kpi-row-4">
+    <div class="kpi-row kpi-row-5">
       <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
+      <div class="kpi-card"><div class="kpi-value">${postsWithReach.length ? totalReach : '—'}</div><div class="kpi-label">👁️ Alcance real${postsWithReach.length < postsRows.length ? ' *' : ''}</div></div>
       <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
     </div>
+    ${postsWithReach.length < postsRows.length ? `<div class="meta-row" style="margin-top:-6px; font-size:11px;">* ${postsRows.length - postsWithReach.length} de ${postsRows.length} posts todavía sin dato de alcance (Meta tarda unos días en calcularlo, o es reciente).</div>` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">🔗 Clics al link (${totalClicks} en total, ${windowLabel}):</div>
     <div class="kpi-row kpi-row-4">
       <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}</div><div class="kpi-label">💬 Comentarios</div></div>
@@ -1723,6 +1749,8 @@ async function renderMetrics(clientId){
     <div id="chartConverted-${clientId}"></div>
     <div class="metric-title">Me gusta en publicaciones</div>
     <div id="chartLikes-${clientId}"></div>
+    <div class="metric-title">Alcance real (reach)</div>
+    <div id="chartReach-${clientId}"></div>
     <div class="metric-title">Posts publicados</div>
     <div id="chartPosts-${clientId}"></div>
     <div class="metric-title">Tasa de respuesta automática (%)</div>
@@ -1731,6 +1759,7 @@ async function renderMetrics(clientId){
   renderBarChart(document.getElementById(`chartLeads-${clientId}`), leadsBuckets);
   renderBarChart(document.getElementById(`chartConverted-${clientId}`), convertedBuckets);
   renderBarChart(document.getElementById(`chartLikes-${clientId}`), likesBuckets, { sum: true });
+  renderBarChart(document.getElementById(`chartReach-${clientId}`), reachBuckets, { sum: true });
   renderBarChart(document.getElementById(`chartPosts-${clientId}`), postsBuckets);
   renderBarChart(document.getElementById(`chartReplyRate-${clientId}`), replyBuckets, { rate: true });
 }
@@ -1849,6 +1878,19 @@ async function updateReferidosBadge(){
   setBadgeCount(badge, count);
 }
 
+// Punto 12 (propuestas-30-07-2026.md): cuenta las quejas/comentarios
+// negativos (socialbot_flagged_comments) todavía en status='pendiente'
+// del cliente seleccionado -- mismo patrón que el resto de los badges.
+async function updateQuejasBadge(){
+  const badge = document.getElementById('quejasBadge');
+  if(!badge) return;
+  if(!selectedClientId){ setBadgeCount(badge, 0); return; }
+  const { count, error } = await sb.from('socialbot_flagged_comments').select('id', { count:'exact', head:true }).eq('status', 'pendiente').eq('client_id', selectedClientId);
+  if(error){ console.error('No se pudo traer el conteo de quejas pendientes', error); return; }
+  setBadgeCount(badge, count);
+}
+
+
 // Helper compartido: muestra/oculta un badge numérico según el conteo,
 // recortando a "99+" para que no rompa el layout del ícono.
 function setBadgeCount(badge, count){
@@ -1912,6 +1954,7 @@ async function loadClients(){
   updatePlanBadge();
   updateClientesBadge();
   updateReferidosBadge();
+  updateQuejasBadge();
 
   // A partir de acá, todo lo pesado (cuentas, IA, horarios, medios, reglas,
   // posts, leads, plan de contenido, reseñas) se pide y se renderiza SOLO
@@ -1934,6 +1977,10 @@ async function loadClients(){
     // automáticamente cada mes (success_story_generator.py --all). Solo
     // se guarda la fila más reciente por cliente (unique en client_id).
     const { data: successStoryRows } = await sb.from('socialbot_success_stories').select('*').eq('client_id', c.id).maybeSingle();
+    // Punto 12 (propuestas-30-07-2026.md): comentarios/DMs escalados por
+    // sentimiento negativo (ya no se autoresponden, quedan acá esperando
+    // que la agencia los atienda).
+    const { data: flaggedComments } = await sb.from('socialbot_flagged_comments').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
     const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
     const { data: reviews } = await sb.from('socialbot_reviews').select('*').eq('client_id', c.id).order('review_created_at', { ascending:false }).limit(20);
@@ -2518,6 +2565,30 @@ async function loadClients(){
         </div>`;
     }
 
+    // ── Pestaña "Quejas" (punto 12) ─────────────────────────────────────
+    const quejasContainer = document.getElementById('quejasList');
+    const QUEJA_STATUS_META = {
+      pendiente: { label: 'Pendiente', color: 'var(--warn, #ef4444)' },
+      resuelto:  { label: 'Resuelto', color: '#22c55e' },
+    };
+    quejasContainer.innerHTML = `
+      <div class="section-client-heading">${c.name} · ${(flaggedComments||[]).filter(f => f.status==='pendiente').length} pendiente(s)</div>
+      ${(flaggedComments||[])
+        .map(f => {
+          const meta = QUEJA_STATUS_META[f.status] || { label: f.status, color: 'var(--muted)' };
+          const dateLabel = f.created_at ? new Date(f.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+          return `
+        <div class="card" style="margin-top:8px; padding:12px 14px;">
+          <div class="card-row">
+            <div class="meta-row" style="margin-top:0;">${f.platform === 'facebook' ? 'Facebook' : 'Instagram'} · ${dateLabel}${f.reason ? ' · ' + f.reason : ''}</div>
+            <span style="display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; background:${meta.color};">${meta.label}</span>
+          </div>
+          <div style="margin-top:6px;">${(f.text||'').replace(/</g,'&lt;')}</div>
+          ${f.status === 'pendiente' ? `<div style="margin-top:8px;"><button type="button" onclick="resolveFlaggedComment('${f.id}')">Marcar resuelto</button></div>` : `<div class="meta-row" style="margin-top:6px; font-size:12px;">Resuelto el ${f.resolved_at ? new Date(f.resolved_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>`}
+        </div>
+      `;}).join('') || '<div class="meta-row">sin quejas registradas para este cliente</div>'}
+    `;
+
     // Los chips de hashtags se pintan despues de insertar el HTML (necesitan
     // que el <input type="hidden"> ya exista en el DOM).
     renderHashtagChips(`hashtags-${c.id}`);
@@ -2754,6 +2825,16 @@ async function approveReferralSuggestion(id){
 async function rejectReferralSuggestion(id){
   const { error } = await sb.from('socialbot_referral_suggestions').update({ status: 'rejected', updated_at: new Date().toISOString() }).eq('id', id);
   if(error){ alert('No se pudo descartar la sugerencia: ' + error.message); return; }
+  loadClients();
+}
+
+// Punto 12 (propuestas-30-07-2026.md): marca una queja/comentario negativo
+// como atendido. No dispara ningún mensaje ni trigger -- es solo el
+// registro de que la agencia ya lo vio y respondió por fuera del bot.
+async function resolveFlaggedComment(id){
+  const { error } = await sb.from('socialbot_flagged_comments').update({ status: 'resuelto', resolved_at: new Date().toISOString() }).eq('id', id);
+  if(error){ alert('No se pudo marcar como resuelto: ' + error.message); return; }
+  updateQuejasBadge();
   loadClients();
 }
 
