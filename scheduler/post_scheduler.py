@@ -1491,7 +1491,7 @@ def process_client(client_id, slot):
             caption = f"{caption}\n\n{media['hashtags_override'].strip()}"
     else:
         # Si no, generamos un caption nuevo automaticamente como antes.
-        caption = generate_caption(ai_settings, client["name"], client.get("sales_link"))
+        caption = generate_caption(ai_settings, client["name"], client.get("sales_link"), client_id=client["id"])
 
     # Si el cliente tiene aprobacion manual activada, el post se genera y se
     # guarda esperando su decision (y puede editar el texto desde su portal),
