@@ -1574,10 +1574,11 @@ async function renderMetrics(clientId){
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', clientId).gte('clicked_at', windowStartIso),
   ]);
 
   const leadsRows = leads || [];
@@ -1596,6 +1597,13 @@ async function renderMetrics(clientId){
   const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
+
+  // Item 1 de propuestas-30-07-2026.md: clics reales al link del cliente
+  // (socialbot_link_clicks), abiertos por canal para ver por dónde entra
+  // el trafico que de verdad importa (a diferencia de likes/comments).
+  const clicksBySource = { comment_reply: 0, dm_reply: 0, fallback_reply: 0, ai_reply: 0 };
+  (linkClicks || []).forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
+  const totalClicks = Object.values(clicksBySource).reduce((s, n) => s + n, 0);
 
   const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
   const avgResponseMinutes = repliedWithTimes.length
@@ -1616,6 +1624,13 @@ async function renderMetrics(clientId){
       <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
       <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
       <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
+    </div>
+    <div class="meta-row" style="margin-top:0; margin-bottom:8px;">🔗 Clics al link (${totalClicks} en total, ${windowLabel}):</div>
+    <div class="kpi-row kpi-row-4">
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}</div><div class="kpi-label">💬 Comentarios</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.dm_reply}</div><div class="kpi-label">✉️ Mensajes directos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.ai_reply}</div><div class="kpi-label">🤖 Respuesta IA</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.fallback_reply}</div><div class="kpi-label">🔤 Palabra clave</div></div>
     </div>
     <div class="metric-title">Consultas recibidas</div>
     <div id="chartLeads-${clientId}"></div>
