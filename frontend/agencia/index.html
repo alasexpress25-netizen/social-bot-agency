@@ -511,6 +511,21 @@
   </div>
 </div>
 
+<!-- Modal: Guion para que el cliente hable a cámara (item 1.5 de propuestas-30-07-2026.md, biblia-marketing-confianza.md) -->
+<div class="modal-overlay" id="cameraScriptModal" onclick="if(event.target===this) closeCameraScriptModal()">
+  <div class="modal-box">
+    <div class="card-row">
+      <h2 style="margin:0;">🎬 Guion para cámara — <span id="cameraScriptClientName"></span></h2>
+      <button type="button" class="modal-close" onclick="closeCameraScriptModal()">✕</button>
+    </div>
+    <small class="hint" style="display:block; margin-bottom:10px;">Plantilla de 30-45 segundos para ayudar al comerciante que no sabe qué decir frente a la cámara. Se le puede pasar así, solo llena los espacios entre corchetes con su realidad. Editable antes de copiar.</small>
+    <textarea id="cameraScriptText" rows="16" style="width:100%; font-family:inherit; font-size:13px; line-height:1.5;"></textarea>
+    <div class="card-row" style="margin-top:10px;">
+      <button type="button" class="secondary" onclick="copyCameraScript(this)">Copiar guion</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Editar cliente -->
 <div class="modal-overlay" id="editClientModal" onclick="if(event.target===this) closeEditClientModal()">
   <div class="modal-box">
@@ -620,6 +635,46 @@ let clientsCache = {};
 function openNewClientModal(){
   document.getElementById('newClientModal').classList.add('open');
 }
+
+// Item 1.5 de propuestas-30-07-2026.md (biblia-marketing-confianza.md):
+// plantilla de guion de 30-45seg para que el comerciante que no sabe qué
+// decir frente a la cámara tenga una estructura lista, solo llenando los
+// espacios entre corchetes con su realidad (nombre, garantía, rubro).
+function buildCameraScriptTemplate(clientName){
+  return `Guion para ${clientName} — 30 a 45 segundos, hablando a cámara\n\n`
+    + `1) GANCHO (5 seg) — Nombrá el problema o miedo típico de tu rubro:\n`
+    + `"¿Cansado/a de [problema típico que le pasa a tu cliente]?"\n\n`
+    + `2) QUIÉN SOS (5 seg) — Tu nombre, qué hacés, desde cuándo. Cara visible, todavía sin vender:\n`
+    + `"Soy [tu nombre], hago [lo que hacés] desde hace [tiempo]."\n\n`
+    + `3) LA PRUEBA (15-20 seg) — Mostrá el trabajo real pasando, no lo describas. Si tenés un antes/después, este es el momento:\n`
+    + `[Acá se filma el trabajo en proceso o el antes/después real — no hace falta decir nada más, dejá que se vea.]\n\n`
+    + `4) LA GARANTÍA EN CRIOLLO (5 seg) — Qué pasa si algo sale mal, dicho simple:\n`
+    + `"Si [algo no sale como esperás], [lo que hacés vos para solucionarlo], sin vueltas."\n\n`
+    + `5) EL PASO CHICO (5 seg) — No "comprá ahora": pedí algo de bajo riesgo, con el número a la vista en pantalla:\n`
+    + `"Mandame una foto de [lo que necesitás resolver] y te digo en el momento si tiene solución. [tu WhatsApp/número]"\n\n`
+    + `Tip: no hace falta actuar ni memorizar. Es una estructura para ordenar lo que ya sabés decir.`;
+}
+
+function openCameraScriptModal(clientId, clientName){
+  document.getElementById('cameraScriptClientName').textContent = clientName;
+  document.getElementById('cameraScriptText').value = buildCameraScriptTemplate(clientName);
+  document.getElementById('cameraScriptModal').classList.add('open');
+}
+function closeCameraScriptModal(){
+  document.getElementById('cameraScriptModal').classList.remove('open');
+}
+async function copyCameraScript(btn){
+  const text = document.getElementById('cameraScriptText').value;
+  try{
+    await navigator.clipboard.writeText(text);
+    const original = btn.textContent;
+    btn.textContent = 'Copiado ✓';
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  }catch(e){
+    prompt('Copiá el guion manualmente:', text);
+  }
+}
+
 function closeNewClientModal(){
   document.getElementById('newClientModal').classList.remove('open');
   document.getElementById('newClientName').value = '';
@@ -1888,6 +1943,7 @@ async function loadClients(){
         <div>
           <button class="secondary" onclick="toggleActive('${c.id}', ${c.active}, '${(c.name||'').replace(/'/g,"\\'")}')">${c.active ? 'Pausar' : 'Reactivar'}</button>
           <button class="secondary" title="Editar cliente" onclick="openEditClientModal('${c.id}')"><svg viewBox="0 0 24 24" style="width:14px; height:14px; vertical-align:-2px; margin-right:4px; fill:none; stroke:currentColor; stroke-width:1.8;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>Editar</button>
+          <button class="secondary" title="Guion para que el cliente hable a cámara" onclick="openCameraScriptModal('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">🎬 Guion para cámara</button>
           <button class="reject" onclick="openDeleteClientModal('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Eliminar</button>
         </div>
       </div>
