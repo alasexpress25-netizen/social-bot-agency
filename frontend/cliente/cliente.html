@@ -356,6 +356,16 @@
         <div id="leadsList"></div>
       </div>
 
+      <!-- ─── Reseñas (punto 14 de propuestas-30-07-2026.md) ──────────── -->
+      <div class="page" id="page-reviews">
+        <div class="page-title">
+          <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <h2 data-i18n="navReviews">Reseñas</h2>
+        </div>
+        <p class="section-hint" data-i18n="reviewsHint">Lo que dicen de vos en Google y Facebook. Se detectan solas cada pocas horas — es solo para consulta.</p>
+        <div id="reviewsList"></div>
+      </div>
+
       <!-- ─── Sus posts (preferencias) ─────────────────────────────────── -->
       <div class="page" id="page-prefs">
         <div class="page-title">
@@ -432,7 +442,10 @@ const I18N = {
     postsFilterAllDates: 'Todas las fechas',
     postsFilterAllPlatforms: 'Todas las plataformas',
     navDashboard: 'Inicio', navPending: 'Aprobar', navPosts: 'Posts', navMetrics: 'Métricas',
-    navLeads: 'Contactos', navPrefs: 'Sus posts',
+    navLeads: 'Contactos', navReviews: 'Reseñas', navPrefs: 'Sus posts',
+    reviewsHint: 'Lo que dicen de vos en Google y Facebook. Se detectan solas cada pocas horas — es solo para consulta.',
+    noReviewsYet: 'Todavía no hay reseñas para mostrar acá.',
+    reviewRecommends: 'recomienda', reviewNotRecommend: 'no recomienda', reviewAnonymous: 'anónimo',
     dashboardHint: 'Tu última publicación, tal como se ve en tus redes.',
     dashboardEmpty: 'Todavía no hay publicaciones para mostrar acá.',
     dashboardLikes: 'me gusta',
@@ -495,7 +508,10 @@ const I18N = {
     postsFilterAllDates: 'Todas as datas',
     postsFilterAllPlatforms: 'Todas as plataformas',
     navDashboard: 'Início', navPending: 'Aprovar', navPosts: 'Posts', navMetrics: 'Métricas',
-    navLeads: 'Contatos', navPrefs: 'Seus posts',
+    navLeads: 'Contatos', navReviews: 'Avaliações', navPrefs: 'Seus posts',
+    reviewsHint: 'O que dizem de você no Google e no Facebook. São detectadas sozinhas a cada poucas horas — é apenas para consulta.',
+    noReviewsYet: 'Ainda não há avaliações para mostrar aqui.',
+    reviewRecommends: 'recomenda', reviewNotRecommend: 'não recomenda', reviewAnonymous: 'anônimo',
     dashboardHint: 'Sua última publicação, do jeito que aparece nas suas redes.',
     dashboardEmpty: 'Ainda não há publicações para mostrar aqui.',
     dashboardLikes: 'curtidas',
@@ -679,7 +695,7 @@ async function loadAll(){
   // lista de leads usa window.__myPosts para el fallback del link a la
   // publicación de origen, asi que necesita que los posts ya esten cargados.
   await loadPosts();
-  await Promise.all([loadPending(), loadLeads(), loadAiPrefs(), loadMetrics(), loadDashboard()]);
+  await Promise.all([loadPending(), loadLeads(), loadAiPrefs(), loadMetrics(), loadDashboard(), loadReviews()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,6 +1051,39 @@ async function loadLeads(){
       ${l.source_text ? `<div class="meta-row" style="font-style:italic;">"${l.source_text.replace(/"/g,'&quot;').slice(0,140)}"</div>` : ''}
       <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${l.created_at ? new Date(l.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
       ${l.post_id ? `<div class="meta-row" style="font-size:12px;">${permalink ? `<a href="${permalink}" target="_blank" rel="noopener" style="color:var(--white); text-decoration:underline;">${t('viewLink')}</a>` : `Post: ${l.post_id}`}</div>` : ''}
+    </div>
+  `;}).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Punto 14 (propuestas-30-07-2026.md): reseñas de Google/Facebook en el
+// portal del cliente. Solo lectura -- reviews_monitor.py ya las junta y
+// arma una respuesta sugerida, pero eso queda del lado de la agencia (que
+// decide como/si responder). Acá solo mostramos estrellas/recomendación +
+// texto, sin ningún botón de gestión, simple y motivador para un cliente
+// no técnico (refuerza el pilar 3 de la biblia de marketing: testimonio
+// real).
+// ---------------------------------------------------------------------------
+async function loadReviews(){
+  const { data: reviews } = await sb.from('socialbot_reviews')
+    .select('*').eq('client_id', currentClient.id).order('review_created_at', { ascending:false }).limit(30);
+
+  const list = document.getElementById('reviewsList');
+  if(!reviews || reviews.length === 0){
+    list.innerHTML = `<div class="empty">${t('noReviewsYet')}</div>`;
+    return;
+  }
+  list.innerHTML = reviews.map(r => {
+    const stars = r.rating
+      ? '⭐'.repeat(Math.round(r.rating))
+      : (r.recommendation_type === 'positive' ? `👍 ${t('reviewRecommends')}` : r.recommendation_type === 'negative' ? `👎 ${t('reviewNotRecommend')}` : '');
+    return `
+    <div class="card">
+      <div class="meta-row" style="margin-top:0;">
+        <strong>${r.platform === 'google' ? 'Google' : 'Facebook'}</strong> · ${stars} · ${r.author_name || t('reviewAnonymous')}
+      </div>
+      ${r.review_text ? `<div class="meta-row" style="margin-top:4px;">${r.review_text.replace(/</g,'&lt;')}</div>` : ''}
+      <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:6px;">${r.review_created_at ? new Date(r.review_created_at).toLocaleDateString(currentLang === 'pt' ? 'pt-BR' : 'es-AR', { day:'2-digit', month:'2-digit', year:'numeric' }) : ''}</div>
     </div>
   `;}).join('');
 }
