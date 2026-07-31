@@ -34,6 +34,12 @@
     --accent:var(--gold); --accent-soft:#241f14; --warn:#c0564a; --warn-soft:#2a1512;
     --muted:#9a9a9a; --radius:10px;
     font-family:var(--font-body);
+    /* Altura real del topbar. En desktop son 64px fijos, pero en movil el
+       topbar pasa a 2-3 filas (ver media query mas abajo) y su alto real
+       varia segun el idioma/tamaño de fuente -- por eso se mide con JS
+       (updateTopbarHeight()) en vez de hardcodear un numero fijo, para que
+       el sidebar y el contenido nunca queden tapados por el topbar. */
+    --topbar-h: 64px;
   }
   *{box-sizing:border-box;}
   body{
@@ -45,10 +51,10 @@
 
   /* ─── Barra superior (logo + titulo + salir) ─────────────────────────── */
   .topbar{
-    position:fixed; top:0; left:0; right:0; height:64px; z-index:50;
+    position:fixed; top:0; left:0; right:0; min-height:64px; z-index:50;
     background:var(--dark); border-bottom:1px solid var(--line);
     display:flex; align-items:center; justify-content:space-between;
-    padding:0 20px;
+    padding:10px 20px; row-gap:8px;
   }
   .topbar .brand{ display:flex; align-items:center; gap:12px; min-width:0; }
   .topbar .brand-fallback{
@@ -61,10 +67,25 @@
   .topbar .right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
   @media (max-width:480px){ .topbar .tag{ display:none; } }
 
+  /* ─── Topbar en movil: 3 filas en vez de todo apretado en una sola.
+     Fila 1: logo + titulo. Fila 2: selector de cliente (+ boton nuevo
+     cliente). Fila 3: acciones (Crear Publicación / Salir). El sidebar
+     izquierdo NO se toca -- sigue fijo y visible como siempre, solo se
+     reposiciona con var(--topbar-h) para no quedar tapado por un topbar
+     que ahora puede medir mas de 64px. ────────────────────────────────── */
+  @media (max-width:760px){
+    .topbar{
+      flex-wrap:wrap; justify-content:center; padding:10px 14px;
+    }
+    .topbar .brand{ order:1; flex:1 1 auto; justify-content:center; }
+    .topbar .client-switch-bar{ order:2; flex:1 1 100%; }
+    .topbar .right{ order:3; flex:1 1 100%; justify-content:center; flex-wrap:wrap; }
+  }
+
   /* ─── Layout: sidebar fija a la izquierda + contenido ────────────────── */
-  .layout{ display:flex; padding-top:64px; min-height:100vh; }
+  .layout{ display:flex; padding-top:var(--topbar-h); min-height:100vh; }
   .sidebar{
-    position:fixed; top:64px; left:0; bottom:0; width:84px; z-index:40;
+    position:fixed; top:var(--topbar-h); left:0; bottom:0; width:84px; z-index:40;
     background:var(--dark2); border-right:1px solid var(--line);
     display:flex; flex-direction:column; align-items:stretch; gap:2px;
     padding:14px 0; overflow-y:auto;
@@ -216,9 +237,11 @@
   .client-switch-bar .icon-btn svg{ width:16px; height:16px; stroke:currentColor; fill:none; stroke-width:1.8; }
   .client-switch-bar .add-client-btn{ background:var(--gold); border-color:var(--gold); color:var(--black); }
   .client-switch-bar .add-client-btn:hover{ background:var(--gold2); }
-  @media (max-width:700px){
-    .topbar .client-switch-bar select{ min-width:90px; max-width:140px; font-size:12px; }
-    .topbar h1{ display:none; } /* en angosto, se prioriza el selector de cliente sobre el título */
+  @media (max-width:760px){
+    .topbar .client-switch-bar select{ min-width:140px; max-width:260px; font-size:13px; }
+    .topbar .client-switch-bar{ justify-content:center; }
+    /* Ya no hace falta ocultar el título: ahora tiene su propia fila
+       arriba del selector, en vez de competir por espacio con él. */
   }
 
   /* ─── Pestañas de sección (Plan, Métricas, Posts, etc.) ──────────────── */
@@ -3134,6 +3157,28 @@ async function reviewContentPlanItem(itemId, status){
 }
 
 boot();
+
+// ---------------------------------------------------------------------------
+// Altura dinámica del topbar (var --topbar-h). En desktop son 64px fijos,
+// pero en pantallas angostas el topbar pasa a 2-3 filas (logo / selector de
+// cliente / botones) y su alto real varía según el ancho de pantalla e
+// incluso el largo del nombre del cliente elegido. En vez de hardcodear un
+// número para el modo móvil, se mide el alto real con JS y ese valor es el
+// que usan .layout (padding-top) y .sidebar (top) para no quedar tapados.
+// Se vuelve a medir en resize/orientationchange y cuando cambia el
+// contenido del topbar (ResizeObserver), por ejemplo al pasar de 1 a 3
+// filas al girar el celular.
+function updateTopbarHeight(){
+  const topbar = document.querySelector('.topbar');
+  if(!topbar) return;
+  document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
+}
+updateTopbarHeight();
+window.addEventListener('resize', updateTopbarHeight);
+window.addEventListener('orientationchange', updateTopbarHeight);
+if(window.ResizeObserver){
+  new ResizeObserver(updateTopbarHeight).observe(document.querySelector('.topbar'));
+}
 
 // Registro del Service Worker (PWA LaVMK Agencia). Va al final, después de
 // boot(), para no competir por prioridad de red con la carga inicial de
