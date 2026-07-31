@@ -36,6 +36,7 @@ primero.
 """
 
 import os
+import sys
 import json
 import re
 import socket
@@ -854,8 +855,26 @@ def generate_plan_for_client(client):
 
 
 def run():
-    clients = sb_get("socialbot_clients", {"active": "eq.true"})
-    print(f"Generando plan semanal para {len(clients)} cliente(s) activo(s)...")
+    # Uso normal (cron semanal, sin argumentos): corre para todos los
+    # clientes activos, como siempre.
+    # Uso puntual (lead magnet "plan gratis"): `python content_planner.py
+    # --client-id=<uuid>` genera el plan de ESE cliente nada mas, al toque,
+    # sin esperar al cron del lunes ni tocar el plan de nadie mas.
+    client_id_arg = None
+    for arg in sys.argv[1:]:
+        if arg.startswith("--client-id="):
+            client_id_arg = arg.split("=", 1)[1].strip()
+
+    if client_id_arg:
+        clients = sb_get("socialbot_clients", {"id": f"eq.{client_id_arg}"})
+        if not clients:
+            print(f"No se encontro ningun cliente con id {client_id_arg}.")
+            return
+        print(f"Generando plan puntual para el cliente {clients[0].get('name')} ({client_id_arg})...")
+    else:
+        clients = sb_get("socialbot_clients", {"active": "eq.true"})
+        print(f"Generando plan semanal para {len(clients)} cliente(s) activo(s)...")
+
     for client in clients:
         try:
             generate_plan_for_client(client)
