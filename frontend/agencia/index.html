@@ -521,17 +521,21 @@
     <section class="view-section" id="view-subir" style="display:none;">
       <h2>Subir archivo</h2>
       <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">
-        Subí una imagen o video directo al hosting (Hostinger). Se guarda en la carpeta del
-        cliente elegido arriba en el selector, y te da la URL pública lista para pegar en la
-        pestaña "Medios" (o en el carrusel).
+        Subí una o varias imágenes/videos directo a Cloudflare R2 (mantené Ctrl o Shift
+        apretado para elegir varios archivos del explorador a la vez). Se guardan en la
+        carpeta del cliente elegido arriba en el selector, y te dan la URL pública lista
+        para pegar en la pestaña "Medios" (o para armar un carrusel de una).
       </p>
       <div class="card">
         <form class="inline" onsubmit="uploadFileToHostinger(event)">
-          <input type="file" id="uploadFileInput" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" required />
-          <button type="submit" id="uploadSubmitBtn">Subir archivo</button>
-          <small class="hint">Imágenes: jpg, jpeg, png, webp (máx. 15MB). Videos: mp4, mov (máx. 100MB).</small>
+          <input type="file" id="uploadFileInput" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" multiple required />
+          <button type="submit" id="uploadSubmitBtn">Subir archivo(s)</button>
+          <small class="hint">Imágenes: jpg, jpeg, png, webp (máx. 15MB c/u). Videos: mp4, mov (máx. 100MB c/u).</small>
         </form>
         <div id="uploadProgressMsg" class="meta-row" style="display:none;"></div>
+        <div id="uploadCarouselBtnWrap" style="display:none; margin-top:10px;">
+          <button type="button" id="uploadCarouselBtn" onclick="useLastBatchInCarousel()">Usar las últimas subidas en un Carrusel</button>
+        </div>
       </div>
       <div id="uploadHistoryList"></div>
     </section>
@@ -945,42 +949,88 @@ function closeSidebar(){
 //      Supabase ni por Hostinger).
 // 01/08/2026: reemplaza el POST directo a publicar/upload.php (Hostinger).
 // ---------------------------------------------------------------------------
+// Junta las URLs del ultimo lote subido (ver uploadFileToHostinger), para
+// poder mandarlas de una al textarea de carrusel en "Medios" con el boton
+// "Usar las ultimas subidas en un Carrusel" sin tener que copiarlas una por
+// una. Se resetea cada vez que arranca una subida nueva.
+let lastUploadBatchUrls = [];
+
 async function uploadFileToHostinger(e){
   e.preventDefault();
   if(!selectedClientId){ alert('Elegí un cliente en el selector de arriba primero.'); return; }
 
   const input = document.getElementById('uploadFileInput');
-  const file = input.files[0];
-  if(!file){ alert('Elegí un archivo primero.'); return; }
+  const files = Array.from(input.files || []);
+  if(files.length === 0){ alert('Elegí uno o varios archivos primero.'); return; }
 
   const btn = document.getElementById('uploadSubmitBtn');
   const progress = document.getElementById('uploadProgressMsg');
+  const carouselBtnWrap = document.getElementById('uploadCarouselBtnWrap');
   btn.disabled = true;
   progress.style.display = '';
-  progress.textContent = `Preparando subida de ${file.name}...`;
+  carouselBtnWrap.style.display = 'none';
 
-  try{
-    const folder = selectedClientId; // guardamos el cliente de ESTE momento, por si cambian el selector antes de borrar
+  const folder = selectedClientId; // guardamos el cliente de ESTE momento, por si cambian el selector antes de que termine el lote
+  lastUploadBatchUrls = [];
+  const errors = [];
 
-    const presignRes = await fetch(UPLOAD_ENDPOINT, {
-      method: 'POST',
-      headers: { 'X-Upload-Token': UPLOAD_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'presign-upload', folder, filename: file.name, size: file.size })
-    });
-    const presignData = await presignRes.json().catch(() => ({}));
-    if(!presignRes.ok || presignData.error){ throw new Error(presignData.error || `Error del servidor (${presignRes.status})`); }
+  // Subimos una por una (no en paralelo): con videos de hasta 100MB c/u,
+  // mandarlas todas juntas satura el ancho de banda del que está subiendo y
+  // hace que todas tarden más en vez de menos.
+  for(let i = 0; i < files.length; i++){
+    const file = files[i];
+    const counter = files.length > 1 ? ` (${i + 1}/${files.length})` : '';
+    progress.textContent = `Preparando subida de ${file.name}${counter}...`;
 
-    progress.textContent = `Subiendo ${file.name}...`;
-    const putRes = await fetch(presignData.uploadUrl, { method: 'PUT', body: file });
-    if(!putRes.ok){ throw new Error(`No se pudo subir el archivo a R2 (${putRes.status})`); }
+    try{
+      const presignRes = await fetch(UPLOAD_ENDPOINT, {
+        method: 'POST',
+        headers: { 'X-Upload-Token': UPLOAD_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'presign-upload', folder, filename: file.name, size: file.size })
+      });
+      const presignData = await presignRes.json().catch(() => ({}));
+      if(!presignRes.ok || presignData.error){ throw new Error(presignData.error || `Error del servidor (${presignRes.status})`); }
 
-    addUploadedFileToHistory(presignData.publicUrl, presignData.media_type, folder);
-    input.value = '';
-  }catch(err){
-    alert('No se pudo subir el archivo: ' + err.message);
-  }finally{
-    btn.disabled = false;
-    progress.style.display = 'none';
+      progress.textContent = `Subiendo ${file.name}${counter}...`;
+      const putRes = await fetch(presignData.uploadUrl, { method: 'PUT', body: file });
+      if(!putRes.ok){ throw new Error(`No se pudo subir el archivo a R2 (${putRes.status})`); }
+
+      addUploadedFileToHistory(presignData.publicUrl, presignData.media_type, folder);
+      if(presignData.media_type === 'image') lastUploadBatchUrls.push(presignData.publicUrl); // un carrusel solo acepta imagenes
+    }catch(err){
+      errors.push(`${file.name}: ${err.message}`);
+    }
+  }
+
+  input.value = '';
+  btn.disabled = false;
+  progress.style.display = 'none';
+
+  if(lastUploadBatchUrls.length >= 2){
+    carouselBtnWrap.style.display = '';
+  }
+
+  if(errors.length){
+    alert(`${errors.length} de ${files.length} archivo(s) no se pudieron subir:\n\n` + errors.join('\n'));
+  }
+}
+
+// Manda las URLs de imagen del ultimo lote subido directo al textarea de
+// carrusel en "Agregar medio nuevo" (Medios), en el mismo orden en que se
+// subieron, y deja "Carrusel" preseleccionado.
+function useLastBatchInCarousel(){
+  if(lastUploadBatchUrls.length < 2){ alert('Subí al menos 2 imágenes juntas para armar un carrusel.'); return; }
+  switchView('medios');
+  const typeSelect = document.getElementById('newMediaTypeSelect');
+  if(typeSelect){
+    typeSelect.value = 'carousel';
+    toggleMediaTypeFields(typeSelect);
+  }
+  const form = typeSelect ? typeSelect.closest('form') : null;
+  const carouselTextarea = form ? form.querySelector('[name="carousel_urls"]') : document.querySelector('#view-medios [name="carousel_urls"]');
+  if(carouselTextarea){
+    carouselTextarea.value = lastUploadBatchUrls.join('\n');
+    carouselTextarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 }
 
