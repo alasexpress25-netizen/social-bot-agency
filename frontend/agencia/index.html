@@ -691,11 +691,14 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // o el magic link no va a poder volver a la página.
 const CLIENT_PORTAL_URL = "https://lavisualmk.alastecno.com/cliente/";
 
-// ⚠️ Subida de archivos a Hostinger (ver publicar/upload.php). El token
-// tiene que matchear EXACTO la constante UPLOAD_TOKEN de ese archivo PHP.
-// upload.php guarda todo debajo de publicar/images/<folder>/, así que acá
-// usamos el id del cliente de Supabase como nombre de carpeta.
-const UPLOAD_ENDPOINT = "https://lavisualmk.alastecno.com/publicar/upload.php";
+// ⚠️ 01/08/2026: migrado de Hostinger (publicar/upload.php) a Cloudflare R2
+// via Supabase Edge Function, para evitar los 429 de Meta pegandole al
+// hosting compartido (ver socialbot_posts / post_scheduler.py). El token
+// tiene que matchear EXACTO el secret UPLOAD_TOKEN de esa función.
+// La función guarda todo debajo de <folder>/ en el bucket R2, así que acá
+// seguimos usando el id del cliente de Supabase como nombre de carpeta
+// (misma convención que antes).
+const UPLOAD_ENDPOINT = "https://redaqqxoeciycqgjhpbv.supabase.co/functions/v1/r2-media";
 const UPLOAD_TOKEN = "accc75453220c8f997e3a7274eadede22e0c3bd347d18303";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -933,11 +936,14 @@ function closeSidebar(){
 }
 
 // ---------------------------------------------------------------------------
-// Pestaña "Subir archivo": manda el archivo elegido a publicar/upload.php,
-// que lo guarda en publicar/images/<selectedClientId>/ y devuelve la URL
-// pública final. Usa el cliente ya elegido en el selector de arriba (el
-// mismo que se usa en el resto del panel), así que no hace falta elegirlo
-// de nuevo acá.
+// Pestaña "Subir archivo": sube directo a Cloudflare R2 (bucket <folder>/,
+// folder = selectedClientId) en 2 pasos:
+//   1) le pedimos a la Edge Function una URL prefirmada de subida (esta
+//      función nunca ve los bytes del archivo -- evita el límite de memoria
+//      de Edge Functions, 256MB, contra videos de hasta 100MB).
+//   2) subimos el archivo DIRECTO a esa URL (browser -> R2, sin pasar por
+//      Supabase ni por Hostinger).
+// 01/08/2026: reemplaza el POST directo a publicar/upload.php (Hostinger).
 // ---------------------------------------------------------------------------
 async function uploadFileToHostinger(e){
   e.preventDefault();
@@ -951,23 +957,24 @@ async function uploadFileToHostinger(e){
   const progress = document.getElementById('uploadProgressMsg');
   btn.disabled = true;
   progress.style.display = '';
-  progress.textContent = `Subiendo ${file.name}...`;
+  progress.textContent = `Preparando subida de ${file.name}...`;
 
   try{
     const folder = selectedClientId; // guardamos el cliente de ESTE momento, por si cambian el selector antes de borrar
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('folder', folder);
 
-    const res = await fetch(UPLOAD_ENDPOINT, {
+    const presignRes = await fetch(UPLOAD_ENDPOINT, {
       method: 'POST',
-      headers: { 'X-Upload-Token': UPLOAD_TOKEN },
-      body: formData
+      headers: { 'X-Upload-Token': UPLOAD_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'presign-upload', folder, filename: file.name, size: file.size })
     });
-    const data = await res.json().catch(() => ({}));
-    if(!res.ok || data.error){ throw new Error(data.error || `Error del servidor (${res.status})`); }
+    const presignData = await presignRes.json().catch(() => ({}));
+    if(!presignRes.ok || presignData.error){ throw new Error(presignData.error || `Error del servidor (${presignRes.status})`); }
 
-    addUploadedFileToHistory(data.url, data.media_type, folder);
+    progress.textContent = `Subiendo ${file.name}...`;
+    const putRes = await fetch(presignData.uploadUrl, { method: 'PUT', body: file });
+    if(!putRes.ok){ throw new Error(`No se pudo subir el archivo a R2 (${putRes.status})`); }
+
+    addUploadedFileToHistory(presignData.publicUrl, presignData.media_type, folder);
     input.value = '';
   }catch(err){
     alert('No se pudo subir el archivo: ' + err.message);
@@ -1021,15 +1028,10 @@ async function deleteUploadedFile(url, folder, rowEl){
   deleteBtn.textContent = 'Eliminando...';
 
   try{
-    const formData = new FormData();
-    formData.append('action', 'delete');
-    formData.append('folder', folder);
-    formData.append('filename', filename);
-
     const res = await fetch(UPLOAD_ENDPOINT, {
       method: 'POST',
-      headers: { 'X-Upload-Token': UPLOAD_TOKEN },
-      body: formData
+      headers: { 'X-Upload-Token': UPLOAD_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete', folder, filename })
     });
     const data = await res.json().catch(() => ({}));
     if(!res.ok || data.error){ throw new Error(data.error || `Error del servidor (${res.status})`); }
@@ -1119,14 +1121,11 @@ async function loadArchivosHost(){
   try{
     const folder = selectedClientId;
     archivosHostFolder = folder;
-    const formData = new FormData();
-    formData.append('action', 'list');
-    formData.append('folder', folder);
 
     const res = await fetch(UPLOAD_ENDPOINT, {
       method: 'POST',
-      headers: { 'X-Upload-Token': UPLOAD_TOKEN },
-      body: formData
+      headers: { 'X-Upload-Token': UPLOAD_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'list', folder })
     });
     const data = await res.json().catch(() => ({}));
     if(!res.ok || data.error){ throw new Error(data.error || `Error del servidor (${res.status})`); }
@@ -1282,15 +1281,10 @@ async function deleteSelectedArchivosHost(){
   for(const url of urls){
     const filename = url.split('/').pop();
     try{
-      const formData = new FormData();
-      formData.append('action', 'delete');
-      formData.append('folder', archivosHostFolder);
-      formData.append('filename', filename);
-
       const res = await fetch(UPLOAD_ENDPOINT, {
         method: 'POST',
-        headers: { 'X-Upload-Token': UPLOAD_TOKEN },
-        body: formData
+        headers: { 'X-Upload-Token': UPLOAD_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', folder: archivosHostFolder, filename })
       });
       const data = await res.json().catch(() => ({}));
       if(!res.ok || data.error){ throw new Error(data.error || `Error del servidor (${res.status})`); }
