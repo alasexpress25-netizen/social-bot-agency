@@ -3091,6 +3091,23 @@ async function addMedia(e, clientId){
   } else {
     const url = f.get('url');
     if(!url){ alert('Cargá la URL del medio.'); return; }
+
+    // Evita cargar el mismo video/imagen dos veces para el mismo cliente
+    // (por ejemplo, si tocaste "Agregar medio" sin querer con la misma URL
+    // que ya estaba pegada del uso anterior). Comparamos exacto contra lo
+    // que ya tiene este cliente en socialbot_media_assets.
+    const { data: existing, error: dupError } = await sb
+      .from('socialbot_media_assets')
+      .select('id')
+      .eq('client_id', clientId)
+      .eq('url', url)
+      .limit(1);
+    if(dupError){ alert('No se pudo validar duplicados: ' + dupError.message); return; }
+    if(existing && existing.length > 0){
+      alert('Ese video/imagen ya está cargado para este cliente. No se puede publicar el mismo archivo dos veces -- usá "Publicar ahora" sobre el medio existente en vez de agregarlo de nuevo.');
+      return;
+    }
+
     await sb.from('socialbot_media_assets').insert({
       client_id: clientId,
       url,
