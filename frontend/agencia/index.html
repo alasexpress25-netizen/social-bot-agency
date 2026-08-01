@@ -436,10 +436,6 @@
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
       <span>Medios</span>
     </button>
-    <button type="button" class="nav-item" data-view="subir" onclick="switchView('subir')">
-      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      <span>Subir archivo</span>
-    </button>
     <button type="button" class="nav-item" data-view="archivoshost" onclick="switchView('archivoshost')">
       <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
       <span class="nav-badge-warn" id="archivosHostStorageBadge" style="display:none;" title="">!</span>
@@ -531,28 +527,6 @@
       <div id="mediosList"></div>
     </section>
 
-    <section class="view-section" id="view-subir" style="display:none;">
-      <h2>Subir archivo</h2>
-      <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">
-        Subí una o varias imágenes/videos directo a Cloudflare R2 (mantené Ctrl o Shift
-        apretado para elegir varios archivos del explorador a la vez). Se guardan en la
-        carpeta del cliente elegido arriba en el selector, y te dan la URL pública lista
-        para pegar en la pestaña "Medios" (o para armar un carrusel de una).
-      </p>
-      <div class="card">
-        <form class="inline" onsubmit="uploadFileToHostinger(event)">
-          <input type="file" id="uploadFileInput" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" multiple required />
-          <button type="submit" id="uploadSubmitBtn">Subir archivo(s)</button>
-          <small class="hint">Imágenes: jpg, jpeg, png, webp (máx. 15MB c/u). Videos: mp4, mov (máx. 100MB c/u).</small>
-        </form>
-        <div id="uploadProgressMsg" class="meta-row" style="display:none;"></div>
-        <div id="uploadCarouselBtnWrap" style="display:none; margin-top:10px;">
-          <button type="button" id="uploadCarouselBtn" onclick="useLastBatchInCarousel()">Usar las últimas subidas en un Carrusel</button>
-        </div>
-      </div>
-      <div id="uploadHistoryList"></div>
-    </section>
-
     <section class="view-section" id="view-archivoshost" style="display:none;">
       <h2>Archivos en Host</h2>
       <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">
@@ -577,6 +551,21 @@
             <button type="button" class="secondary" onclick="saveArchivosHostLimits()">Guardar</button>
           </div>
         </details>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 4px; font-size:15px; color:var(--gold);">Subir archivos</h3>
+        <p class="section-hint" style="color:var(--muted); font-size:13px; margin:4px 0 12px;">
+          Subí una o varias imágenes/videos juntos directo a este cliente (mantené Ctrl o Shift
+          apretado para elegir varios del explorador a la vez). Se suben uno por uno y la lista
+          de abajo se actualiza sola. Para armar un carrusel, tildá 2 o más imágenes en esa
+          lista y usá el botón "Usar como Carrusel".
+        </p>
+        <form class="inline" onsubmit="uploadFilesToArchivosHost(event)">
+          <input type="file" id="archivosHostFileInput" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" multiple required />
+          <button type="submit" id="archivosHostFileSubmitBtn">Subir archivo(s)</button>
+          <small class="hint">Imágenes: jpg, jpeg, png, webp (máx. 15MB c/u). Videos: mp4, mov (máx. 100MB c/u).</small>
+        </form>
+        <div id="archivosHostFileProgressMsg" class="meta-row" style="display:none;"></div>
       </div>
       <div class="card">
         <div class="btn-row">
@@ -964,9 +953,9 @@ function applyClientFilter(){
 }
 
 // Cambia de pestaña en el sidebar (Clientes, Plan, Métricas, Posts, Leads,
-// Reseñas, Config. IA, Horarios, Medios, Auto-respuesta). No vuelve a pedir
-// datos: todas las secciones ya están renderizadas por loadClients(), acá
-// solo se muestra una y se ocultan las demás.
+// Reseñas, Config. IA, Horarios, Medios, Archivos en Host, Auto-respuesta).
+// No vuelve a pedir datos: todas las secciones ya están renderizadas por
+// loadClients(), acá solo se muestra una y se ocultan las demás.
 function switchView(view){
   document.querySelectorAll('.sidebar .nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view-section').forEach(s => s.style.display = (s.id === 'view-' + view) ? '' : 'none');
@@ -991,54 +980,50 @@ function closeSidebar(){
 }
 
 // ---------------------------------------------------------------------------
-// Pestaña "Subir archivo": sube directo a Cloudflare R2 (bucket <folder>/,
-// folder = selectedClientId) en 2 pasos:
+// Pestaña "Archivos en Host" -- subida de archivos (imágenes y/o videos
+// mezclados, los que se quieran de una), directo a R2 en 2 pasos:
 //   1) le pedimos a la Edge Function una URL prefirmada de subida (esta
 //      función nunca ve los bytes del archivo -- evita el límite de memoria
 //      de Edge Functions, 256MB, contra videos de hasta 100MB).
 //   2) subimos el archivo DIRECTO a esa URL (browser -> R2, sin pasar por
 //      Supabase ni por Hostinger).
-// 01/08/2026: reemplaza el POST directo a publicar/upload.php (Hostinger).
+// Esta subida no arma carrusel por sí sola: al terminar solo refresca la
+// lista de abajo. El carrusel se arma tildando 2+ imágenes en esa lista y
+// usando "Usar como Carrusel" (ver onArchivosHostCheckChange /
+// useSelectedArchivosHostInMedios más abajo) -- un solo filtro, un solo
+// lugar donde se decide qué se puede armar con lo tildado.
 // ---------------------------------------------------------------------------
-// Junta las URLs del ultimo lote subido (ver uploadFileToHostinger), para
-// poder mandarlas de una al textarea de carrusel en "Medios" con el boton
-// "Usar las ultimas subidas en un Carrusel" sin tener que copiarlas una por
-// una. Se resetea cada vez que arranca una subida nueva.
-let lastUploadBatchUrls = [];
-
-async function uploadFileToHostinger(e){
+async function uploadFilesToArchivosHost(e){
   e.preventDefault();
   if(!selectedClientId){ alert('Elegí un cliente en el selector de arriba primero.'); return; }
 
   // Chequeo de límite (storage_limit_mb del cliente, ver "Ajustar límites de
-  // este cliente" en Archivos en Host): si ya lo pasó, no lo dejamos subir
-  // más hasta que borre algo o suba el límite manualmente. Nos aseguramos de
-  // tener el dato fresco de ESTE cliente antes de decidir -- si el usuario
-  // recién entró y todavía no se calculó nada, o cambió de cliente, lo
-  // volvemos a pedir.
+  // este cliente" más arriba): si ya lo pasó, no lo dejamos subir más hasta
+  // que borre algo o suba el límite manualmente. Nos aseguramos de tener el
+  // dato fresco de ESTE cliente antes de decidir -- si el usuario recién
+  // entró y todavía no se calculó nada, o cambió de cliente, lo volvemos a
+  // pedir.
   if(!window.__archivosHostStorage || window.__archivosHostStorage.clientId !== selectedClientId){
     await updateArchivosHostStorageBadge();
   }
   const storage = window.__archivosHostStorage;
   if(storage && storage.overLimit){
-    alert(`Este cliente ya usa ${storage.totalMb.toFixed(0)}MB, superó su límite de ${storage.limitMb}MB. Borrá algo en "Archivos en Host" o subí el límite del cliente antes de cargar archivos nuevos.`);
+    alert(`Este cliente ya usa ${storage.totalMb.toFixed(0)}MB, superó su límite de ${storage.limitMb}MB. Borrá algo en la lista de abajo o subí el límite del cliente antes de cargar archivos nuevos.`);
     return;
   }
 
-  const input = document.getElementById('uploadFileInput');
+  const input = document.getElementById('archivosHostFileInput');
   const files = Array.from(input.files || []);
   if(files.length === 0){ alert('Elegí uno o varios archivos primero.'); return; }
 
-  const btn = document.getElementById('uploadSubmitBtn');
-  const progress = document.getElementById('uploadProgressMsg');
-  const carouselBtnWrap = document.getElementById('uploadCarouselBtnWrap');
+  const btn = document.getElementById('archivosHostFileSubmitBtn');
+  const progress = document.getElementById('archivosHostFileProgressMsg');
   btn.disabled = true;
   progress.style.display = '';
-  carouselBtnWrap.style.display = 'none';
 
   const folder = selectedClientId; // guardamos el cliente de ESTE momento, por si cambian el selector antes de que termine el lote
-  lastUploadBatchUrls = [];
   const errors = [];
+  let okCount = 0;
 
   // Subimos una por una (no en paralelo): con videos de hasta 100MB c/u,
   // mandarlas todas juntas satura el ancho de banda del que está subiendo y
@@ -1061,8 +1046,7 @@ async function uploadFileToHostinger(e){
       const putRes = await fetch(presignData.uploadUrl, { method: 'PUT', body: file });
       if(!putRes.ok){ throw new Error(`No se pudo subir el archivo a R2 (${putRes.status})`); }
 
-      addUploadedFileToHistory(presignData.publicUrl, presignData.media_type, folder);
-      if(presignData.media_type === 'image') lastUploadBatchUrls.push(presignData.publicUrl); // un carrusel solo acepta imagenes
+      okCount++;
     }catch(err){
       errors.push(`${file.name}: ${err.message}`);
     }
@@ -1072,20 +1056,18 @@ async function uploadFileToHostinger(e){
   btn.disabled = false;
   progress.style.display = 'none';
 
-  if(lastUploadBatchUrls.length >= 2){
-    carouselBtnWrap.style.display = '';
-  }
+  if(okCount > 0) await loadArchivosHost(); // refresca la lista (y el badge de espacio) con lo recién subido
 
   if(errors.length){
     alert(`${errors.length} de ${files.length} archivo(s) no se pudieron subir:\n\n` + errors.join('\n'));
   }
 }
 
-// Manda las URLs de imagen del ultimo lote subido directo al textarea de
-// carrusel en "Agregar medio nuevo" (Medios), en el mismo orden en que se
-// subieron, y deja "Carrusel" preseleccionado.
-function useLastBatchInCarousel(){
-  if(lastUploadBatchUrls.length < 2){ alert('Subí al menos 2 imágenes juntas para armar un carrusel.'); return; }
+// Salta a "Medios", deja "Carrusel" preseleccionado en "Agregar medio nuevo"
+// y pega las URLs recibidas en el textarea de carrusel, en el orden dado.
+// Usado por useSelectedArchivosHostInMedios (imágenes tildadas de la lista
+// de "Archivos en Host") más abajo.
+function sendUrlsToMediosCarousel(urls){
   switchView('medios');
   const typeSelect = document.getElementById('newMediaTypeSelect');
   if(typeSelect){
@@ -1095,99 +1077,15 @@ function useLastBatchInCarousel(){
   const form = typeSelect ? typeSelect.closest('form') : null;
   const carouselTextarea = form ? form.querySelector('[name="carousel_urls"]') : document.querySelector('#view-medios [name="carousel_urls"]');
   if(carouselTextarea){
-    carouselTextarea.value = lastUploadBatchUrls.join('\n');
+    carouselTextarea.value = urls.join('\n');
     carouselTextarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-}
-
-// Va agregando cada archivo subido arriba de todo, para poder copiar varias
-// URLs seguidas (por ejemplo, para armar un carrusel en la pestaña Medios).
-function addUploadedFileToHistory(url, mediaType, folder){
-  const list = document.getElementById('uploadHistoryList');
-  const filename = url.split('/').pop();
-  const row = document.createElement('div');
-  row.className = 'card';
-  row.innerHTML = `
-    <div class="meta-row">${mediaType === 'video' ? 'Video' : 'Imagen'} subido correctamente</div>
-    <input type="text" readonly value="${filename}" title="${url}" onclick="this.select()" style="margin-top:6px; width:100%; box-sizing:border-box; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-family:inherit; background:var(--dark); color:var(--white);" />
-    <div class="btn-row">
-      <button type="button" class="secondary upload-copy-btn">Copiar</button>
-      ${navigator.share ? '<button type="button" class="secondary upload-share-btn">Compartir</button>' : ''}
-      <button type="button" class="upload-use-btn">Usar en Medios</button>
-      <button type="button" class="reject upload-delete-btn">Eliminar</button>
-    </div>
-  `;
-  const copyBtn = row.querySelector('.upload-copy-btn');
-  copyBtn.onclick = () => copyUploadUrl(copyBtn, url);
-
-  const shareBtn = row.querySelector('.upload-share-btn');
-  if(shareBtn) shareBtn.onclick = () => shareUploadUrl(url, mediaType);
-
-  const useBtn = row.querySelector('.upload-use-btn');
-  useBtn.onclick = () => useUploadUrlInMedios(url, mediaType);
-
-  const deleteBtn = row.querySelector('.upload-delete-btn');
-  deleteBtn.onclick = () => deleteUploadedFile(url, folder, row);
-
-  list.prepend(row);
-}
-
-// Borra el archivo del servidor (Hostinger), no solo de esta lista. Usa el
-// folder guardado en el momento de la subida, no el cliente que esté elegido
-// ahora en el selector (por si lo cambiaron mientras tanto).
-async function deleteUploadedFile(url, folder, rowEl){
-  if(!confirm('¿Eliminar este archivo del servidor? No se puede deshacer y la URL dejará de funcionar. Si ya lo usaste en "Medios", borrá primero ese medio.')) return;
-
-  const filename = url.split('/').pop();
-  const deleteBtn = rowEl.querySelector('.upload-delete-btn');
-  deleteBtn.disabled = true;
-  deleteBtn.textContent = 'Eliminando...';
-
-  try{
-    const res = await fetch(UPLOAD_ENDPOINT, {
-      method: 'POST',
-      headers: { 'X-Upload-Token': UPLOAD_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete', folder, filename })
-    });
-    const data = await res.json().catch(() => ({}));
-    if(!res.ok || data.error){ throw new Error(data.error || `Error del servidor (${res.status})`); }
-
-    rowEl.remove();
-  }catch(err){
-    alert('No se pudo eliminar el archivo: ' + err.message);
-    deleteBtn.disabled = false;
-    deleteBtn.textContent = 'Eliminar';
-  }
-}
-
-async function copyUploadUrl(btn, url){
-  try{
-    await navigator.clipboard.writeText(url);
-    const original = btn.textContent;
-    btn.textContent = 'Copiado ✓';
-    setTimeout(() => { btn.textContent = original; }, 1500);
-  } catch (e) {
-    prompt('Copiá la URL manualmente:', url);
-  }
-}
-
-// Comparte la URL con el share sheet nativo del celular (WhatsApp, Notas,
-// etc). Solo aparece el botón si el navegador lo soporta (Safari/Chrome
-// mobile sí, la mayoría de navegadores de escritorio no).
-async function shareUploadUrl(url, mediaType){
-  try{
-    await navigator.share({
-      title: mediaType === 'video' ? 'Video subido' : 'Imagen subida',
-      url
-    });
-  } catch (e) {
-    // El usuario canceló el share sheet u ocurrió otro error: no hacemos nada.
   }
 }
 
 // Salta a la pestaña "Medios" y deja la URL ya cargada en el formulario
 // "Agregar medio nuevo", con el tipo de medio correcto preseleccionado,
-// para no tener que copiar/pegar a mano.
+// para no tener que copiar/pegar a mano. La usa useSelectedArchivosHostInMedios
+// (ver más abajo) cuando se tilda un solo archivo en "Archivos en Host".
 function useUploadUrlInMedios(url, mediaType){
   switchView('medios');
   const urlInput = document.getElementById('newMediaUrlInput');
@@ -1275,8 +1173,8 @@ async function loadArchivosHost(){
 // cliente todavía no los tiene seteados.
 //
 // Guarda el total en window.__archivosHostStorage para que
-// uploadFileToHostinger() pueda bloquear la subida sin tener que volver a
-// pedir el listado.
+// uploadFilesToArchivosHost() pueda bloquear
+// la subida sin tener que volver a pedir el listado.
 //
 // Se llama desde loadClients() (cada vez que cambiás de cliente en el
 // selector de arriba, igual que el resto de los badges) para que el aviso
@@ -1324,8 +1222,9 @@ async function updateArchivosHostStorageBadge(files){
   const totalMb = totalBytes / 1024 / 1024;
   const overLimit = totalMb >= limitMb;
 
-  // Guardado para que uploadFileToHostinger() pueda chequear el límite antes
-  // de subir, sin depender de que el usuario haya entrado a esta pestaña.
+  // Guardado para que uploadFilesToArchivosHost() pueda chequear el límite
+  // antes de subir, sin depender de que el usuario haya entrado a esta
+  // pestaña.
   window.__archivosHostStorage = { clientId: selectedClientId, totalMb, limitMb, warnMb, overLimit };
 
   // Triangulito del sidebar
@@ -1457,8 +1356,25 @@ function onArchivosHostCheckChange(){
   const deleteBtn = document.getElementById('archivosHostDeleteBtn');
   if(copyBtn) copyBtn.disabled = n === 0;
   if(shareBtn) shareBtn.disabled = n === 0;
-  if(useBtn) useBtn.disabled = n !== 1; // "Usar en Medios" solo tiene sentido con un archivo puntual
   if(deleteBtn) deleteBtn.disabled = n === 0;
+
+  // Con 1 tildado: manda ese archivo puntual (imagen o video) a "Medios".
+  // Con 2 o más: solo tiene sentido si son todas imágenes (para armar un
+  // carrusel) y no más de 10 -- el botón cambia de texto para dejarlo claro.
+  if(useBtn){
+    if(n === 0){
+      useBtn.disabled = true;
+      useBtn.textContent = 'Usar en Medios';
+    } else if(n === 1){
+      useBtn.disabled = false;
+      useBtn.textContent = 'Usar en Medios';
+    } else {
+      const selectedFiles = checked.map(c => archivosHostFilesByUrl[c.dataset.url]).filter(Boolean);
+      const allImages = selectedFiles.length === n && selectedFiles.every(f => f.media_type !== 'video');
+      useBtn.disabled = !allImages || n > 10;
+      useBtn.textContent = 'Usar como Carrusel';
+    }
+  }
 
   const selectAll = document.getElementById('archivosHostSelectAll');
   if(selectAll && checks.length > 0){
@@ -1510,13 +1426,32 @@ async function shareSelectedArchivosHost(){
   }
 }
 
-// Habilitado solo cuando hay exactamente uno tildado (ver onArchivosHostCheckChange).
+// Con un archivo tildado, lo manda directo a "Agregar medio nuevo" con su
+// tipo real (imagen o video), como antes. Con 2 o más tildados -- ya
+// validados como "todas imágenes, máximo 10" en onArchivosHostCheckChange,
+// que es lo que habilita el botón -- arma un carrusel con esas URLs, en el
+// mismo orden en que aparecen en la lista.
 function useSelectedArchivosHostInMedios(){
   const urls = getSelectedArchivosHostUrls();
-  if(urls.length !== 1) return;
-  const file = archivosHostFilesByUrl[urls[0]];
-  if(!file) return;
-  useUploadUrlInMedios(file.url, file.media_type);
+  if(urls.length === 0) return;
+
+  if(urls.length === 1){
+    const file = archivosHostFilesByUrl[urls[0]];
+    if(!file) return;
+    useUploadUrlInMedios(file.url, file.media_type);
+    return;
+  }
+
+  const files = urls.map(u => archivosHostFilesByUrl[u]).filter(Boolean);
+  if(files.length !== urls.length || files.some(f => f.media_type === 'video')){
+    alert('Un carrusel solo acepta imágenes. Destildá los videos para armarlo con el resto.');
+    return;
+  }
+  if(files.length > 10){
+    alert('Un carrusel acepta como máximo 10 imágenes. Destildá algunas.');
+    return;
+  }
+  sendUrlsToMediosCarousel(files.map(f => f.url));
 }
 
 // Borra todo lo tildado (una confirmación para todo el lote) y al final
