@@ -1215,6 +1215,21 @@ def pick_media(client_id):
             return assets[0]
         print(f"pick_media: MANUAL_MEDIA_ID={manual_media_id} no encontrado para client_id={client_id} (no existe o pertenece a OTRO cliente), se usa el criterio normal.")
 
+    # Cola manual: si el usuario cargo un numero en "manual_order" desde el
+    # panel (pestaña Medios), esos medios tienen prioridad sobre la rotacion
+    # automatica, respetando el numero que el puso (1, 2, 3...). Se consume
+    # de a uno: cuando se publica con exito, manual_order se limpia (vuelve
+    # a null) para que ese medio vuelva a la rotacion automatica normal en
+    # vez de quedar fijo ahi para siempre.
+    manual_ordered = sb_get(
+        "socialbot_media_assets",
+        {"client_id": f"eq.{client_id}", "manual_order": "not.is.null", "order": "manual_order.asc", "limit": "1"},
+    )
+    if manual_ordered:
+        chosen = manual_ordered[0]
+        print(f"pick_media: usando orden MANUAL -> id={chosen['id']} manual_order={chosen['manual_order']} times_used={chosen['times_used']}")
+        return chosen
+
     assets = sb_get("socialbot_media_assets", {"client_id": f"eq.{client_id}", "order": "times_used.asc", "limit": "1"})
     if not assets:
         print("pick_media: no hay ningun medio cargado para este cliente.")
@@ -1635,7 +1650,11 @@ def process_client(client_id, slot):
     # prioritario en el proximo intento.
     if media and media_published_ok:
         nuevo_times_used = media["times_used"] + 1
-        sb_update("socialbot_media_assets", {"id": f"eq.{media['id']}"}, {"times_used": nuevo_times_used})
+        patch = {"times_used": nuevo_times_used}
+        if media.get("manual_order") is not None:
+            patch["manual_order"] = None
+            print(f"manual_order consumido -> media id={media['id']} vuelve a la rotacion automatica normal")
+        sb_update("socialbot_media_assets", {"id": f"eq.{media['id']}"}, patch)
         print(f"times_used actualizado -> media id={media['id']} times_used={nuevo_times_used}")
     elif media and not media_published_ok:
         print(f"times_used NO actualizado (nada se publico con exito) -> media id={media['id']} sigue en times_used={media['times_used']}")
