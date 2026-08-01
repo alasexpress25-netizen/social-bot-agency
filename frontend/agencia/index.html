@@ -2722,14 +2722,37 @@ async function loadClients(){
     horariosContainer.appendChild(horariosDiv);
 
     // ── Pestaña "Medios" ──────────────────────────────────────────────
+    // Orden real de publicación: pick_media() en post_scheduler.py primero
+    // busca si hay algun medio con manual_order asignado (el numero que vos
+    // cargues acá) y usa ESE, ordenado 1,2,3... Si no hay ninguno con
+    // manual_order, cae a la rotacion automatica de siempre (menor
+    // times_used primero, desempate por mas antiguo). Reproducimos la MISMA
+    // regla acá para mostrar la fila real, no una inventada. Al publicarse
+    // con éxito, el manual_order de ese medio se limpia solo y vuelve a la
+    // rotación automática.
+    const mediaQueueOrder = [...(media||[])].sort((a, b) => {
+      const aManual = a.manual_order != null;
+      const bManual = b.manual_order != null;
+      if (aManual && bManual) return a.manual_order - b.manual_order;
+      if (aManual !== bManual) return aManual ? -1 : 1;
+      if (a.times_used !== b.times_used) return a.times_used - b.times_used;
+      return new Date(a.created_at) - new Date(b.created_at);
+    });
+    const mediaQueueRank = new Map(mediaQueueOrder.map((m, idx) => [m.id, idx + 1]));
+
     const mediosDiv = document.createElement('div');
     mediosDiv.className = 'card client-card';
     mediosDiv.dataset.clientId = c.id;
     mediosDiv.innerHTML = `
       <div class="section-client-heading">${c.name} · ${(media||[]).length}</div>
-      ${(media||[]).map(m => `
+      ${mediaQueueOrder.length ? `<div class="meta-row" style="margin-bottom:6px;">Orden real de rotación. Dejá "Orden manual" vacío para que se rija por el automático (<code>times_used</code>); ponele un número (1, 2, 3...) para forzar que salga en ese lugar de la fila — se consume solo y vuelve a automático apenas se publica.</div>` : ''}
+      ${mediaQueueOrder.map(m => `
         <form class="inline" onsubmit="updateMedia(event, '${m.id}', '${c.id}', '${m.media_type}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
-          <div class="meta-row">${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x</div>
+          <div class="meta-row">
+            <span class="pill" style="background:var(--accent-soft); color:var(--gold); font-weight:700; margin-right:6px;">${mediaQueueRank.get(m.id) === 1 ? '▶ Próxima a publicar' : `${mediaQueueRank.get(m.id)}º en la fila`}</span>
+            ${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x${m.manual_order != null ? ` · orden manual: ${m.manual_order}` : ''}
+          </div>
+          <input name="manual_order" type="number" min="1" step="1" value="${m.manual_order != null ? m.manual_order : ''}" placeholder="Orden manual (opcional, ej: 1). Vacío = automático" />
           ${m.media_type === 'carousel' ? `
           <textarea name="carousel_urls" placeholder="Una URL de imagen por línea (entre 2 y 10)">${(carouselUrlsByAsset[m.id]||[]).join('\n')}</textarea>
           ` : `
@@ -3335,6 +3358,12 @@ async function addMedia(e, clientId){
 async function updateMedia(e, mediaId, clientId, mediaType){
   e.preventDefault();
   const f = new FormData(e.target);
+  const manualOrderRaw = (f.get('manual_order') || '').trim();
+  const manual_order = manualOrderRaw === '' ? null : parseInt(manualOrderRaw, 10);
+  if(manualOrderRaw !== '' && (isNaN(manual_order) || manual_order < 1)){
+    alert('El orden manual tiene que ser un número entero de 1 en adelante (o dejalo vacío para que vuelva a la rotación automática).');
+    return;
+  }
 
   if(mediaType === 'carousel'){
     const urls = (f.get('carousel_urls') || '').split('\n').map(u => u.trim()).filter(Boolean);
@@ -3345,6 +3374,7 @@ async function updateMedia(e, mediaId, clientId, mediaType){
     await sb.from('socialbot_media_assets').update({
       caption_override: f.get('caption_override') || null,
       hashtags_override: f.get('hashtags_override') || null,
+      manual_order,
     }).eq('id', mediaId);
     // Reemplazamos todos los items del carrusel por la lista nueva (mas simple
     // y confiable que tratar de "matchear" cuales cambiaron una por una).
@@ -3359,6 +3389,7 @@ async function updateMedia(e, mediaId, clientId, mediaType){
       fb_photo_url: f.get('fb_photo_url') || null,
       caption_override: f.get('caption_override') || null,
       hashtags_override: f.get('hashtags_override') || null,
+      manual_order,
     }).eq('id', mediaId);
   }
   loadClients();
