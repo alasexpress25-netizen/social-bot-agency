@@ -1042,16 +1042,6 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
                 print(f"Facebook: intento 1 fallo por rate-limit/timeout de Hostinger al bajar el video ({e.response.text[:200]}), sigo con intento 2.")
             else:
                 raise
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            # BUGFIX 01/08/2026: estos errores (Hostinger cortando la conexion en
-            # vez de responder con un status HTTP prolijo) no son requests.HTTPError,
-            # asi que antes NO los agarraba ningun except de aca y se escapaban
-            # derecho hasta process_client() sin pasar nunca por intento 2 ni por
-            # el fallback de foto (intento 3) -- eso es lo que produjo los "FALLO
-            # -> .../facebook:" con mensaje vacio que se ven en la tabla
-            # socialbot_posts. Los tratamos igual que un fetch transitorio de
-            # Hostinger: seguimos con intento 2.
-            print(f"Facebook: intento 1 fallo por corte de conexion con Hostinger ({e}), sigo con intento 2.")
 
         # Intento 2: endpoint clasico de /videos (resumable upload), por si
         # el permiso se comporta distinto ahi. Si tambien falla por el mismo
@@ -1082,13 +1072,6 @@ def publish_facebook(page_id, page_access_token, caption, media_url=None, locati
                 print(f"Facebook: intento 2 tambien fallo por rate-limit/timeout persistente de Hostinger ({e.response.text[:200]}), sigo con intento 3 (foto auto).")
             else:
                 raise
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            # BUGFIX 01/08/2026: mismo motivo que en intento 1 -- sin este except,
-            # un corte de conexion de Hostinger durante upload_video_resumable()
-            # (HEAD, GET del video, o el propio POST de subida a Meta) se escapaba
-            # de esta funcion entera y el post se perdia, sin llegar nunca al
-            # fallback de foto de abajo.
-            print(f"Facebook: intento 2 tambien fallo por corte de conexion con Hostinger ({e}), sigo con intento 3 (foto auto).")
 
         # Intento 3 (fallback definitivo): publicar un frame del video como foto.
         # Cuando en el futuro se apruebe Advanced Access, los intentos 1/2 de
@@ -1553,15 +1536,12 @@ def process_client(client_id, slot):
     created_post_ids = []
 
     # ---------------------------------------------------------------------------
-    # Serialización por plataforma para evitar 429 en Hostinger con videos.
-    # Cuando un cliente tiene Facebook + Instagram conectados, ambos crawlers
-    # de Meta le piden el video a Hostinger casi al mismo tiempo, y el hosting
-    # compartido responde 429 al segundo pedido. La solución es publicar en un
-    # orden fijo: Instagram primero (ya incluye su propio polling hasta que Meta
-    # termine de procesar el video), y recién cuando termina, Facebook.
-    # Así Hostinger solo recibe una descarga de video a la vez por cliente.
-    # Para imágenes y carruseles no hay riesgo real de 429 (son requests muy
-    # rápidas), pero aplicamos el mismo orden igualmente por consistencia.
+    # Orden fijo por plataforma: Instagram primero, Facebook después. Nació
+    # para evitar 429 en Hostinger cuando ambos crawlers de Meta le pedían el
+    # mismo video casi al mismo tiempo (hosting compartido). Desde la
+    # migración a Cloudflare R2 (01/08/2026) ese rate-limit ya no aplica, pero
+    # se deja el mismo orden por consistencia y porque simplifica el debug
+    # (siempre se sabe qué plataforma corrió primero).
     # ---------------------------------------------------------------------------
     def platform_order(account):
         return 0 if account["platform"] == "instagram" else 1
@@ -1623,27 +1603,20 @@ def process_client(client_id, slot):
             print(f"OK -> {client['name']} / {account['platform']} / post {external_id}")
             media_published_ok = True
 
+            # 01/08/2026: antes acá esperábamos 25s entre Instagram y Facebook
+            # cuando el media era video, para no saturar el rate-limit (429)
+            # de Hostinger al servir el mismo archivo dos veces seguidas. Con
+            # la migración a Cloudflare R2 ese rate-limit compartido ya no
+            # existe, así que se saca la espera. El orden Instagram-primero
+            # (platform_order, más arriba) se deja igual, no hace daño y sirve
+            # de referencia para debug. El fallback de foto en publish_facebook()
+            # ante errores de permiso de video de Meta sigue intacto -- eso no
+            # tiene nada que ver con el hosting.
+
         except Exception as e:
-            if getattr(e, "response", None) is not None:
-                error_msg = e.response.text[:500]
-            else:
-                error_msg = str(e) or f"{type(e).__name__} sin mensaje (ver traceback en el log de la corrida)"
+            error_msg = e.response.text[:500] if getattr(e, "response", None) is not None else str(e)
             sb_update("socialbot_posts", {"id": f"eq.{created['id']}"}, {"status": "failed", "error_message": error_msg})
             print(f"FALLO -> {client['name']} / {account['platform']}: {error_msg}")
-
-        # BUGFIX 01/08/2026: esta espera antes estaba DENTRO del try, despues del
-        # "OK ->" -- solo corria si la publicacion actual habia tenido EXITO. Si
-        # Instagram fallaba (ej. video en estado 'ERROR' de Meta, como paso el
-        # 25/07, 29/07 y 31/07 con este cliente), el bloque quedaba salteado y
-        # Facebook arrancaba su intento apenas 5-7s despues -- justo lo que
-        # dispara el 429 de Hostinger. El intento de bajar el video para
-        # Instagram (exitoso o no) ya le pega a Hostinger igual, asi que la
-        # espera debe aplicarse SIEMPRE que el media sea video y haya una
-        # plataforma siguiente, sin importar si esta termino OK o FALLO.
-        remaining = accounts_ordered[accounts_ordered.index(account) + 1:]
-        if remaining and media_type == "video":
-            print("Esperando 25 s antes de publicar en la siguiente plataforma para no saturar Hostinger...")
-            time.sleep(25)
 
     # Si se uso un item del plan semanal, lo marcamos como 'used' y lo
     # linkeamos al primer post generado (references socialbot_posts, on
