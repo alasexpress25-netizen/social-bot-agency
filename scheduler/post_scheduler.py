@@ -682,6 +682,41 @@ def _fetch_facebook_shares(post_id, access_token):
         return 0
 
 
+def _fetch_facebook_page_engagement(page_id, access_token, period="days_28"):
+    """
+    'page_post_engagements' es un KPI de CUENTA (no de un post puntual):
+    suma de reacciones, comentarios, compartidos y clics de TODOS los posts
+    de la Pagina en la ventana elegida (days_28, ventana movil agregada,
+    igual criterio que _fetch_instagram_audience_reach). Sirve para dar a
+    Facebook un equivalente de "engagement real" parecido a
+    accounts_engaged de Instagram, pero a nivel de Pagina en vez de cuenta
+    de Instagram.
+
+    A diferencia de las metricas de post (_fetch_facebook_post_insights),
+    Page Insights NO usa metric_type=total_value -- devuelve directamente
+    values=[{value: N}] por period, tomamos el ultimo (el mas reciente).
+
+    Devuelve el numero o None (Pagina sin datos todavia, token vencido,
+    permiso insuficiente, etc. -- best-effort, no corta la corrida).
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/insights",
+            params={"metric": "page_post_engagements", "period": period, "access_token": access_token},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            return None
+        values = data[0].get("values", [])
+        if not values:
+            return None
+        return values[-1].get("value")
+    except Exception:
+        return None
+
+
 def _fetch_instagram_reel_metrics(media_id, access_token):
     """
     'plays' (cuantas veces se reprodujo) e 'ig_reels_avg_watch_time' (tiempo
@@ -923,6 +958,59 @@ def collect_audience_reach():
             print(f"ERROR actualizando alcance seguidor/no-seguidor de {account.get('page_name') or account['id']}: {e}")
 
     print(f"Alcance seguidor/no-seguidor actualizado: {updated}/{len(accounts)}.")
+
+
+def collect_facebook_page_engagement():
+    """
+    Trae, para cada Pagina de Facebook conectada, el engagement total de
+    los ultimos 28 dias (_fetch_facebook_page_engagement) y lo guarda --
+    upsert por social_account_id, igual que collect_audience_reach() -- en
+    socialbot_audience_reach (columna page_engagement). Va en funcion
+    separada (en vez de meterse dentro de collect_audience_reach) porque
+    esa funcion filtra explicitamente platform='instagram' y arma su propio
+    payload sobre esa base; separarlo evita tocar ese flujo que ya esta
+    probado en produccion.
+
+    Es el equivalente, para Facebook, de lo que accounts_engaged es para
+    Instagram: un solo numero de "engagement real" a nivel de cuenta. No
+    hay historial dia por dia, solo el ultimo valor (mismo criterio que el
+    resto de esta tabla). Se corre junto con collect_audience_reach() al
+    principio de cada ejecucion del scheduler.
+    """
+    accounts = sb_get(
+        "socialbot_social_accounts",
+        {"platform": "eq.facebook", "select": "id,page_id,page_access_token,page_name"},
+    )
+    if not accounts:
+        return
+
+    print(f"Actualizando engagement de pagina de {len(accounts)} cuenta(s) de Facebook...")
+    updated = 0
+    for account in accounts:
+        page_id = account.get("page_id")
+        access_token = account.get("page_access_token")
+        if not page_id or not access_token:
+            continue
+        try:
+            page_engagement = _fetch_facebook_page_engagement(page_id, access_token)
+            if page_engagement is None:
+                continue  # Meta no tiene dato todavia -- no pisamos un valor bueno anterior
+
+            sb_upsert(
+                "socialbot_audience_reach",
+                [{
+                    "social_account_id": account["id"],
+                    "period": "days_28",
+                    "page_engagement": page_engagement,
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                }],
+                on_conflict="social_account_id",
+            )
+            updated += 1
+        except Exception as e:
+            print(f"ERROR actualizando engagement de pagina de {account.get('page_name') or account['id']}: {e}")
+
+    print(f"Engagement de pagina actualizado: {updated}/{len(accounts)}.")
 
 
 def _fetch_follower_count(platform, page_id_or_ig_id, access_token):
@@ -1688,6 +1776,13 @@ def run():
         collect_audience_reach()
     except Exception as e:
         print(f"ERROR actualizando alcance seguidor/no-seguidor (no se corta la corrida): {e}")
+
+    # Engagement total de Pagina de Facebook (equivalente a accounts_engaged
+    # de Instagram, pero a nivel de Pagina). Mismo criterio best-effort.
+    try:
+        collect_facebook_page_engagement()
+    except Exception as e:
+        print(f"ERROR actualizando engagement de pagina de Facebook (no se corta la corrida): {e}")
 
     # Snapshot diario de seguidores totales (todas las cuentas, no solo
     # Instagram), para la variacion semanal que se muestra junto a lo
