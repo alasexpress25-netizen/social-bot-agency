@@ -68,6 +68,9 @@ let archivosHostFolder = null;
 let archivosHostFilesByUrl = {};
 // clientId -> 'week' | 'month'. Por defecto semanal.
 const metricPeriod = {};
+// clientId -> 'all' | 'facebook' | 'instagram'. Filtro de plataforma en la
+// pestaña Métricas (selector Facebook/Instagram/Todas). Por defecto todas.
+const metricPlatform = {};
 // clientId -> 'list' | 'calendar'. Vista del plan semanal de contenido
 // (item "menores" de PROPUESTAS-AGENCIA.md). Por defecto lista, igual que
 // siempre -- el calendario es solo un vistazo visual alternativo, de solo
@@ -113,4 +116,4 @@ function setArchivosHostFolder(v) { archivosHostFolder = v; }
 function setArchivosHostFilesByUrl(v) { archivosHostFilesByUrl = v; }
 function setDeferredInstallPrompt(v) { deferredInstallPrompt = v; }
 
-export { CLIENT_PORTAL_URL, CLIENT_STORAGE_LIMIT_MB, CLIENT_STORAGE_WARN_MB, LEAD_STAGE_META, PLATFORM_META_AG, SELECTED_CLIENT_STORAGE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL, UPLOAD_ENDPOINT, UPLOAD_TOKEN, _WEEKDAY_NAMES_ES_JS, archivosHostFilesByUrl, archivosHostFolder, clientsCache, currentAgencyId, deferredInstallPrompt, metricPeriod, persistSelectedClientId, planViewMode, sb, selectedClientId, setArchivosHostFilesByUrl, setArchivosHostFolder, setCurrentAgencyId, setDeferredInstallPrompt, setSelectedClientId };
+export { CLIENT_PORTAL_URL, CLIENT_STORAGE_LIMIT_MB, CLIENT_STORAGE_WARN_MB, LEAD_STAGE_META, PLATFORM_META_AG, SELECTED_CLIENT_STORAGE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL, UPLOAD_ENDPOINT, UPLOAD_TOKEN, _WEEKDAY_NAMES_ES_JS, archivosHostFilesByUrl, archivosHostFolder, clientsCache, currentAgencyId, deferredInstallPrompt, metricPeriod, metricPlatform, persistSelectedClientId, planViewMode, sb, selectedClientId, setArchivosHostFilesByUrl, setArchivosHostFolder, setCurrentAgencyId, setDeferredInstallPrompt, setSelectedClientId };
