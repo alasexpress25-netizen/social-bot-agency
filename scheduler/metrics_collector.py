@@ -575,6 +575,83 @@ def collect_audience_reach():
     print(f"Alcance seguidor/no-seguidor actualizado: {updated}/{len(accounts)}.")
 
 
+def collect_engagement_snapshots():
+    """
+    Punto 3 de propuestas-30-07-2026.md. socialbot_audience_reach solo
+    guarda el ULTIMO snapshot por cuenta (se pisa en cada corrida) -- no
+    alcanza para calcular un % de variacion del engagement rate vs. el
+    periodo anterior en el panel. Esta funcion agrega esos numeros por
+    CLIENTE (sumando todas sus cuentas de Instagram, igual criterio que
+    renderMetrics() en metrics.js) y guarda 1 fila por cliente por dia en
+    socialbot_engagement_snapshots -- mismo patron de "upsert por
+    (client_id, snapshot_date)" que collect_follower_snapshots() usa para
+    seguidores.
+
+    Se corre DESPUES de collect_audience_reach() en la misma ejecucion,
+    para leer los numeros recien actualizados de socialbot_audience_reach
+    en vez de tener que volver a pedirle nada a Meta.
+    """
+    accounts = sb_get(
+        "socialbot_social_accounts",
+        {
+            "platform": "eq.instagram",
+            "select": "client_id,socialbot_audience_reach(follower_reach,non_follower_reach,accounts_engaged)",
+        },
+    )
+    if not accounts:
+        return
+
+    # Suma follower_reach+non_follower_reach y accounts_engaged por
+    # client_id -- una cuenta de Instagram sin dato todavia (sin fila en
+    # socialbot_audience_reach, o con accounts_engaged null) simplemente no
+    # aporta nada a la suma de su cliente.
+    totals_by_client = {}
+    for acc in accounts:
+        client_id = acc.get("client_id")
+        if not client_id:
+            continue
+        row = acc.get("socialbot_audience_reach")
+        row = row[0] if isinstance(row, list) and row else (row if isinstance(row, dict) else None)
+        if not row:
+            continue
+        if client_id not in totals_by_client:
+            totals_by_client[client_id] = {"reach": 0, "engaged": 0, "has_data": False}
+        t = totals_by_client[client_id]
+        if row.get("accounts_engaged") is not None and (row.get("follower_reach") or row.get("non_follower_reach")):
+            t["has_data"] = True
+            t["reach"] += (row.get("follower_reach") or 0) + (row.get("non_follower_reach") or 0)
+            t["engaged"] += row["accounts_engaged"]
+
+    if not totals_by_client:
+        return
+
+    print(f"Guardando snapshot de engagement rate de {len(totals_by_client)} cliente(s)...")
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    saved = 0
+    for client_id, t in totals_by_client.items():
+        if not t["has_data"]:
+            continue  # sin dato todavia -- no guardamos una fila con 0/null que despues se lea como "cayo a 0"
+        engagement_rate = round((t["engaged"] / t["reach"]) * 100, 2) if t["reach"] else None
+        try:
+            sb_upsert(
+                "socialbot_engagement_snapshots",
+                [{
+                    "client_id": client_id,
+                    "snapshot_date": today_iso,
+                    "engagement_rate": engagement_rate,
+                    "accounts_engaged": t["engaged"],
+                    "audience_reach": t["reach"],
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                }],
+                on_conflict="client_id,snapshot_date",
+            )
+            saved += 1
+        except Exception as e:
+            print(f"ERROR guardando snapshot de engagement de cliente {client_id}: {e}")
+
+    print(f"Snapshots de engagement rate guardados: {saved}/{len(totals_by_client)}.")
+
+
 def collect_facebook_page_engagement():
     """
     Trae, para cada Pagina de Facebook conectada, el engagement total de
@@ -720,6 +797,11 @@ def run():
         collect_audience_reach()
     except Exception as e:
         print(f"ERROR actualizando alcance seguidor/no-seguidor (no se corta la corrida): {e}")
+
+    try:
+        collect_engagement_snapshots()
+    except Exception as e:
+        print(f"ERROR guardando snapshot de engagement rate (no se corta la corrida): {e}")
 
     try:
         collect_facebook_page_engagement()
