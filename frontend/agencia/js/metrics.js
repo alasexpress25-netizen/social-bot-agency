@@ -210,7 +210,7 @@ async function renderMetrics(clientId){
     // de arriba) desglosado seguidor/no-seguidor -- ver
     // collect_audience_reach() en post_scheduler.py. Solo se guarda el
     // ultimo snapshot por cuenta, así que no hace falta filtrar por fecha.
-    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
     // Historial de seguidores/fans totales (todas las plataformas) -- ver
     // collect_follower_snapshots() en post_scheduler.py. Tampoco depende
     // del periodo de arriba: se pide todo el historial guardado (como
@@ -305,12 +305,17 @@ async function renderMetrics(clientId){
   // no corresponde mostrarla (paso 5 del plan).
   const igAccounts = platform === 'facebook' ? [] : (igAccountsRaw || []);
   let followerReach = 0, nonFollowerReach = 0, hasAudienceData = false;
+  let totalProfileViews = 0, hasProfileViewsData = false;
   igAccounts.forEach(acc => {
     const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
     if(row && (row.follower_reach != null || row.non_follower_reach != null)){
       hasAudienceData = true;
       followerReach += row.follower_reach || 0;
       nonFollowerReach += row.non_follower_reach || 0;
+    }
+    if(row && row.profile_views != null){
+      hasProfileViewsData = true;
+      totalProfileViews += row.profile_views;
     }
   });
   const totalAudienceReach = followerReach + nonFollowerReach;
@@ -392,16 +397,21 @@ async function renderMetrics(clientId){
     </div>
     ${igAccounts.length ? `
     <div class="metric-title">Audiencia de Instagram: seguidores vs. no seguidores (últimos 28 días)</div>
-    ${hasAudienceData ? `
-    <div style="display:flex; gap:10px; margin-bottom:6px;">
-      <div class="kpi-card" style="flex:1;"><div class="kpi-value">${followerPct}%</div><div class="kpi-label">👥 Seguidores</div></div>
-      <div class="kpi-card" style="flex:1;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">🌐 No seguidores</div></div>
+    ${hasAudienceData || hasProfileViewsData ? `
+    <div style="display:flex; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
+      ${hasAudienceData ? `
+      <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${followerPct}%</div><div class="kpi-label">👥 Seguidores</div></div>
+      <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">🌐 No seguidores</div></div>
+      ` : ''}
+      ${hasProfileViewsData ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${totalProfileViews.toLocaleString('es')}</div><div class="kpi-label">🔎 Visitas al perfil</div></div>` : ''}
     </div>
+    ${hasAudienceData ? `
     <div style="height:8px; border-radius:99px; overflow:hidden; display:flex; margin-bottom:6px;">
       <div style="height:100%; width:${followerPct}%; background:var(--gold);"></div>
       <div style="height:100%; width:${nonFollowerPct}%; background:var(--line);"></div>
     </div>
     <div class="meta-row" style="font-size:11px; margin-bottom:14px;">Alcance total de la cuenta en el periodo: ${totalAudienceReach.toLocaleString('es')} cuentas.</div>
+    ` : ''}
     ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">Todavía no hay datos de audiencia para esta cuenta (Meta puede tardar unos días en tenerlos disponibles, o recién se conectó).</div>`}
     ` : ''}
     <div class="metric-title">Consultas recibidas</div>
