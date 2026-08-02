@@ -1895,6 +1895,30 @@ function renderPostsList(clientId){
     const platform = p.platform;
     const pMeta = PLATFORM_META_AG[platform];
     const dateLabel = (p.published_at || p.created_at) ? new Date(p.published_at || p.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+
+    // Desglose seguidor/no-seguidor de ESTE post (ver
+    // _fetch_instagram_post_audience_reach en post_scheduler.py). Solo
+    // existe para Instagram -- Meta no expone este dato por post para
+    // Facebook via API publica, asi que en posts de esa plataforma esta
+    // seccion directamente no se muestra (no se inventa un 0%/0%).
+    const m = p.socialbot_post_metrics || {};
+    const hasFollowBreakdown = platform === 'instagram' && (m.follower_reach != null || m.non_follower_reach != null);
+    let followBreakdownHtml = '';
+    if(hasFollowBreakdown){
+      const total = (m.follower_reach || 0) + (m.non_follower_reach || 0);
+      const followerPct = total ? Math.round((m.follower_reach || 0) / total * 100) : 0;
+      const nonFollowerPct = 100 - followerPct;
+      followBreakdownHtml = `
+        <div style="margin-top:8px;">
+          <div style="font-size:11px; color:var(--muted); margin-bottom:3px;">👥 Seguidores ${followerPct}% · 🌐 No seguidores ${nonFollowerPct}%</div>
+          <div style="height:6px; border-radius:99px; overflow:hidden; display:flex;">
+            <div style="height:100%; width:${followerPct}%; background:var(--gold);"></div>
+            <div style="height:100%; width:${nonFollowerPct}%; background:var(--line);"></div>
+          </div>
+        </div>
+      `;
+    }
+
     return `
       <div class="card" style="margin-top:8px; padding:10px 12px;">
         <div class="meta-row" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
@@ -1904,6 +1928,16 @@ function renderPostsList(clientId){
         </div>
         <div style="margin-top:4px;">${(p.caption||'').slice(0,80)}...</div>
         ${p.status==='failed' && p.error_message ? `<div style="margin-top:4px; font-size:12px; color:var(--warn); font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
+        ${p.status==='published' ? `
+        <div style="margin-top:6px; display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--muted);">
+          <span>❤️ ${m.likes || 0}</span>
+          <span>💬 ${m.comments || 0}</span>
+          ${platform==='facebook' ? `<span>🔁 ${m.shares || 0}</span>` : ''}
+          <span>👁️ ${m.reach != null ? m.reach.toLocaleString('es') : '—'}</span>
+          ${platform==='instagram' ? `<span>🔖 ${m.saved != null ? m.saved.toLocaleString('es') : '—'}</span>` : ''}
+        </div>
+        ` : ''}
+        ${followBreakdownHtml}
         <div style="margin-top:6px; display:flex; gap:12px; align-items:center;">
           ${p.permalink_url ? `<a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px; color:var(--white); text-decoration:underline; display:inline-flex; align-items:center; gap:4px;">Ver publicación<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a>` : ''}
           ${p.status==='failed' ? `<button type="button" class="secondary" style="padding:4px 10px; font-size:12px;" onclick="retryPost('${p.id}', '${clientId}')">Reintentar</button>` : ''}
@@ -2339,7 +2373,7 @@ async function loadClients(){
     const { data: hookTypeRanking } = await sb.from('socialbot_hook_type_ranking').select('*').eq('client_id', c.id).order('avg_score', { ascending: false });
     const { data: media } = await sb.from('socialbot_media_assets').select('*').eq('client_id', c.id).order('created_at', {ascending:false});
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
-    const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
+    const { data: posts } = await sb.from('socialbot_posts').select('*, socialbot_post_metrics(likes, comments, shares, reach, saved, follower_reach, non_follower_reach)').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     // Punto 8 (propuestas-30-07-2026.md): sugerencias de mensaje de
     // referido/reseña armadas solas cuando un lead pasa a 'convertido'.

@@ -560,6 +560,59 @@ def _fetch_instagram_audience_reach(ig_business_id, access_token, period="days_2
         return None, None
 
 
+def _fetch_instagram_post_audience_reach(media_id, access_token):
+    """
+    Igual que _fetch_instagram_audience_reach, pero para UN post puntual en
+    vez de toda la cuenta: cuanto del alcance de ESTE post vino de gente que
+    ya seguia el perfil vs. gente que no. Mismo mecanismo de Meta (metric
+    'reach' con breakdown=follow_type), pedido sobre el media_id del post en
+    vez del ig_business_id de la cuenta. A diferencia del de cuenta, acá se
+    pide period='lifetime' (no days_28): el alcance de un post ya publicado
+    es un numero acumulado que no vuelve a resetear cada 28 dias, es "lo que
+    lleva acumulado desde que se publico".
+
+    Facebook NO tiene un endpoint equivalente para posts de Pagina -- la
+    Graph API publica no expone ese desglose para Facebook (solo existe para
+    medios de Instagram), asi que esta funcion es Instagram-only. Lo que se
+    ve en el "Insights do post" nativo de Facebook para Reels sale de datos
+    internos de Meta Business Suite que no estan expuestos via API publica
+    para apps de terceros -- por eso no hay forma de replicar ese mismo dato
+    para posts de Facebook desde este scheduler.
+
+    Devuelve (follower_reach, non_follower_reach). Best-effort: si Meta no
+    tiene el dato todavia (post muy reciente, alcance insuficiente) o el
+    permiso no alcanza, devuelve (None, None) en vez de cortar la corrida.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
+            params={
+                "metric": "reach",
+                "period": "lifetime",
+                "metric_type": "total_value",
+                "breakdown": "follow_type",
+                "access_token": access_token,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            return None, None
+        breakdowns = data[0].get("total_value", {}).get("breakdowns", [])
+        if not breakdowns:
+            return None, None
+        results = breakdowns[0].get("results", [])
+        by_type = {}
+        for item in results:
+            dims = item.get("dimension_values") or []
+            if dims:
+                by_type[dims[0]] = item.get("value")
+        return by_type.get("FOLLOWER"), by_type.get("NON_FOLLOWER")
+    except Exception:
+        return None, None
+
+
 def _fetch_facebook_shares(post_id, access_token):
     """
     'shares' se pide por separado del resto de los campos (likes, comments) a
@@ -603,10 +656,14 @@ def fetch_post_metrics(platform, external_id, access_token):
             comments = data.get("comments", {}).get("summary", {}).get("total_count", 0)
             shares = _fetch_facebook_shares(external_id, access_token)
             reach, impressions = _fetch_facebook_post_insights(external_id, access_token)
-            # Facebook no tiene un equivalente directo de "guardados" a nivel
-            # de post -- queda en None (no es "no se pudo traer", es "no
-            # existe esta metrica para esta plataforma").
-            return {"likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions, "saved": None}
+            # Facebook no tiene un equivalente directo de "guardados" ni del
+            # desglose seguidor/no-seguidor a nivel de post -- quedan en None
+            # (no es "no se pudo traer", es "no existe esta metrica para
+            # esta plataforma" -- ver _fetch_instagram_post_audience_reach).
+            return {
+                "likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions,
+                "saved": None, "follower_reach": None, "non_follower_reach": None,
+            }
         else:
             r = requests.get(
                 f"https://graph.facebook.com/{GRAPH_API_VERSION}/{external_id}",
@@ -618,7 +675,14 @@ def fetch_post_metrics(platform, external_id, access_token):
             likes = data.get("like_count", 0)
             comments = data.get("comments_count", 0)
             reach, saved = _fetch_instagram_reach_and_saved(external_id, access_token)
-            return {"likes": likes, "comments": comments, "shares": 0, "reach": reach, "impressions": None, "saved": saved}
+            follower_reach, non_follower_reach = _fetch_instagram_post_audience_reach(external_id, access_token)
+            return {
+                "likes": likes, "comments": comments, "shares": 0, "reach": reach, "impressions": None, "saved": saved,
+                # Solo Instagram -- Facebook no tiene este desglose por post (ver
+                # _fetch_instagram_post_audience_reach). Quedan en None para posts
+                # de Facebook, no se pisa nada del lado de esa rama del if.
+                "follower_reach": follower_reach, "non_follower_reach": non_follower_reach,
+            }
     except requests.HTTPError as e:
         detail = e.response.text[:200] if e.response is not None else str(e)
         print(f"No se pudieron traer metricas de {platform} {external_id}: {detail}")
