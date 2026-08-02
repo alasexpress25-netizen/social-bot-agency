@@ -6,6 +6,16 @@
 
 import { sb, selectedClientId } from "./state.js";
 
+// NOTA: estas 5 consultas piden { count:'exact', head:false } y no
+// head:true. head:true hace que supabase-js dispare un HTTP HEAD en vez
+// de GET, y en este hosting esos HEAD estaban fallando en consola
+// ("Fetch failed loading: HEAD ..."), probablemente por como el proxy/
+// CDN delante de Supabase maneja el preflight de CORS para ese metodo
+// (GET a la misma URL anda perfecto). head:false pide lo mismo (el
+// conteo exacto viaja igual en la cabecera Content-Range) pero via GET,
+// asi se evita el metodo problematico. El unico costo es traer tambien
+// el id de cada fila en vez de nada -- despreciable para estas tablas.
+
 // Badge tipo "WhatsApp Web" en el ícono de Plan del sidebar: cuenta los
 // items del plan semanal (socialbot_content_plan_items) en status='proposed'
 // -- es decir, generados por la IA y todavía sin revisar -- del cliente
@@ -14,7 +24,7 @@ async function updatePlanBadge(){
   const badge = document.getElementById('planBadge');
   if(!badge) return;
   if(!selectedClientId){ setBadgeCount(badge, 0); return; }
-  const { count, error } = await sb.from('socialbot_content_plan_items').select('id', { count:'exact', head:true }).eq('status', 'proposed').eq('client_id', selectedClientId);
+  const { count, error } = await sb.from('socialbot_content_plan_items').select('id', { count:'exact', head:false }).eq('status', 'proposed').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo del plan sin aprobar', error); return; }
   setBadgeCount(badge, count);
 }
@@ -25,7 +35,7 @@ async function updateLeadsBadge(){
   const badge = document.getElementById('leadsBadge');
   if(!badge) return;
   if(!selectedClientId){ setBadgeCount(badge, 0); return; }
-  const { count, error } = await sb.from('socialbot_leads').select('id', { count:'exact', head:true }).eq('status', 'nuevo').eq('client_id', selectedClientId);
+  const { count, error } = await sb.from('socialbot_leads').select('id', { count:'exact', head:false }).eq('status', 'nuevo').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo de leads nuevos', error); return; }
   setBadgeCount(badge, count);
 }
@@ -36,7 +46,7 @@ async function updateReferidosBadge(){
   const badge = document.getElementById('referidosBadge');
   if(!badge) return;
   if(!selectedClientId){ setBadgeCount(badge, 0); return; }
-  const { count, error } = await sb.from('socialbot_referral_suggestions').select('id', { count:'exact', head:true }).eq('status', 'proposed').eq('client_id', selectedClientId);
+  const { count, error } = await sb.from('socialbot_referral_suggestions').select('id', { count:'exact', head:false }).eq('status', 'proposed').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo de referidos pendientes', error); return; }
   setBadgeCount(badge, count);
 }
@@ -47,7 +57,7 @@ async function updateQuejasBadge(){
   const badge = document.getElementById('quejasBadge');
   if(!badge) return;
   if(!selectedClientId){ setBadgeCount(badge, 0); return; }
-  const { count, error } = await sb.from('socialbot_flagged_comments').select('id', { count:'exact', head:true }).eq('status', 'pendiente').eq('client_id', selectedClientId);
+  const { count, error } = await sb.from('socialbot_flagged_comments').select('id', { count:'exact', head:false }).eq('status', 'pendiente').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo de quejas pendientes', error); return; }
   setBadgeCount(badge, count);
 }
@@ -72,7 +82,7 @@ async function updateClientesBadge(){
   const badge = document.getElementById('clientesBadge');
   if(!badge) return;
   if(!selectedClientId){ setBadgeCount(badge, 0); return; }
-  const { count, error } = await sb.from('socialbot_posts').select('id', { count:'exact', head:true }).eq('approval_status', 'pending').eq('client_id', selectedClientId);
+  const { count, error } = await sb.from('socialbot_posts').select('id', { count:'exact', head:false }).eq('approval_status', 'pending').eq('client_id', selectedClientId);
   if(error){ console.error('No se pudo traer el conteo de posts pendientes de aprobación', error); return; }
   setBadgeCount(badge, count);
 }
