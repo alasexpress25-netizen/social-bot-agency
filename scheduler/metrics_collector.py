@@ -315,9 +315,14 @@ def _fetch_instagram_reel_metrics(media_id, access_token):
     (None, None) en vez de cortar la corrida.
     """
     try:
+        # Meta deprecó 'plays' el 21/abr/2025 -- lo unifico bajo 'views' para
+        # todos los formatos (Reels, posts, Stories). El valor sigue
+        # significando lo mismo (reproducciones), solo cambio el nombre que
+        # le pido a la API; la columna en socialbot_post_metrics sigue
+        # llamandose 'plays' para no tener que migrar nada.
         r = requests.get(
             f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
-            params={"metric": "plays,ig_reels_avg_watch_time", "access_token": access_token},
+            params={"metric": "views,ig_reels_avg_watch_time", "access_token": access_token},
             timeout=30,
         )
         r.raise_for_status()
@@ -325,8 +330,16 @@ def _fetch_instagram_reel_metrics(media_id, access_token):
         for d in r.json().get("data", []):
             if d.get("values"):
                 values[d["name"]] = d["values"][0]["value"]
-        return values.get("plays"), values.get("ig_reels_avg_watch_time")
-    except Exception:
+        return values.get("views"), values.get("ig_reels_avg_watch_time")
+    except requests.HTTPError as e:
+        # Antes esto tragaba el error en silencio (except Exception generico) y
+        # por eso paso desapercibido meses: 'plays' quedo deprecado y la
+        # llamada empezo a fallar con 400 sin que quedara rastro en ningun log.
+        detail = e.response.text[:200] if e.response is not None else str(e)
+        print(f"No se pudieron traer metricas de Reel para {media_id}: {detail}")
+        return None, None
+    except Exception as e:
+        print(f"No se pudieron traer metricas de Reel para {media_id}: {e}")
         return None, None
 
 
