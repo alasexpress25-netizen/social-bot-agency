@@ -1938,11 +1938,16 @@ async function renderMetrics(clientId){
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes, reach)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', clientId).gte('clicked_at', windowStartIso),
+    // Alcance de cuenta (no por post, no depende del periodo semanal/mensual
+    // de arriba) desglosado seguidor/no-seguidor -- ver
+    // collect_audience_reach() en post_scheduler.py. Solo se guarda el
+    // ultimo snapshot por cuenta, así que no hace falta filtrar por fecha.
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
   ]);
 
   const leadsRows = leads || [];
@@ -1987,6 +1992,25 @@ async function renderMetrics(clientId){
   (linkClicks || []).forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
   const totalClicks = Object.values(clicksBySource).reduce((s, n) => s + n, 0);
 
+  // % de seguidores vs. no-seguidores sobre el alcance total de Instagram
+  // (ver collect_audience_reach() en post_scheduler.py). Es un snapshot de
+  // cuenta, no un total del periodo elegido arriba (semana/mes) -- por eso
+  // se calcula aparte, sumando entre todas las cuentas de instagram del
+  // cliente por si hubiera mas de una conectada.
+  const igAccounts = igAccountsRaw || [];
+  let followerReach = 0, nonFollowerReach = 0, hasAudienceData = false;
+  igAccounts.forEach(acc => {
+    const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
+    if(row && (row.follower_reach != null || row.non_follower_reach != null)){
+      hasAudienceData = true;
+      followerReach += row.follower_reach || 0;
+      nonFollowerReach += row.non_follower_reach || 0;
+    }
+  });
+  const totalAudienceReach = followerReach + nonFollowerReach;
+  const followerPct = totalAudienceReach ? Math.round((followerReach / totalAudienceReach) * 100) : null;
+  const nonFollowerPct = followerPct === null ? null : 100 - followerPct;
+
   const el = document.getElementById(`metrics-${clientId}`);
   if(!el) return;
   el.innerHTML = `
@@ -2010,6 +2034,20 @@ async function renderMetrics(clientId){
       <div class="kpi-card"><div class="kpi-value">${clicksBySource.ai_reply}</div><div class="kpi-label">🤖 Respuesta IA</div></div>
       <div class="kpi-card"><div class="kpi-value">${clicksBySource.fallback_reply}</div><div class="kpi-label">🔤 Palabra clave</div></div>
     </div>
+    ${igAccounts.length ? `
+    <div class="metric-title">Audiencia de Instagram: seguidores vs. no seguidores (últimos 28 días)</div>
+    ${hasAudienceData ? `
+    <div style="display:flex; gap:10px; margin-bottom:6px;">
+      <div class="kpi-card" style="flex:1;"><div class="kpi-value">${followerPct}%</div><div class="kpi-label">👥 Seguidores</div></div>
+      <div class="kpi-card" style="flex:1;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">🌐 No seguidores</div></div>
+    </div>
+    <div style="height:8px; border-radius:99px; overflow:hidden; display:flex; margin-bottom:6px;">
+      <div style="height:100%; width:${followerPct}%; background:var(--gold);"></div>
+      <div style="height:100%; width:${nonFollowerPct}%; background:var(--line);"></div>
+    </div>
+    <div class="meta-row" style="font-size:11px; margin-bottom:14px;">Alcance total de la cuenta en el periodo: ${totalAudienceReach.toLocaleString('es')} cuentas.</div>
+    ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">Todavía no hay datos de audiencia para esta cuenta (Meta puede tardar unos días en tenerlos disponibles, o recién se conectó).</div>`}
+    ` : ''}
     <div class="metric-title">Consultas recibidas</div>
     <div id="chartLeads-${clientId}"></div>
     <div class="metric-title">Clientes nuevos (convertidos)</div>
