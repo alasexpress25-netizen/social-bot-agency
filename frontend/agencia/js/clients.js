@@ -73,6 +73,7 @@ function openEditClientModal(clientId){
   logoPreview.src = client.logo_url ? normalizeUrl(client.logo_url) : '';
   logoPreview.style.display = client.logo_url ? 'block' : 'none';
   document.getElementById('editClientGooglePlaceId').value = client.google_place_id || '';
+  document.getElementById('editClientWhatsapp').value = client.referral_whatsapp || '';
   document.getElementById('editClientPlatform').value = account ? account.platform : 'facebook';
   fillEditAccountFields(account);
 
@@ -114,8 +115,9 @@ async function saveClientEdit(e){
   const sales_link = document.getElementById('editClientLink').value;
   const logo_url = normalizeUrl(document.getElementById('editClientLogoUrl').value);
   const google_place_id = document.getElementById('editClientGooglePlaceId').value || null;
+  const referral_whatsapp = document.getElementById('editClientWhatsapp').value || null;
 
-  const { error } = await sb.from('socialbot_clients').update({ name, sales_link, logo_url, google_place_id }).eq('id', clientId);
+  const { error } = await sb.from('socialbot_clients').update({ name, sales_link, logo_url, google_place_id, referral_whatsapp }).eq('id', clientId);
   if(error){ alert(error.message); return; }
 
   // Igual que en createClient: page_id y page_access_token son NOT NULL en
@@ -196,6 +198,7 @@ async function toggleActive(clientId, current, clientName){
 function openDeleteClientModal(clientId, clientName){
   document.getElementById('deleteClientId').value = clientId;
   document.getElementById('deleteClientName').textContent = clientName;
+  document.getElementById('deleteClientUsername').value = document.getElementById('userTag').innerText || '';
   document.getElementById('deleteClientPassword').value = '';
   document.getElementById('deleteClientError').style.display = 'none';
   document.getElementById('deleteClientModal').classList.add('open');
