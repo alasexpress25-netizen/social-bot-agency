@@ -20,9 +20,14 @@ cron (mas espaciado que los 15 minutos de post_scheduler.py -- ver
   4. collect_follower_snapshots(): snapshot diario de seguidores/fans
      totales de CADA cuenta conectada (Facebook e Instagram), para la
      variacion semanal que se muestra en "Métricas" del panel de agencia.
+  5. collect_weekly_client_snapshot(): dashboard consolidado multi-cliente
+     (agencia) -- 1 fila por cliente por semana con 7 metricas clave
+     (likes, comments, leads, leads_convertidos, clics_link, seguidores,
+     reach), para el semaforo de crecimiento por cliente
+     (socialbot_client_weekly_snapshots).
 
 No requiere servidor: corre como un job de GitHub Actions y termina. Mismo
-criterio best-effort que post_scheduler.py: si una de las 4 funciones
+criterio best-effort que post_scheduler.py: si una de las 5 funciones
 falla, se loguea el error y se sigue con la siguiente (un fallo puntual de
 Meta no debe frenar el resto de la recoleccion).
 """
@@ -515,61 +520,15 @@ def collect_post_metrics():
     print(f"Metricas actualizadas: {updated}/{len(posts)}.{cooldown_note}")
 
 
-def _fetch_instagram_online_followers(ig_business_id, access_token):
-    """
-    Punto 4 de propuestas-30-07-2026.md: en que franja horaria esta
-    conectada la audiencia de Instagram (metric=online_followers,
-    period=lifetime -- asi la pide Meta para esta metrica en particular,
-    NO admite period=days_28 como el resto de las llamadas de este
-    archivo). Devuelve un promedio de los ultimos 7 dias, no una ventana
-    configurable.
-
-    Formato de respuesta de Meta: data[0].values[0].value es un dict con
-    claves "0".."23" (hora del dia, en el huso horario de la cuenta) y
-    como valor la cantidad de seguidores conectados en esa hora.
-
-    Devuelve ese dict tal cual (para guardarlo directo como jsonb en
-    socialbot_audience_reach.online_followers), o None si Meta todavia no
-    tiene el dato (cuenta nueva o sin suficiente actividad) o el permiso no
-    alcanza -- best-effort, no corta la corrida.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/insights",
-            params={
-                "metric": "online_followers",
-                "period": "lifetime",
-                "access_token": access_token,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        if not data:
-            return None
-        values = data[0].get("values", [])
-        if not values:
-            return None
-        by_hour = values[0].get("value")
-        return by_hour or None
-    except Exception:
-        return None
-
-
 def collect_audience_reach():
     """
     Trae, para cada cuenta de Instagram conectada, el alcance de CUENTA (no
     por post) desglosado en seguidor/no seguidor de los ultimos 28 dias
-    (_fetch_instagram_audience_reach), profile_views/accounts_engaged
-    (_fetch_instagram_account_engagement), y el horario de mayor actividad
-    de la audiencia (_fetch_instagram_online_followers, punto 4 de
-    propuestas-30-07-2026.md) -- y lo pisa -- upsert por social_account_id
-    -- en socialbot_audience_reach. Solo se guarda el ultimo snapshot, no
-    hay historial dia por dia (alcanza con eso para todo esto, salvo
-    engagement rate -- ver collect_engagement_snapshots() para ese caso
-    puntual, que si necesita historial para el % de variacion del panel).
-    Se corre junto con collect_post_metrics() al principio de cada
-    ejecucion del scheduler.
+    (_fetch_instagram_audience_reach), y lo pisa -- upsert por
+    social_account_id -- en socialbot_audience_reach. Solo se guarda el
+    ultimo total, no hay historial dia por dia (alcanza con eso: es lo que
+    pidio la agencia, "un total me conformo"). Se corre junto con
+    collect_post_metrics() al principio de cada ejecucion del scheduler.
 
     Facebook no tiene un equivalente directo de "follow_type" para Paginas
     (ese desglose es especifico de cuentas de Instagram), asi que esto solo
@@ -592,8 +551,7 @@ def collect_audience_reach():
         try:
             follower_reach, non_follower_reach = _fetch_instagram_audience_reach(ig_business_id, access_token)
             profile_views, accounts_engaged = _fetch_instagram_account_engagement(ig_business_id, access_token)
-            online_followers = _fetch_instagram_online_followers(ig_business_id, access_token)
-            if follower_reach is None and non_follower_reach is None and profile_views is None and accounts_engaged is None and online_followers is None:
+            if follower_reach is None and non_follower_reach is None and profile_views is None and accounts_engaged is None:
                 continue  # Meta no tiene ningun dato todavia para esta cuenta -- no pisamos el ultimo valor bueno que hubiera
 
             # Solo se incluyen las columnas que SI se pudieron traer en esta
@@ -613,8 +571,6 @@ def collect_audience_reach():
                 payload["profile_views"] = profile_views
             if accounts_engaged is not None:
                 payload["accounts_engaged"] = accounts_engaged
-            if online_followers is not None:
-                payload["online_followers"] = online_followers
 
             sb_upsert("socialbot_audience_reach", [payload], on_conflict="social_account_id")
             updated += 1
@@ -828,7 +784,161 @@ def collect_follower_snapshots():
     print(f"Seguidores totales actualizados: {updated}/{len(accounts)}.")
 
 
-def run():
+def collect_weekly_client_snapshot():
+    """
+    Dashboard consolidado multi-cliente (agencia) -- ver
+    socialbot_client_weekly_snapshots. Guarda, para cada cliente activo,
+    una fila por semana (week_start = lunes UTC) con 7 metricas, en dos
+    familias segun como se combinan dia a dia:
+
+    - FLUJO (likes, comments, leads, leads_convertidos, clics_link): se
+      RECALCULAN DESDE CERO cada vez que corre esta funcion, sumando todo
+      lo real desde el lunes de esta semana hasta ahora. No se hace
+      "total += lo de hoy" porque si el job llegara a correr 2 veces el
+      mismo dia (o se reintenta despues de un fallo) eso duplicaria el
+      conteo -- recalcular desde el origen de la semana es mas lento pero
+      no puede desincronizarse nunca.
+
+    - FOTO (seguidores_totales, reach): se PISA con el ultimo valor
+      conocido, nunca se suma. Sumar seguidores o reach dia a dia
+      inflaria el numero sin sentido (un cliente con 500 seguidores el
+      lunes sigue teniendo esos mismos 500 el martes, no se duplican).
+      seguidores_totales sale de socialbot_follower_snapshots (snapshot
+      diario ya poblado por collect_follower_snapshots(), que corre antes
+      que esta funcion en run()). reach sale de socialbot_audience_reach
+      (ventana movil de 28 dias que da Meta, ya poblada por
+      collect_audience_reach()).
+
+    Con esto, la fila de la semana en curso va reflejando el total real
+    "hasta hoy" en cada corrida, y queda definitiva recien el domingo a
+    la noche -- que es el valor que compara el semaforo del panel de
+    agencia contra la semana anterior. Por eso la primera comparacion
+    valida recien esta disponible a las 2 semanas de activar esto (se
+    necesitan 2 filas cerradas para comparar).
+
+    Se corre al final de run(), despues de collect_follower_snapshots()
+    y collect_audience_reach(), para leer numeros ya actualizados en vez
+    de volver a pedirle nada a Meta.
+    """
+    clients = sb_get("socialbot_clients", {"active": "eq.true", "select": "id,name"})
+    if not clients:
+        return
+
+    now_utc = datetime.now(timezone.utc)
+    today = now_utc.date()
+    week_start = today - timedelta(days=today.weekday())  # lunes ISO de esta semana
+    week_start_iso = f"{week_start.isoformat()}T00:00:00Z"
+    tomorrow_iso = f"{(today + timedelta(days=1)).isoformat()}T00:00:00Z"
+
+    print(f"Actualizando snapshot semanal (semana del {week_start.isoformat()}) de {len(clients)} cliente(s)...")
+    saved = 0
+    for client in clients:
+        client_id = client["id"]
+        try:
+            # --- FLUJO: recalculado desde el lunes hasta ahora ---
+            posts = sb_get(
+                "socialbot_posts",
+                {
+                    "client_id": f"eq.{client_id}",
+                    "status": "eq.published",
+                    "and": f"(published_at.gte.{week_start_iso},published_at.lt.{tomorrow_iso})",
+                    "select": "socialbot_post_metrics(likes,comments)",
+                },
+            ) or []
+            likes = sum((p.get("socialbot_post_metrics") or {}).get("likes") or 0 for p in posts)
+            comments = sum((p.get("socialbot_post_metrics") or {}).get("comments") or 0 for p in posts)
+
+            leads_rows = sb_get(
+                "socialbot_leads",
+                {
+                    "client_id": f"eq.{client_id}",
+                    "and": f"(created_at.gte.{week_start_iso},created_at.lt.{tomorrow_iso})",
+                    "select": "id",
+                },
+            ) or []
+            leads = len(leads_rows)
+
+            # "Convertido esta semana" = paso a status=convertido en algun
+            # momento entre el lunes y hoy (usa updated_at -- no hay
+            # historial de cambio de estado, es la mejor aproximacion
+            # disponible sin agregar una tabla nueva de eventos).
+            converted_rows = sb_get(
+                "socialbot_leads",
+                {
+                    "client_id": f"eq.{client_id}",
+                    "status": "eq.convertido",
+                    "and": f"(updated_at.gte.{week_start_iso},updated_at.lt.{tomorrow_iso})",
+                    "select": "id",
+                },
+            ) or []
+            leads_convertidos = len(converted_rows)
+
+            click_rows = sb_get(
+                "socialbot_link_clicks",
+                {
+                    "client_id": f"eq.{client_id}",
+                    "and": f"(clicked_at.gte.{week_start_iso},clicked_at.lt.{tomorrow_iso})",
+                    "select": "id",
+                },
+            ) or []
+            clics_link = len(click_rows)
+
+            # --- FOTO: ultimo valor conocido, se pisa, no se suma ---
+            accounts = sb_get(
+                "socialbot_social_accounts",
+                {
+                    "client_id": f"eq.{client_id}",
+                    "select": "platform,socialbot_follower_snapshots(follower_count,snapshot_date),socialbot_audience_reach(follower_reach,non_follower_reach)",
+                },
+            ) or []
+
+            seguidores_totales = 0
+            has_followers_data = False
+            reach = 0
+            has_reach_data = False
+            for acc in accounts:
+                snaps = acc.get("socialbot_follower_snapshots")
+                snaps = snaps if isinstance(snaps, list) else ([snaps] if snaps else [])
+                snaps = [s for s in snaps if s and s.get("follower_count") is not None]
+                if snaps:
+                    latest = max(snaps, key=lambda s: s["snapshot_date"])
+                    seguidores_totales += latest["follower_count"]
+                    has_followers_data = True
+
+                if acc.get("platform") == "instagram":
+                    ar = acc.get("socialbot_audience_reach")
+                    ar = ar[0] if isinstance(ar, list) and ar else (ar if isinstance(ar, dict) else None)
+                    if ar and (ar.get("follower_reach") is not None or ar.get("non_follower_reach") is not None):
+                        reach += (ar.get("follower_reach") or 0) + (ar.get("non_follower_reach") or 0)
+                        has_reach_data = True
+
+            payload = {
+                "client_id": client_id,
+                "week_start": week_start.isoformat(),
+                "likes": likes,
+                "comments": comments,
+                "leads": leads,
+                "leads_convertidos": leads_convertidos,
+                "clics_link": clics_link,
+                "computed_at": now_utc.isoformat(),
+            }
+            # Si todavia no hay dato de seguidores/reach para este cliente
+            # (cuenta recien conectada), no pisamos con 0 -- se deja NULL y
+            # el semaforo simplemente ignora esa metrica puntual esa semana.
+            if has_followers_data:
+                payload["seguidores_totales"] = seguidores_totales
+            if has_reach_data:
+                payload["reach"] = reach
+
+            sb_upsert("socialbot_client_weekly_snapshots", [payload], on_conflict="client_id,week_start")
+            saved += 1
+        except Exception as e:
+            print(f"ERROR actualizando snapshot semanal de {client.get('name') or client_id}: {e}")
+
+    print(f"Snapshot semanal actualizado: {saved}/{len(clients)}.")
+
+
+
     """
     Corre las 4 recolecciones en orden, cada una best-effort (un fallo en
     una no frena a las demas). Pensado para GitHub Actions: no hay servidor
@@ -861,6 +971,11 @@ def run():
         collect_follower_snapshots()
     except Exception as e:
         print(f"ERROR actualizando seguidores totales (no se corta la corrida): {e}")
+
+    try:
+        collect_weekly_client_snapshot()
+    except Exception as e:
+        print(f"ERROR actualizando snapshot semanal multi-cliente (no se corta la corrida): {e}")
 
     print(f"[{datetime.now(timezone.utc).isoformat()}] Recoleccion de metricas terminada.")
 
