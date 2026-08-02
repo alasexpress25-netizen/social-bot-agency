@@ -506,6 +506,8 @@ const I18N = {
     leadNuevo: 'Nuevo', leadContactado: 'Contactado', leadConvertido: 'Convertido', leadDescartado: 'Descartado',
     prefsSaved: 'Preferencias guardadas.', hashtagsSaved: 'Texto y hashtags guardados.',
     weekBtn: 'Semanal', monthBtn: 'Mensual',
+    platformAll: 'Todas las plataformas', platformFb: '📘 Facebook', platformIg: '📷 Instagram',
+    sharesNotOnIg: 'Instagram no lo reporta vía API', savedOnlyIg: 'Solo existe para Instagram',
     totalsLabel: (w) => `Totales de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
     kpiLeads: '📩 Consultas recibidas', kpiConverted: '🤝 Clientes nuevos', kpiLikes: '❤️ Me gusta', kpiReach: '👀 Te vieron',
     reachFootnote: 'Todavía no tenemos este dato para algunas publicaciones recientes.',
@@ -513,6 +515,7 @@ const I18N = {
     kpiComments: '💬 Comentarios', kpiShares: '🔁 Compartieron', kpiSaved: '🔖 Guardaron (Instagram)',
     audienceTitle: '¿Quién te ve en Instagram? (últimos 28 días)',
     audienceFollowerLabel: '👥 Seguidores', audienceNonFollowerLabel: '🌟 Gente nueva',
+    kpiProfileViews: '🔎 Visitas al perfil',
     audienceFootnote: (n) => `Alcance total: ${n.toLocaleString('es')} cuentas.`,
     audienceEmptyMsg: 'Todavía no hay datos de tu audiencia (puede tardar unos días en aparecer).',
     followersTitle: 'Tus seguidores',
@@ -587,6 +590,8 @@ const I18N = {
     leadNuevo: 'Novo', leadContactado: 'Contatado', leadConvertido: 'Convertido', leadDescartado: 'Descartado',
     prefsSaved: 'Preferências salvas.', hashtagsSaved: 'Texto e hashtags salvos.',
     weekBtn: 'Semanal', monthBtn: 'Mensal',
+    platformAll: 'Todas as plataformas', platformFb: '📘 Facebook', platformIg: '📷 Instagram',
+    sharesNotOnIg: 'Instagram não reporta isso via API', savedOnlyIg: 'Só existe para Instagram',
     totalsLabel: (w) => `Totais de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
     kpiLeads: '📩 Consultas recebidas', kpiConverted: '🤝 Clientes novos', kpiLikes: '❤️ Curtidas', kpiReach: '👀 Te viram',
     reachFootnote: 'Ainda não temos esse dado para algumas publicações recentes.',
@@ -594,6 +599,7 @@ const I18N = {
     kpiComments: '💬 Comentários', kpiShares: '🔁 Compartilharam', kpiSaved: '🔖 Salvaram (Instagram)',
     audienceTitle: 'Quem te vê no Instagram? (últimos 28 dias)',
     audienceFollowerLabel: '👥 Seguidores', audienceNonFollowerLabel: '🌟 Gente nova',
+    kpiProfileViews: '🔎 Visitas ao perfil',
     audienceFootnote: (n) => `Alcance total: ${n.toLocaleString('pt-BR')} contas.`,
     audienceEmptyMsg: 'Ainda não há dados da sua audiência (pode levar alguns dias para aparecer).',
     followersTitle: 'Seus seguidores',
@@ -1410,9 +1416,14 @@ function renderBarChart(containerEl, buckets, { rate = false, sum = false } = {}
 }
 
 let metricPeriod = 'week';
+let metricPlatform = 'all'; // 'all' | 'facebook' | 'instagram'
 
 function setMetricPeriod(period){
   metricPeriod = period;
+  loadMetrics();
+}
+function setMetricPlatform(platform){
+  metricPlatform = platform;
   loadMetrics();
 }
 
@@ -1421,26 +1432,29 @@ function setMetricPeriod(period){
 // graficos, todo dentro de la ventana elegida (8 semanas o 6 meses).
 async function loadMetrics(){
   const period = metricPeriod;
+  const platform = metricPlatform;
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
-    sb.from('socialbot_leads').select('created_at, status').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
-    sb.from('socialbot_interactions_log').select('created_at, replied').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes, comments, shares, reach, saved)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
-    sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', currentClient.id).gte('clicked_at', windowStartIso),
+    sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, platform, external_post_id, socialbot_post_metrics(likes, comments, shares, reach, saved)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_link_clicks').select('source, clicked_at, external_post_id').eq('client_id', currentClient.id).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo elegido arriba)
     // desglosado seguidor/no-seguidor -- ver collect_audience_reach() en
     // post_scheduler.py. Solo se guarda el ultimo snapshot por cuenta.
-    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach)').eq('client_id', currentClient.id).eq('platform', 'instagram'),
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views)').eq('client_id', currentClient.id).eq('platform', 'instagram'),
     // Historial de seguidores/fans totales (todas las plataformas) -- ver
     // collect_follower_snapshots() en post_scheduler.py.
     sb.from('socialbot_follower_snapshots').select('social_account_id, follower_count, snapshot_date, socialbot_social_accounts!inner(platform, page_name, client_id)').eq('socialbot_social_accounts.client_id', currentClient.id).order('snapshot_date', { ascending: true }),
   ]);
 
-  const leadsRows = leads || [];
-  const postsRows = (postsWithMetrics||[]).map(p => ({
+  let leadsRows = leads || [];
+  let postsRows = (postsWithMetrics||[]).map(p => ({
     published_at: p.published_at,
+    platform: p.platform,
+    external_post_id: p.external_post_id,
     likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
     comments: (p.socialbot_post_metrics && p.socialbot_post_metrics.comments) || 0,
     shares: (p.socialbot_post_metrics && p.socialbot_post_metrics.shares) || 0,
@@ -1451,12 +1465,30 @@ async function loadMetrics(){
     // "0 guardados".
     saved: (p.socialbot_post_metrics && p.socialbot_post_metrics.saved) ?? null,
   }));
+  let interactionsRows = interactions || [];
+
+  // Selector Facebook/Instagram/Todas -- filtro client-side, igual criterio
+  // que en el panel de agencia (ver metrics.js). "Todas" no filtra nada.
+  if(platform !== 'all'){
+    leadsRows = leadsRows.filter(r => r.platform === platform);
+    postsRows = postsRows.filter(p => p.platform === platform);
+    interactionsRows = interactionsRows.filter(r => r.platform === platform);
+  }
+
+  // socialbot_link_clicks no tiene columna platform propia -- se resuelve
+  // con un mapa external_post_id -> platform.
+  const platformByExternalId = {};
+  (postsWithMetrics||[]).forEach(p => { if(p.external_post_id) platformByExternalId[p.external_post_id] = p.platform; });
+  let linkClicksRows = linkClicks || [];
+  if(platform !== 'all'){
+    linkClicksRows = linkClicksRows.filter(c => platformByExternalId[c.external_post_id] === platform);
+  }
 
   const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
   const convertedBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at', { filterFn: r => r.status === 'convertido' });
   const postsBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at');
   const likesBuckets = fillBuckets(buildPeriodBuckets(period), postsRows, 'published_at', { sumField: 'likes' });
-  const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactions || [], 'created_at', { replyField: 'replied' });
+  const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactionsRows, 'created_at', { replyField: 'replied' });
 
   const totalLeads = leadsRows.length;
   const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
@@ -1472,20 +1504,25 @@ async function loadMetrics(){
   // Item 1 de propuestas-30-07-2026.md: clics reales al link del cliente,
   // abiertos por canal (mismo criterio que en el panel de agencia).
   const clicksBySource = { comment_reply: 0, dm_reply: 0, fallback_reply: 0, ai_reply: 0 };
-  (linkClicks || []).forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
+  linkClicksRows.forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
   const totalClicks = Object.values(clicksBySource).reduce((s, n) => s + n, 0);
 
   // % de seguidores vs. gente nueva sobre el alcance total de Instagram
   // (ver collect_audience_reach() en post_scheduler.py). Snapshot de
   // cuenta, no depende del periodo elegido arriba.
-  const igAccounts = igAccountsRaw || [];
+  const igAccounts = (platform === 'facebook' ? [] : (igAccountsRaw || []));
   let followerReach = 0, nonFollowerReach = 0, hasAudienceData = false;
+  let totalProfileViews = 0, hasProfileViewsData = false;
   igAccounts.forEach(acc => {
     const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
     if(row && (row.follower_reach != null || row.non_follower_reach != null)){
       hasAudienceData = true;
       followerReach += row.follower_reach || 0;
       nonFollowerReach += row.non_follower_reach || 0;
+    }
+    if(row && row.profile_views != null){
+      hasProfileViewsData = true;
+      totalProfileViews += row.profile_views;
     }
   });
   const totalAudienceReach = followerReach + nonFollowerReach;
@@ -1512,13 +1549,20 @@ async function loadMetrics(){
       if(new Date(s.date) <= targetDate) weekAgo = s;
     }
     return { platform: acc.platform, name: acc.name, count: latest.count, delta: weekAgo ? latest.count - weekAgo.count : null };
-  }).filter(Boolean);
+  }).filter(Boolean).filter(f => platform === 'all' || f.platform === platform);
 
   const el = document.getElementById('metricsBox');
   el.innerHTML = `
-    <div class="period-toggle">
-      <button class="${period==='week'?'active':''}" onclick="setMetricPeriod('week')">${t('weekBtn')}</button>
-      <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('month')">${t('monthBtn')}</button>
+    <div class="period-toggle" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <div style="display:flex; gap:6px;">
+        <button class="${period==='week'?'active':''}" onclick="setMetricPeriod('week')">${t('weekBtn')}</button>
+        <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('month')">${t('monthBtn')}</button>
+      </div>
+      <select onchange="setMetricPlatform(this.value)" style="width:auto;">
+        <option value="all" ${platform==='all'?'selected':''}>${t('platformAll')}</option>
+        <option value="facebook" ${platform==='facebook'?'selected':''}>${t('platformFb')}</option>
+        <option value="instagram" ${platform==='instagram'?'selected':''}>${t('platformIg')}</option>
+      </select>
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('totalsLabel')(windowLabel)}</div>
     <div class="kpi-row kpi-row-4">
@@ -1531,8 +1575,8 @@ async function loadMetrics(){
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('interactionLabel')}</div>
     <div class="kpi-row">
       <div class="kpi-card"><div class="kpi-value">${totalComments}</div><div class="kpi-label">${t('kpiComments')}</div></div>
-      <div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">${t('kpiShares')}</div></div>
-      <div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">${t('kpiSaved')}</div></div>
+      ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiShares')}<br><span style="font-size:10px; font-weight:400;">${t('sharesNotOnIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">${t('kpiShares')}</div></div>`}
+      ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiSaved')}<br><span style="font-size:10px; font-weight:400;">${t('savedOnlyIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">${t('kpiSaved')}</div></div>`}
     </div>
     ${followerCards.length ? `
     <div class="metric-title">${t('followersTitle')}</div>
@@ -1547,16 +1591,21 @@ async function loadMetrics(){
     ` : ''}
     ${igAccounts.length ? `
     <div class="metric-title">${t('audienceTitle')}</div>
-    ${hasAudienceData ? `
-    <div style="display:flex; gap:10px; margin-bottom:6px;">
-      <div class="kpi-card" style="flex:1;"><div class="kpi-value">${followerPct}%</div><div class="kpi-label">${t('audienceFollowerLabel')}</div></div>
-      <div class="kpi-card" style="flex:1;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">${t('audienceNonFollowerLabel')}</div></div>
+    ${hasAudienceData || hasProfileViewsData ? `
+    <div style="display:flex; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
+      ${hasAudienceData ? `
+      <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${followerPct}%</div><div class="kpi-label">${t('audienceFollowerLabel')}</div></div>
+      <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">${t('audienceNonFollowerLabel')}</div></div>
+      ` : ''}
+      ${hasProfileViewsData ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${totalProfileViews.toLocaleString(currentLang === 'pt' ? 'pt-BR' : 'es')}</div><div class="kpi-label">${t('kpiProfileViews')}</div></div>` : ''}
     </div>
+    ${hasAudienceData ? `
     <div style="height:8px; border-radius:99px; overflow:hidden; display:flex; margin-bottom:6px;">
       <div style="height:100%; width:${followerPct}%; background:var(--gold);"></div>
       <div style="height:100%; width:${nonFollowerPct}%; background:var(--line);"></div>
     </div>
     <div class="meta-row" style="font-size:11px; margin-bottom:14px;">${t('audienceFootnote')(totalAudienceReach)}</div>
+    ` : ''}
     ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">${t('audienceEmptyMsg')}</div>`}
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('clicksLabel')(totalClicks, windowLabel)}</div>
