@@ -84,6 +84,9 @@ TEXTS = {
         "likes": lambda n: f"❤️ Me gusta en tus publicaciones: {n}",
         "posts": lambda n: f"📅 Publicaciones realizadas: {n}",
         "reach": lambda n: f"👁️ Alcance real: {n} cuentas",
+        "topPostHeader": "🏆 Tu publicación más destacada del mes:",
+        "topPostVideo": " · 🎬 Video/Reel",
+        "topPostLink": "Ver publicación: ",
         "plays": lambda n: f"▶️ Reproducciones en Reels: {n}",
         "watchTime": lambda s: f"⏱️ Duración promedio de vista: {s}s",
         "followers": lambda total, growth: f"📈 Seguidores: {total} ({'+' if growth >= 0 else ''}{growth} en el mes)",
@@ -101,6 +104,9 @@ TEXTS = {
         "likes": lambda n: f"❤️ Curtidas nas suas publicações: {n}",
         "posts": lambda n: f"📅 Publicações feitas: {n}",
         "reach": lambda n: f"👁️ Alcance real: {n} contas",
+        "topPostHeader": "🏆 Sua publicação mais destacada do mês:",
+        "topPostVideo": " · 🎬 Vídeo/Reel",
+        "topPostLink": "Ver publicação: ",
         "plays": lambda n: f"▶️ Reproduções em Reels: {n}",
         "watchTime": lambda s: f"⏱️ Duração média de visualização: {s}s",
         "followers": lambda total, growth: f"📈 Seguidores: {total} ({'+' if growth >= 0 else ''}{growth} no mês)",
@@ -166,7 +172,7 @@ def main():
         total_converted = sum(1 for l in leads if l.get("status") == "convertido")
 
         posts = sb_get("socialbot_posts", {
-            "select": "id,media_type,socialbot_post_metrics(likes,reach,plays,avg_watch_time_ms)",
+            "select": "id,media_type,caption,permalink_url,socialbot_post_metrics(likes,comments,shares,saved,reach,plays,avg_watch_time_ms)",
             "client_id": f"eq.{client_id}",
             "status": "eq.published",
             "and": f"(published_at.gte.{start_iso},published_at.lt.{end_iso})",
@@ -179,6 +185,34 @@ def main():
         posts_with_plays = 0
         watch_time_sum_ms = 0
         posts_with_watch_time = 0
+        # Post destacado del mes -- mismo criterio que renderMetrics() en
+        # metrics.js/Cliente.html: interaccion total (likes+comments+shares+
+        # saved), no reach, para no dejar afuera posts recientes a los que
+        # Meta todavia no les calculo el alcance. Empate -> se queda el
+        # primero encontrado.
+        top_post = None
+        top_score = -1
+        for p in posts:
+            metrics = p.get("socialbot_post_metrics") or []
+            if isinstance(metrics, dict):
+                metrics = [metrics]
+            m = (metrics or [{}])[0] or {}
+            score = (m.get("likes") or 0) + (m.get("comments") or 0) + (m.get("shares") or 0) + (m.get("saved") or 0)
+            if score > top_score:
+                top_score = score
+                top_post = {
+                    "media_type": p.get("media_type"),
+                    "caption": p.get("caption"),
+                    "permalink_url": p.get("permalink_url"),
+                    "likes": m.get("likes") or 0,
+                    "comments": m.get("comments") or 0,
+                    "shares": m.get("shares") or 0,
+                    "saved": m.get("saved"),
+                    "reach": m.get("reach"),
+                    "plays": m.get("plays"),
+                }
+        if top_post and top_score <= 0:
+            top_post = None
         for p in posts:
             metrics = p.get("socialbot_post_metrics") or []
             if isinstance(metrics, dict):
@@ -284,6 +318,26 @@ def main():
             lines.append(texts["plays"](total_plays))
         if avg_watch_time_seconds is not None:
             lines.append(texts["watchTime"](avg_watch_time_seconds))
+        if top_post:
+            lines.append("")
+            caption = (top_post.get("caption") or "").strip()
+            caption = (caption[:100] + "...") if len(caption) > 100 else caption
+            media_tag = texts["topPostVideo"] if top_post.get("media_type") == "video" else ""
+            lines.append(texts["topPostHeader"] + media_tag)
+            if caption:
+                lines.append(f"“{caption}”")
+            stats = [f"❤️ {top_post['likes']}", f"💬 {top_post['comments']}"]
+            if top_post.get("shares"):
+                stats.append(f"🔁 {top_post['shares']}")
+            if top_post.get("saved") is not None:
+                stats.append(f"🔖 {top_post['saved']}")
+            if top_post.get("reach") is not None:
+                stats.append(f"👁️ {top_post['reach']}")
+            if top_post.get("plays") is not None:
+                stats.append(f"▶️ {top_post['plays']}")
+            lines.append(" · ".join(stats))
+            if top_post.get("permalink_url"):
+                lines.append(texts["topPostLink"] + top_post["permalink_url"])
         if has_growth_data:
             lines.append(texts["followers"](total_followers, follower_growth))
         if engagement_rate is not None:
