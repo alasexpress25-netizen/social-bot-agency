@@ -97,6 +97,21 @@ function buildPeriodBuckets(period){
   }
   return buckets;
 }
+// Punto 3 de propuestas-30-07-2026.md: comparacion vs. periodo anterior.
+// Devuelve un badge HTML con el % de variacion, o null si no hay base
+// valida para compararlo (ambos en 0 -- "sin cambios" no aporta nada).
+// previous=0 y current>0 se muestra como "nuevo" en vez de un % (division
+// por cero no tiene sentido como porcentaje).
+function pctDeltaBadge(current, previous){
+  if(previous === 0 && current === 0) return '';
+  if(previous === 0) return ` <span style="font-size:11px; font-weight:600; color:#5fae6a;">· nuevo</span>`;
+  const pct = Math.round(((current - previous) / previous) * 100);
+  if(pct === 0) return ` <span style="font-size:11px; font-weight:600; color:var(--muted);">· sin cambios</span>`;
+  const positive = pct > 0;
+  const color = positive ? '#5fae6a' : 'var(--warn)';
+  const arrow = positive ? '▲' : '▼';
+  return ` <span style="font-size:11px; font-weight:600; color:${color};">${arrow} ${Math.abs(pct)}%</span>`;
+}
 function fillBuckets(buckets, rows, dateField, { replyField = null, sumField = null, filterFn = null } = {}){
   buckets.forEach(b => { b.count = 0; b.total = 0; b.replied = 0; b.sum = 0; });
   (rows||[]).forEach(r => {
@@ -201,7 +216,13 @@ async function renderMetrics(clientId){
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
+  // Punto 3: mismo largo de ventana (8 semanas o 6 meses) corrido hacia
+  // atras, para poder calcular el % de variacion vs. el periodo anterior.
+  const windowMs = buckets[buckets.length - 1].end.getTime() - buckets[0].start.getTime();
+  const prevWindowStartIso = new Date(buckets[0].start.getTime() - windowMs).toISOString();
+  const prevWindowEndIso = windowStartIso;
+
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, caption, media_url, permalink_url, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
@@ -223,6 +244,12 @@ async function renderMetrics(clientId){
     // mucho 1 fila por cuenta por dia) y se calcula la variacion semanal
     // aca abajo, comparando el ultimo contra el mas cercano a 7 dias atras.
     sb.from('socialbot_follower_snapshots').select('social_account_id, follower_count, snapshot_date, socialbot_social_accounts!inner(platform, page_name, client_id)').eq('socialbot_social_accounts.client_id', clientId).order('snapshot_date', { ascending: true }),
+    // Punto 3: mismos datos que leads/posts de arriba pero para el periodo
+    // anterior, solo los campos que hacen falta para los totales que se
+    // comparan (leads/convertidos, likes, reach) -- no hace falta el resto
+    // (interactions, link clicks, audiencia) porque esos no se comparan.
+    sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', prevWindowStartIso).lt('created_at', prevWindowEndIso),
+    sb.from('socialbot_posts').select('platform, socialbot_post_metrics(likes, reach)').eq('client_id', clientId).eq('status', 'published').gte('published_at', prevWindowStartIso).lt('published_at', prevWindowEndIso),
   ]);
 
   let leadsRows = leads || [];
@@ -295,6 +322,21 @@ async function renderMetrics(clientId){
   const totalComments = postsRows.reduce((s, p) => s + p.comments, 0);
   const totalShares = postsRows.reduce((s, p) => s + p.shares, 0);
   const totalReach = postsWithReach.reduce((s, p) => s + p.reach, 0);
+
+  // Punto 3: mismos totales pero del periodo anterior, con el mismo filtro
+  // de plataforma que el periodo actual, para poder mostrar el % de
+  // variacion junto a cada KPI principal.
+  let prevLeadsRows = prevLeads || [];
+  let prevPostsRows = prevPosts || [];
+  if(platform !== 'all'){
+    prevLeadsRows = prevLeadsRows.filter(r => r.platform === platform);
+    prevPostsRows = prevPostsRows.filter(p => p.platform === platform);
+  }
+  const prevTotalLeads = prevLeadsRows.length;
+  const prevTotalConverted = prevLeadsRows.filter(r => r.status === 'convertido').length;
+  const prevTotalLikes = prevPostsRows.reduce((s, p) => s + ((p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0), 0);
+  const prevTotalReach = prevPostsRows.reduce((s, p) => s + ((p.socialbot_post_metrics && p.socialbot_post_metrics.reach) || 0), 0);
+
   // 'saved' solo aplica a Instagram -- igual que con reach, separamos
   // cuantos posts tienen el dato realmente (no todos son de Instagram, y a
   // los de Facebook ese campo directamente no les corresponde).
@@ -432,12 +474,13 @@ async function renderMetrics(clientId){
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
     <div class="kpi-row kpi-row-5">
-      <div class="kpi-card"><div class="kpi-value">${totalLeads}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
-      <div class="kpi-card"><div class="kpi-value">${totalConverted}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
-      <div class="kpi-card"><div class="kpi-value">${totalLikes}</div><div class="kpi-label">❤️ Me gusta</div></div>
-      <div class="kpi-card"><div class="kpi-value">${postsWithReach.length ? totalReach : '—'}</div><div class="kpi-label">👁️ Alcance real${postsWithReach.length < postsRows.length ? ' *' : ''}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLeads}${pctDeltaBadge(totalLeads, prevTotalLeads)}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalConverted}${pctDeltaBadge(totalConverted, prevTotalConverted)}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLikes}${pctDeltaBadge(totalLikes, prevTotalLikes)}</div><div class="kpi-label">❤️ Me gusta</div></div>
+      <div class="kpi-card"><div class="kpi-value">${postsWithReach.length ? totalReach : '—'}${postsWithReach.length ? pctDeltaBadge(totalReach, prevTotalReach) : ''}</div><div class="kpi-label">👁️ Alcance real${postsWithReach.length < postsRows.length ? ' *' : ''}</div></div>
       <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
     </div>
+    <div class="meta-row" style="margin-top:-6px; font-size:11px;">vs. periodo anterior (${windowLabel === 'últimas 8 semanas' ? 'las 8 semanas previas' : 'los 6 meses previos'})</div>
     ${postsWithReach.length < postsRows.length ? `<div class="meta-row" style="margin-top:-6px; font-size:11px;">* ${postsRows.length - postsWithReach.length} de ${postsRows.length} posts todavía sin dato de alcance (Meta tarda unos días en calcularlo, o es reciente).</div>` : ''}
     ${topPost ? `
     <div class="card" style="display:flex; gap:12px; align-items:flex-start; margin-bottom:14px;">
