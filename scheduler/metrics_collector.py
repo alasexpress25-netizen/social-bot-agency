@@ -938,9 +938,9 @@ def collect_weekly_client_snapshot():
     print(f"Snapshot semanal actualizado: {saved}/{len(clients)}.")
 
 
-
+def run():
     """
-    Corre las 4 recolecciones en orden, cada una best-effort (un fallo en
+    Corre las 6 recolecciones en orden, cada una best-effort (un fallo en
     una no frena a las demas). Pensado para GitHub Actions: no hay servidor
     ni loop, se ejecuta una vez y termina.
     """
