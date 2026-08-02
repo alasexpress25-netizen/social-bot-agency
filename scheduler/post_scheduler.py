@@ -752,9 +752,17 @@ def _fetch_instagram_reel_metrics(media_id, access_token):
 
 def fetch_post_metrics(platform, external_id, access_token, media_type=None):
     """
-    Devuelve un dict {likes, comments, shares, reach, impressions, saved} o
-    None si no se pudo traer nada (post borrado, token vencido, etc. -- se
-    loguea y se sigue con el resto, no corta la corrida).
+    Devuelve un dict {likes, comments, shares, reach, impressions, saved,
+    plays, avg_watch_time_ms} o None si no se pudo traer nada (post
+    borrado, token vencido, etc. -- se loguea y se sigue con el resto, no
+    corta la corrida).
+
+    'media_type' es el valor generico guardado en socialbot_posts (viene de
+    socialbot_media.media_type: 'image' | 'video' | 'carousel'), NO el tipo
+    especifico que usa la Graph API de Instagram. publish_instagram() ya
+    convierte cualquier video en REELS al publicar (ver payload["media_type"]
+    = "REELS" en esa funcion) -- por eso aca, para Instagram, media_type ==
+    'video' es lo que indica "esto es un Reel, pedile plays/avg_watch_time".
     """
     try:
         if platform == "facebook":
@@ -776,6 +784,10 @@ def fetch_post_metrics(platform, external_id, access_token, media_type=None):
             return {
                 "likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions,
                 "saved": None, "follower_reach": None, "non_follower_reach": None,
+                # 'plays'/'avg_watch_time_ms' son metricas de Reels de Instagram --
+                # no existen para Facebook, quedan en None (no es "no se pudo
+                # traer", es "no aplica a esta plataforma").
+                "plays": None, "avg_watch_time_ms": None,
             }
         else:
             r = requests.get(
@@ -789,12 +801,22 @@ def fetch_post_metrics(platform, external_id, access_token, media_type=None):
             comments = data.get("comments_count", 0)
             reach, saved = _fetch_instagram_reach_and_saved(external_id, access_token)
             follower_reach, non_follower_reach = _fetch_instagram_post_audience_reach(external_id, access_token)
+            # 'plays'/'avg_watch_time_ms' solo existen para Reels (media_type
+            # local == 'video', que publish_instagram() sube como REELS) --
+            # pedirlas sobre una imagen o carrusel devuelve error de Meta, por
+            # eso solo se llama a _fetch_instagram_reel_metrics cuando
+            # corresponde. Para el resto de los posts de Instagram quedan en
+            # None (no aplica, no "no se pudo traer").
+            plays, avg_watch_time_ms = (
+                _fetch_instagram_reel_metrics(external_id, access_token) if media_type == "video" else (None, None)
+            )
             return {
                 "likes": likes, "comments": comments, "shares": 0, "reach": reach, "impressions": None, "saved": saved,
                 # Solo Instagram -- Facebook no tiene este desglose por post (ver
                 # _fetch_instagram_post_audience_reach). Quedan en None para posts
                 # de Facebook, no se pisa nada del lado de esa rama del if.
                 "follower_reach": follower_reach, "non_follower_reach": non_follower_reach,
+                "plays": plays, "avg_watch_time_ms": avg_watch_time_ms,
             }
     except requests.HTTPError as e:
         detail = e.response.text[:200] if e.response is not None else str(e)
