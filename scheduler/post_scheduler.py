@@ -17,29 +17,30 @@ activo que tenga un horario (schedule_slot) que coincida con la hora actual:
   4. Publica en Facebook y/o Instagram via Meta Graph API
   5. Guarda el resultado en la tabla `posts` de Supabase
 
-Ademas, en cada corrida:
-  - ANTES de generar posts nuevos, revisa si hay posts que ya estaban
-    esperando aprobacion y el cliente ya aprobo desde su portal, y los
-    publica (publish_approved_pending_posts()).
-  - Tambien ANTES de generar posts nuevos, actualiza en
-    socialbot_post_metrics (likes/comments/shares/reach/impressions/saved)
-    los posts publicados en los ultimos 30 dias, trayendo los numeros
-    reales desde Meta Graph API (collect_post_metrics()). Esto es lo que
-    despues usa content_planner.py (Fase 6) para saber que angulo/formato
-    funciono mejor con cada cliente.
-  - Y actualiza en socialbot_audience_reach el alcance de CUENTA (no por
-    post) de cada cuenta de Instagram conectada, desglosado en
-    seguidor/no-seguidor de los ultimos 28 dias (collect_audience_reach()).
-    Es lo que muestra el % de seguidores/no-seguidores en "Métricas" del
-    panel de agencia -- se guarda solo el ultimo total, sin historial.
-  - Y guarda en socialbot_follower_snapshots un snapshot diario de
-    seguidores/fans totales de CADA cuenta conectada (Facebook e Instagram)
-    (collect_follower_snapshots()). Con eso, "Métricas" puede mostrar no
-    solo el total actual sino la variacion de los ultimos 7 dias.
+Ademas, en cada corrida, ANTES de generar posts nuevos, revisa si hay posts
+que ya estaban esperando aprobacion y el cliente ya aprobo desde su portal,
+y los publica (publish_approved_pending_posts()).
 
 No requiere servidor: corre como un job de GitHub Actions y termina.
 Todas las credenciales sensibles viven en Supabase (por cliente) o en
 GitHub Secrets (claves generales: Supabase service key, OpenAI/Claude key).
+
+-----------------------------------------------------------------------------
+SPLIT 02/08/2026: este script SOLO publica. La recoleccion de metricas
+(likes/comments/shares/reach/saved/plays, alcance de cuenta seguidor/no-
+seguidor, engagement de pagina de Facebook, snapshots de seguidores) se
+movio a metrics_collector.py, que corre con su propio cron (mas espaciado,
+ver .github/workflows/metrics_collector.yml). Antes, ese trabajo corria
+ACA, antes de revisar los horarios -- y a medida que crecio la cantidad de
+posts/clientes, empezo a tardar mas de 10 minutos, atrasando la
+publicacion real (que si necesita correr cerca del horario elegido por el
+cliente, no varios minutos despues). Los helpers de Supabase que usan
+ambos scripts (sb_get/sb_insert/sb_update/sb_upsert, config, el parche de
+IPv4) viven ahora en sb_common.py -- ver ese archivo para el detalle
+completo. content_planner.py sigue leyendo socialbot_post_metrics
+normalmente: a esta altura ya lo llena metrics_collector.py, no este
+script.
+-----------------------------------------------------------------------------
 
 -----------------------------------------------------------------------------
 FIX 20/07/2026 (reportado por la agencia): las corridas manuales ("Publicar
@@ -58,7 +59,6 @@ import sys
 import time
 import json
 import random
-import socket
 import threading
 import subprocess
 import tempfile
@@ -66,95 +66,22 @@ import requests
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-# ---------------------------------------------------------------------------
-# Forzar IPv4 en todas las conexiones salientes.
-# ---------------------------------------------------------------------------
-# Hostinger (lavisualmk.alastecno.com) resuelve tanto en IPv4 como en IPv6.
-# Los runners de GitHub Actions a veces no tienen ruta de salida IPv6
-# completa, entonces al intentar conectar por IPv6 primero tira
-# "[Errno 101] Network is unreachable" aunque el sitio ande perfecto por
-# IPv4. Este parche obliga a que TODO el DNS resuelto por el proceso
-# (requests, urllib3, etc.) devuelva solo direcciones IPv4.
-_orig_getaddrinfo = socket.getaddrinfo
-
-
-def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
-
-socket.getaddrinfo = _ipv4_only_getaddrinfo
-
-# ---------------------------------------------------------------------------
-# Config general (viene de GitHub Secrets -> variables de entorno)
-# ---------------------------------------------------------------------------
-SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
-SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]  # service_role key (NUNCA la anon key acá)
-GRAPH_API_VERSION = os.environ.get("GRAPH_API_VERSION", "v21.0")
-
-# collect_post_metrics(): despues de esta cantidad de fallos consecutivos
-# trayendo metricas de un post (ej. el cliente lo borro, oculto los likes,
-# etc.), se deja de reintentar en cada corrida y pasa a reintentarse solo 1
-# vez cada RETRY_COOLDOWN_HOURS horas. Ver migracion 0017.
-MAX_METRICS_FETCH_FAILURES = 3
-RETRY_COOLDOWN_HOURS = 24
+# sb_get/sb_insert/sb_update/sb_upsert, SUPABASE_URL, GRAPH_API_VERSION y
+# _clean_external_id viven en sb_common.py (compartido con
+# metrics_collector.py desde el 02/08/2026, cuando se separo la
+# recoleccion de metricas de este script -- ver nota en sb_common.py).
+from sb_common import (
+    sb_get,
+    sb_insert,
+    sb_update,
+    _clean_external_id,
+    GRAPH_API_VERSION,
+)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-SUPABASE_HEADERS = {
-    "apikey": SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    "Content-Type": "application/json",
-}
-
-
-# ---------------------------------------------------------------------------
-# Helpers Supabase (REST directo, sin SDK, para no agregar dependencias)
-# ---------------------------------------------------------------------------
-def sb_get(table, params):
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=SUPABASE_HEADERS, params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-def sb_insert(table, row):
-    r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/{table}",
-        headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
-        json=row,
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-def sb_update(table, match_params, patch):
-    r = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/{table}",
-        headers=SUPABASE_HEADERS,
-        params=match_params,
-        json=patch,
-        timeout=30,
-    )
-    r.raise_for_status()
-
-
-def sb_upsert(table, rows, on_conflict):
-    """
-    Insert-or-update por una clave unica (ej. post_id en
-    socialbot_post_metrics, que tiene "unique" sobre esa columna).
-    """
-    r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/{table}",
-        headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
-        params={"on_conflict": on_conflict},
-        json=rows,
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -388,20 +315,8 @@ def mark_plan_item_used(plan_item_id, used_post_id):
 
 
 # ---------------------------------------------------------------------------
-# FASE 6: recoleccion de metricas de posts publicados (Meta Graph API)
+# Publicacion: construir el link real del post ya publicado
 # ---------------------------------------------------------------------------
-def _clean_external_id(raw_id):
-    """
-    external_post_id a veces viene con un sufijo legible agregado por
-    publish_facebook() (ej. "12345 (foto manual)" o "12345 (fallback foto,
-    video no habilitado aun)") para que se entienda en el panel que paso.
-    Para pegarle a Graph API necesitamos solo el id real, antes del espacio.
-    """
-    if not raw_id:
-        return None
-    return raw_id.split(" ")[0]
-
-
 def _build_permalink(platform, raw_external_id, access_token):
     """
     Item 15 de PROPUESTAS-AGENCIA.md ("Link a la publicación real").
@@ -461,652 +376,6 @@ def _build_permalink(platform, raw_external_id, access_token):
         return None
 
 
-def _fetch_facebook_post_insights(post_id, access_token):
-    """Reach de un post de Pagina. Best-effort: si Meta no tiene el dato
-    todavia (posts muy recientes) o el permiso no alcanza, no rompe nada --
-    simplemente esas columnas quedan en null.
-
-    Item 3 de propuestas-30-07-2026.md (30/07/2026): Meta deprecó
-    'post_impressions' y 'post_impressions_unique' el 15/06/2026 (quedan
-    invalidos para todas las versiones de la API) -- por eso este fetch
-    venia devolviendo siempre None,None para Facebook sin ningun error
-    visible (el except silencioso se comia el "invalid metric"). El
-    reemplazo oficial de Meta es 'post_total_media_view_unique' (alcance
-    unico del post); no hay un reemplazo directo para "impressions" totales,
-    asi que esa columna queda sin dato por ahora.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{post_id}/insights",
-            params={"metric": "post_total_media_view_unique", "access_token": access_token},
-            timeout=30,
-        )
-        r.raise_for_status()
-        values = {d["name"]: d["values"][0]["value"] for d in r.json().get("data", []) if d.get("values")}
-        return values.get("post_total_media_view_unique"), None
-    except Exception:
-        return None, None
-
-
-def _fetch_instagram_reach_and_saved(media_id, access_token):
-    """
-    Reach Y guardados de un post de Instagram, en la misma llamada
-    (metric=reach,saved) para no duplicar el pedido a la API. 'saved' =
-    cuanta gente guardo el posteo -- señal mas fuerte de contenido que vale
-    la pena que el like, porque implica intencion de volver a verlo despues.
-
-    Devuelve (reach, saved). Best-effort: si Meta no tiene el dato todavia
-    (post muy reciente) o el permiso no alcanza, devuelve (None, None) en
-    vez de cortar la corrida.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
-            params={"metric": "reach,saved", "access_token": access_token},
-            timeout=30,
-        )
-        r.raise_for_status()
-        values = {}
-        for d in r.json().get("data", []):
-            if d.get("values"):
-                values[d["name"]] = d["values"][0]["value"]
-        return values.get("reach"), values.get("saved")
-    except Exception:
-        return None, None
-
-
-def _fetch_instagram_audience_reach(ig_business_id, access_token, period="days_28"):
-    """
-    Alcance de CUENTA (no de un post puntual) desglosado por si la cuenta
-    alcanzada sigue o no el perfil -- metrica 'reach' con
-    breakdown=follow_type, metric_type=total_value (formato que pide Meta
-    para metricas con breakdown desde la v19+ de la Graph API).
-    period='days_28' porque Meta ya lo da como ventana movil agregada -- no
-    hace falta acumular dia por dia para tener "un total" (ver
-    socialbot_audience_reach, que solo guarda el ultimo snapshot).
-
-    Devuelve (follower_reach, non_follower_reach). Best-effort, igual que
-    _fetch_instagram_reach_and_saved: si Meta no tiene el dato todavia
-    (cuenta sin actividad reciente) o el permiso no alcanza, devuelve
-    (None, None) en vez de cortar la corrida.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/insights",
-            params={
-                "metric": "reach",
-                "period": period,
-                "metric_type": "total_value",
-                "breakdown": "follow_type",
-                "access_token": access_token,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        if not data:
-            return None, None
-        breakdowns = data[0].get("total_value", {}).get("breakdowns", [])
-        if not breakdowns:
-            return None, None
-        results = breakdowns[0].get("results", [])
-        by_type = {}
-        for item in results:
-            dims = item.get("dimension_values") or []
-            if dims:
-                by_type[dims[0]] = item.get("value")
-        return by_type.get("FOLLOWER"), by_type.get("NON_FOLLOWER")
-    except Exception:
-        return None, None
-
-
-def _fetch_instagram_account_engagement(ig_business_id, access_token, period="days_28"):
-    """
-    Dos metricas de CUENTA de Instagram sin breakdown, pedidas en la MISMA
-    llamada a /insights para no duplicar requests:
-
-    - 'profile_views': cuanta gente VISITO el perfil (no solo vio un post)
-      en la ventana elegida. Señal mas fuerte que el reach: implica que
-      alguien se tomo el trabajo de tocar el nombre de usuario para ver el
-      perfil completo (bio, link, historial de posts), no solo se cruzo
-      con un post en el feed.
-    - 'accounts_engaged': cuantas cuentas UNICAS interactuaron (like,
-      comment, save, share) con el contenido en la ventana elegida. Sirve
-      para calcular un % de engagement real sobre el reach
-      (accounts_engaged / reach), en vez de solo sumar likes+comments como
-      proxy indirecto.
-
-    Mismo formato que _fetch_instagram_audience_reach (metric_type=
-    total_value, que Meta empezo a pedir para metricas de cuenta desde la
-    v19+ de la Graph API), pero sin 'breakdown' porque ninguna de las dos
-    lo admite.
-
-    Devuelve (profile_views, accounts_engaged), cada uno int o None si Meta
-    todavia no tiene el dato (cuenta sin actividad reciente) o el permiso
-    no alcanza -- best-effort, no corta la corrida.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/insights",
-            params={
-                "metric": "profile_views,accounts_engaged",
-                "period": period,
-                "metric_type": "total_value",
-                "access_token": access_token,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        values = {}
-        for d in r.json().get("data", []):
-            values[d.get("name")] = d.get("total_value", {}).get("value")
-        return values.get("profile_views"), values.get("accounts_engaged")
-    except Exception:
-        return None, None
-
-
-def _fetch_instagram_post_audience_reach(media_id, access_token):
-    """
-    Igual que _fetch_instagram_audience_reach, pero para UN post puntual en
-    vez de toda la cuenta: cuanto del alcance de ESTE post vino de gente que
-    ya seguia el perfil vs. gente que no. Mismo mecanismo de Meta (metric
-    'reach' con breakdown=follow_type), pedido sobre el media_id del post en
-    vez del ig_business_id de la cuenta. A diferencia del de cuenta, acá se
-    pide period='lifetime' (no days_28): el alcance de un post ya publicado
-    es un numero acumulado que no vuelve a resetear cada 28 dias, es "lo que
-    lleva acumulado desde que se publico".
-
-    Facebook NO tiene un endpoint equivalente para posts de Pagina -- la
-    Graph API publica no expone ese desglose para Facebook (solo existe para
-    medios de Instagram), asi que esta funcion es Instagram-only. Lo que se
-    ve en el "Insights do post" nativo de Facebook para Reels sale de datos
-    internos de Meta Business Suite que no estan expuestos via API publica
-    para apps de terceros -- por eso no hay forma de replicar ese mismo dato
-    para posts de Facebook desde este scheduler.
-
-    Devuelve (follower_reach, non_follower_reach). Best-effort: si Meta no
-    tiene el dato todavia (post muy reciente, alcance insuficiente) o el
-    permiso no alcanza, devuelve (None, None) en vez de cortar la corrida.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
-            params={
-                "metric": "reach",
-                "period": "lifetime",
-                "metric_type": "total_value",
-                "breakdown": "follow_type",
-                "access_token": access_token,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        if not data:
-            return None, None
-        breakdowns = data[0].get("total_value", {}).get("breakdowns", [])
-        if not breakdowns:
-            return None, None
-        results = breakdowns[0].get("results", [])
-        by_type = {}
-        for item in results:
-            dims = item.get("dimension_values") or []
-            if dims:
-                by_type[dims[0]] = item.get("value")
-        return by_type.get("FOLLOWER"), by_type.get("NON_FOLLOWER")
-    except Exception:
-        return None, None
-
-
-def _fetch_facebook_shares(post_id, access_token):
-    """
-    'shares' se pide por separado del resto de los campos (likes, comments) a
-    proposito. Es un bug historico y documentado de la Graph API: cuando un
-    post de Facebook tiene 0 shares, el campo 'shares' directamente no existe
-    en el objeto, y pedirlo junto con otros campos en un mismo fields=...
-    tira "(#100) Tried accessing nonexistent field (shares)" -- y ese error
-    tumba TODA la respuesta, no solo el campo 'shares' (perdiendo tambien
-    likes/comments que si estaban disponibles). Por eso va aislado y
-    best-effort: si falla, asumimos 0 shares en vez de perder el resto de
-    las metricas del post.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{post_id}",
-            params={"fields": "shares", "access_token": access_token},
-            timeout=30,
-        )
-        r.raise_for_status()
-        return r.json().get("shares", {}).get("count", 0)
-    except Exception:
-        return 0
-
-
-def _fetch_facebook_page_engagement(page_id, access_token, period="days_28"):
-    """
-    'page_post_engagements' es un KPI de CUENTA (no de un post puntual):
-    suma de reacciones, comentarios, compartidos y clics de TODOS los posts
-    de la Pagina en la ventana elegida (days_28, ventana movil agregada,
-    igual criterio que _fetch_instagram_audience_reach). Sirve para dar a
-    Facebook un equivalente de "engagement real" parecido a
-    accounts_engaged de Instagram, pero a nivel de Pagina en vez de cuenta
-    de Instagram.
-
-    A diferencia de las metricas de post (_fetch_facebook_post_insights),
-    Page Insights NO usa metric_type=total_value -- devuelve directamente
-    values=[{value: N}] por period, tomamos el ultimo (el mas reciente).
-
-    Devuelve el numero o None (Pagina sin datos todavia, token vencido,
-    permiso insuficiente, etc. -- best-effort, no corta la corrida).
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/insights",
-            params={"metric": "page_post_engagements", "period": period, "access_token": access_token},
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        if not data:
-            return None
-        values = data[0].get("values", [])
-        if not values:
-            return None
-        return values[-1].get("value")
-    except Exception:
-        return None
-
-
-def _fetch_instagram_reel_metrics(media_id, access_token):
-    """
-    'plays' (cuantas veces se reprodujo) e 'ig_reels_avg_watch_time' (tiempo
-    promedio de reproduccion, en milisegundos) de un Reel puntual. Estas dos
-    metricas SOLO existen para media_type='REELS' -- pedirlas sobre una
-    imagen o un carrusel devuelve error de Meta, por eso solo se llama a
-    esta funcion cuando ya se sabe que el post es un Reel (ver
-    fetch_post_metrics).
-
-    Juntas dicen si la gente ve el video completo o lo abandona a los
-    primeros segundos -- dato que hasta ahora no se pedia para ningun tipo
-    de post.
-
-    Devuelve (plays, avg_watch_time_ms). Best-effort: si Meta no tiene el
-    dato todavia (reel muy reciente) o el permiso no alcanza, devuelve
-    (None, None) en vez de cortar la corrida.
-    """
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
-            params={"metric": "plays,ig_reels_avg_watch_time", "access_token": access_token},
-            timeout=30,
-        )
-        r.raise_for_status()
-        values = {}
-        for d in r.json().get("data", []):
-            if d.get("values"):
-                values[d["name"]] = d["values"][0]["value"]
-        return values.get("plays"), values.get("ig_reels_avg_watch_time")
-    except Exception:
-        return None, None
-
-
-def fetch_post_metrics(platform, external_id, access_token, media_type=None):
-    """
-    Devuelve un dict {likes, comments, shares, reach, impressions, saved,
-    plays, avg_watch_time_ms} o None si no se pudo traer nada (post
-    borrado, token vencido, etc. -- se loguea y se sigue con el resto, no
-    corta la corrida).
-
-    'media_type' es el valor generico guardado en socialbot_posts (viene de
-    socialbot_media.media_type: 'image' | 'video' | 'carousel'), NO el tipo
-    especifico que usa la Graph API de Instagram. publish_instagram() ya
-    convierte cualquier video en REELS al publicar (ver payload["media_type"]
-    = "REELS" en esa funcion) -- por eso aca, para Instagram, media_type ==
-    'video' es lo que indica "esto es un Reel, pedile plays/avg_watch_time".
-    """
-    try:
-        if platform == "facebook":
-            r = requests.get(
-                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{external_id}",
-                params={"fields": "likes.summary(true),comments.summary(true)", "access_token": access_token},
-                timeout=30,
-            )
-            r.raise_for_status()
-            data = r.json()
-            likes = data.get("likes", {}).get("summary", {}).get("total_count", 0)
-            comments = data.get("comments", {}).get("summary", {}).get("total_count", 0)
-            shares = _fetch_facebook_shares(external_id, access_token)
-            reach, impressions = _fetch_facebook_post_insights(external_id, access_token)
-            # Facebook no tiene un equivalente directo de "guardados" ni del
-            # desglose seguidor/no-seguidor a nivel de post -- quedan en None
-            # (no es "no se pudo traer", es "no existe esta metrica para
-            # esta plataforma" -- ver _fetch_instagram_post_audience_reach).
-            return {
-                "likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions,
-                "saved": None, "follower_reach": None, "non_follower_reach": None,
-                # 'plays'/'avg_watch_time_ms' son metricas de Reels de Instagram --
-                # no existen para Facebook, quedan en None (no es "no se pudo
-                # traer", es "no aplica a esta plataforma").
-                "plays": None, "avg_watch_time_ms": None,
-            }
-        else:
-            r = requests.get(
-                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{external_id}",
-                params={"fields": "like_count,comments_count", "access_token": access_token},
-                timeout=30,
-            )
-            r.raise_for_status()
-            data = r.json()
-            likes = data.get("like_count", 0)
-            comments = data.get("comments_count", 0)
-            reach, saved = _fetch_instagram_reach_and_saved(external_id, access_token)
-            follower_reach, non_follower_reach = _fetch_instagram_post_audience_reach(external_id, access_token)
-            # 'plays'/'avg_watch_time_ms' solo existen para Reels (media_type
-            # local == 'video', que publish_instagram() sube como REELS) --
-            # pedirlas sobre una imagen o carrusel devuelve error de Meta, por
-            # eso solo se llama a _fetch_instagram_reel_metrics cuando
-            # corresponde. Para el resto de los posts de Instagram quedan en
-            # None (no aplica, no "no se pudo traer").
-            plays, avg_watch_time_ms = (
-                _fetch_instagram_reel_metrics(external_id, access_token) if media_type == "video" else (None, None)
-            )
-            return {
-                "likes": likes, "comments": comments, "shares": 0, "reach": reach, "impressions": None, "saved": saved,
-                # Solo Instagram -- Facebook no tiene este desglose por post (ver
-                # _fetch_instagram_post_audience_reach). Quedan en None para posts
-                # de Facebook, no se pisa nada del lado de esa rama del if.
-                "follower_reach": follower_reach, "non_follower_reach": non_follower_reach,
-                "plays": plays, "avg_watch_time_ms": avg_watch_time_ms,
-            }
-    except requests.HTTPError as e:
-        detail = e.response.text[:200] if e.response is not None else str(e)
-        print(f"No se pudieron traer metricas de {platform} {external_id}: {detail}")
-        return None
-    except Exception as e:
-        print(f"No se pudieron traer metricas de {platform} {external_id}: {e}")
-        return None
-
-
-def collect_post_metrics():
-    """
-    Recorre los posts publicados en los ultimos 30 dias, trae sus numeros
-    reales (likes/comments/shares/reach/impressions) desde Meta Graph API, y
-    los guarda (upsert por post_id) en socialbot_post_metrics. Se corre al
-    principio de cada ejecucion del scheduler, junto con
-    publish_approved_pending_posts(). Es lo que content_planner.py (Fase 6)
-    despues usa para saber que angulo/formato funciono mejor con cada
-    cliente -- sin esto, la tabla socialbot_post_metrics quedaba vacia para
-    siempre y el plan semanal no tenia datos reales de performance.
-
-    Algunos posts fallan siempre (el cliente borro el post desde Instagram/
-    Facebook, oculto los likes, cambiaron permisos de la Pagina, etc.) -- no
-    hay forma de distinguir esto de un fallo transitorio en el momento, asi
-    que en vez de reintentar para siempre en cada corrida (ruido en el log +
-    llamadas de API desperdiciadas sin beneficio), despues de
-    MAX_METRICS_FETCH_FAILURES fallos consecutivos el post pasa a
-    reintentarse solo 1 vez cada RETRY_COOLDOWN_HOURS horas -- por si el
-    problema se resolvio solo (ej. la Pagina recupero permisos), sin
-    machacar la API mientras tanto.
-    """
-    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    retry_cutoff = (datetime.now(timezone.utc) - timedelta(hours=RETRY_COOLDOWN_HOURS)).isoformat()
-    posts = sb_get(
-        "socialbot_posts",
-        {
-            "status": "eq.published",
-            "published_at": f"gte.{since}",
-            "or": (
-                f"(metrics_fetch_failures.lt.{MAX_METRICS_FETCH_FAILURES},"
-                f"metrics_last_fetch_attempt.is.null,"
-                f"metrics_last_fetch_attempt.lt.{retry_cutoff})"
-            ),
-            "select": "id,external_post_id,social_account_id,metrics_fetch_failures,media_type",
-        },
-    )
-    if not posts:
-        return
-
-    print(f"Actualizando metricas de {len(posts)} post(s) publicado(s) en los ultimos 30 dias...")
-    updated = 0
-    skipped_in_cooldown = 0
-    for post in posts:
-        clean_id = _clean_external_id(post.get("external_post_id"))
-        if not clean_id:
-            continue
-
-        prior_failures = post.get("metrics_fetch_failures") or 0
-        if prior_failures >= MAX_METRICS_FETCH_FAILURES:
-            skipped_in_cooldown += 1
-
-        def _record_fetch_failure():
-            new_failures = prior_failures + 1
-            sb_update(
-                "socialbot_posts",
-                {"id": f"eq.{post['id']}"},
-                {"metrics_fetch_failures": new_failures, "metrics_last_fetch_attempt": datetime.now(timezone.utc).isoformat()},
-            )
-            if new_failures == MAX_METRICS_FETCH_FAILURES:
-                print(f"  Post {post['id']}: {MAX_METRICS_FETCH_FAILURES} fallos seguidos trayendo metricas, paso a reintentarse solo 1 vez cada {RETRY_COOLDOWN_HOURS}h en vez de en cada corrida.")
-
-        try:
-            accounts = sb_get("socialbot_social_accounts", {"id": f"eq.{post['social_account_id']}"})
-            if not accounts:
-                continue
-            account = accounts[0]
-
-            metrics = fetch_post_metrics(account["platform"], clean_id, account["page_access_token"], media_type=post.get("media_type"))
-            if metrics is None:
-                _record_fetch_failure()
-                continue
-
-            sb_upsert(
-                "socialbot_post_metrics",
-                [{"post_id": post["id"], **metrics, "fetched_at": datetime.now(timezone.utc).isoformat()}],
-                on_conflict="post_id",
-            )
-            if prior_failures:
-                sb_update(
-                    "socialbot_posts",
-                    {"id": f"eq.{post['id']}"},
-                    {"metrics_fetch_failures": 0, "metrics_last_fetch_attempt": None},
-                )
-            updated += 1
-        except Exception as e:
-            print(f"ERROR actualizando metricas del post {post['id']}: {e}")
-            try:
-                _record_fetch_failure()
-            except Exception as e2:
-                print(f"  (ademas, no se pudo registrar el fallo en socialbot_posts: {e2})")
-
-    cooldown_note = f" ({skipped_in_cooldown} en cooldown, reintentados igual esta vez)" if skipped_in_cooldown else ""
-    print(f"Metricas actualizadas: {updated}/{len(posts)}.{cooldown_note}")
-
-
-def collect_audience_reach():
-    """
-    Trae, para cada cuenta de Instagram conectada, el alcance de CUENTA (no
-    por post) desglosado en seguidor/no seguidor de los ultimos 28 dias
-    (_fetch_instagram_audience_reach), y lo pisa -- upsert por
-    social_account_id -- en socialbot_audience_reach. Solo se guarda el
-    ultimo total, no hay historial dia por dia (alcanza con eso: es lo que
-    pidio la agencia, "un total me conformo"). Se corre junto con
-    collect_post_metrics() al principio de cada ejecucion del scheduler.
-
-    Facebook no tiene un equivalente directo de "follow_type" para Paginas
-    (ese desglose es especifico de cuentas de Instagram), asi que esto solo
-    aplica a cuentas platform='instagram'.
-    """
-    accounts = sb_get(
-        "socialbot_social_accounts",
-        {"platform": "eq.instagram", "select": "id,ig_business_id,page_access_token,page_name"},
-    )
-    if not accounts:
-        return
-
-    print(f"Actualizando alcance seguidor/no-seguidor de {len(accounts)} cuenta(s) de Instagram...")
-    updated = 0
-    for account in accounts:
-        ig_business_id = account.get("ig_business_id")
-        access_token = account.get("page_access_token")
-        if not ig_business_id or not access_token:
-            continue
-        try:
-            follower_reach, non_follower_reach = _fetch_instagram_audience_reach(ig_business_id, access_token)
-            profile_views, accounts_engaged = _fetch_instagram_account_engagement(ig_business_id, access_token)
-            if follower_reach is None and non_follower_reach is None and profile_views is None and accounts_engaged is None:
-                continue  # Meta no tiene ningun dato todavia para esta cuenta -- no pisamos el ultimo valor bueno que hubiera
-
-            # Solo se incluyen las columnas que SI se pudieron traer en esta
-            # corrida -- si por ejemplo _fetch_instagram_audience_reach falla
-            # pero _fetch_instagram_account_engagement funciona (o
-            # viceversa), no queremos pisar con null un valor bueno que ya
-            # estaba guardado de una corrida anterior.
-            payload = {
-                "social_account_id": account["id"],
-                "period": "days_28",
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if follower_reach is not None or non_follower_reach is not None:
-                payload["follower_reach"] = follower_reach
-                payload["non_follower_reach"] = non_follower_reach
-            if profile_views is not None:
-                payload["profile_views"] = profile_views
-            if accounts_engaged is not None:
-                payload["accounts_engaged"] = accounts_engaged
-
-            sb_upsert("socialbot_audience_reach", [payload], on_conflict="social_account_id")
-            updated += 1
-        except Exception as e:
-            print(f"ERROR actualizando alcance seguidor/no-seguidor de {account.get('page_name') or account['id']}: {e}")
-
-    print(f"Alcance seguidor/no-seguidor actualizado: {updated}/{len(accounts)}.")
-
-
-def collect_facebook_page_engagement():
-    """
-    Trae, para cada Pagina de Facebook conectada, el engagement total de
-    los ultimos 28 dias (_fetch_facebook_page_engagement) y lo guarda --
-    upsert por social_account_id, igual que collect_audience_reach() -- en
-    socialbot_audience_reach (columna page_engagement). Va en funcion
-    separada (en vez de meterse dentro de collect_audience_reach) porque
-    esa funcion filtra explicitamente platform='instagram' y arma su propio
-    payload sobre esa base; separarlo evita tocar ese flujo que ya esta
-    probado en produccion.
-
-    Es el equivalente, para Facebook, de lo que accounts_engaged es para
-    Instagram: un solo numero de "engagement real" a nivel de cuenta. No
-    hay historial dia por dia, solo el ultimo valor (mismo criterio que el
-    resto de esta tabla). Se corre junto con collect_audience_reach() al
-    principio de cada ejecucion del scheduler.
-    """
-    accounts = sb_get(
-        "socialbot_social_accounts",
-        {"platform": "eq.facebook", "select": "id,page_id,page_access_token,page_name"},
-    )
-    if not accounts:
-        return
-
-    print(f"Actualizando engagement de pagina de {len(accounts)} cuenta(s) de Facebook...")
-    updated = 0
-    for account in accounts:
-        page_id = account.get("page_id")
-        access_token = account.get("page_access_token")
-        if not page_id or not access_token:
-            continue
-        try:
-            page_engagement = _fetch_facebook_page_engagement(page_id, access_token)
-            if page_engagement is None:
-                continue  # Meta no tiene dato todavia -- no pisamos un valor bueno anterior
-
-            sb_upsert(
-                "socialbot_audience_reach",
-                [{
-                    "social_account_id": account["id"],
-                    "period": "days_28",
-                    "page_engagement": page_engagement,
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
-                }],
-                on_conflict="social_account_id",
-            )
-            updated += 1
-        except Exception as e:
-            print(f"ERROR actualizando engagement de pagina de {account.get('page_name') or account['id']}: {e}")
-
-    print(f"Engagement de pagina actualizado: {updated}/{len(accounts)}.")
-
-
-def _fetch_follower_count(platform, page_id_or_ig_id, access_token):
-    """
-    Numero total de seguidores/fans de la cuenta AHORA MISMO (no un
-    historico -- eso lo arma collect_follower_snapshots() guardando un
-    snapshot por dia). Instagram usa 'followers_count' sobre el ig_business_id;
-    Facebook usa 'fan_count' sobre el page_id -- son campos normales del
-    objeto (no /insights), asi que es una sola llamada liviana.
-
-    Devuelve el numero o None (post/pagina sin permiso, token vencido, etc.
-    -- best-effort, no corta la corrida).
-    """
-    field = "followers_count" if platform == "instagram" else "fan_count"
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id_or_ig_id}",
-            params={"fields": field, "access_token": access_token},
-            timeout=30,
-        )
-        r.raise_for_status()
-        return r.json().get(field)
-    except Exception:
-        return None
-
-
-def collect_follower_snapshots():
-    """
-    Guarda, para CADA cuenta social conectada (Facebook y Instagram), el
-    numero total de seguidores/fans de hoy en socialbot_follower_snapshots
-    -- upsert por (social_account_id, snapshot_date), asi que corridas
-    repetidas el mismo dia pisan la misma fila en vez de acumular una por
-    corrida (el scheduler corre cada 15 min). Con snapshots de varios dias
-    guardados, el panel de agencia calcula la variacion semanal comparando
-    el ultimo contra el mas cercano a 7 dias atras.
-
-    Se corre junto con collect_post_metrics() y collect_audience_reach() al
-    principio de cada ejecucion del scheduler.
-    """
-    accounts = sb_get(
-        "socialbot_social_accounts",
-        {"select": "id,platform,page_id,ig_business_id,page_access_token,page_name"},
-    )
-    if not accounts:
-        return
-
-    print(f"Actualizando seguidores totales de {len(accounts)} cuenta(s)...")
-    updated = 0
-    for account in accounts:
-        platform = account.get("platform")
-        access_token = account.get("page_access_token")
-        target_id = account.get("ig_business_id") if platform == "instagram" else account.get("page_id")
-        if not target_id or not access_token:
-            continue
-        try:
-            follower_count = _fetch_follower_count(platform, target_id, access_token)
-            if follower_count is None:
-                continue
-
-            sb_upsert(
-                "socialbot_follower_snapshots",
-                [{
-                    "social_account_id": account["id"],
-                    "follower_count": follower_count,
-                    "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
-                }],
-                on_conflict="social_account_id,snapshot_date",
-            )
-            updated += 1
-        except Exception as e:
-            print(f"ERROR actualizando seguidores de {account.get('page_name') or account['id']}: {e}")
-
-    print(f"Seguidores totales actualizados: {updated}/{len(accounts)}.")
 
 
 # ---------------------------------------------------------------------------
@@ -1783,36 +1052,14 @@ def run():
     # aprobacion del cliente y fueron aprobados desde su portal.
     publish_approved_pending_posts()
 
-    # Y actualizamos las metricas reales (likes/comments/shares/reach) de lo
-    # publicado en los ultimos 30 dias -- esto es lo que content_planner.py
-    # (Fase 6) usa despues para armar el plan semanal con criterio real.
-    try:
-        collect_post_metrics()
-    except Exception as e:
-        print(f"ERROR actualizando metricas de posts (no se corta la corrida): {e}")
-
-    # Alcance de cuenta (no por post) desglosado seguidor/no-seguidor, para
-    # el % que se muestra en "Métricas" del panel de agencia. Mismo criterio
-    # best-effort que arriba: si falla, no corta la corrida de publicacion.
-    try:
-        collect_audience_reach()
-    except Exception as e:
-        print(f"ERROR actualizando alcance seguidor/no-seguidor (no se corta la corrida): {e}")
-
-    # Engagement total de Pagina de Facebook (equivalente a accounts_engaged
-    # de Instagram, pero a nivel de Pagina). Mismo criterio best-effort.
-    try:
-        collect_facebook_page_engagement()
-    except Exception as e:
-        print(f"ERROR actualizando engagement de pagina de Facebook (no se corta la corrida): {e}")
-
-    # Snapshot diario de seguidores totales (todas las cuentas, no solo
-    # Instagram), para la variacion semanal que se muestra junto a lo
-    # anterior. Mismo criterio best-effort.
-    try:
-        collect_follower_snapshots()
-    except Exception as e:
-        print(f"ERROR actualizando seguidores totales (no se corta la corrida): {e}")
+    # NOTA (02/08/2026): la recoleccion de metricas (collect_post_metrics /
+    # collect_audience_reach / collect_facebook_page_engagement /
+    # collect_follower_snapshots) se movio a metrics_collector.py, con su
+    # propio cron mas espaciado -- corria aca mismo antes de esto y, a
+    # medida que crecio la cantidad de posts/clientes, empezo a tardar mas
+    # de 10 minutos y atrasaba la publicacion real (que si necesita correr
+    # cerca del horario elegido por el cliente). Ver sb_common.py para el
+    # detalle completo.
 
     # Los horarios (hour/minute/day_of_week) estan en la hora LOCAL de cada cliente,
     # no en UTC. Por eso no comparamos una unica "hora actual" global: convertimos
