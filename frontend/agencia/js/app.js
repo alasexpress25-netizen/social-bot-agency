@@ -13,6 +13,13 @@ import { updateArchivosHostStorageBadge } from "./archivos-host.js";
 import { renderHomeView, renderMetrics } from "./metrics.js";
 import { buildPlanCalendarHtml } from "./content-plan.js";
 import { renderPostsList } from "./posts.js";
+import "./auth.js";     // login, logout, signup
+import "./clients.js";  // createClient, saveAccount, openEditClientModal, etc.
+import "./leads.js";    // approveReferralSuggestion, rejectReferralSuggestion, updateLeadStatus, etc.
+import "./media.js";    // addMedia, deleteMedia, updateMedia, toggleMediaTypeFields
+import "./reviews.js";  // setReviewStatus, copyReviewReply, openSuccessStory
+import "./rules.js";    // addRule, deleteRule, saveAi, updateRule
+import "./schedule.js"; // addSlot, deleteSlot, saveAllSlots, useSuggestedSlot
 
 async function boot(){
   const { data: { session } } = await sb.auth.getSession();
