@@ -11,6 +11,7 @@
 <meta name="application-name" content="LaVMK Agencia" />
 <meta name="apple-mobile-web-app-title" content="LaVMK Agencia" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <link rel="icon" href="./icons/icon-192.png" />
 <link rel="apple-touch-icon" href="./icons/icon-192.png" />
@@ -114,9 +115,11 @@
   <!-- LOGIN -->
   <div class="auth-box" id="authBox">
     <p style="color:var(--muted); margin-bottom:18px;">Iniciá sesión para gestionar tus clientes</p>
-    <input type="email" id="email" placeholder="Email" />
-    <input type="password" id="password" placeholder="Contraseña" />
-    <button onclick="login()" style="width:100%;">Entrar</button>
+    <form onsubmit="login(event)">
+      <input type="email" id="email" name="email" placeholder="Email" autocomplete="username" />
+      <input type="password" id="password" name="password" placeholder="Contraseña" autocomplete="current-password" />
+      <button type="submit" style="width:100%;">Entrar</button>
+    </form>
     <p style="margin-top:10px;"><a href="#" onclick="signup()" style="color:var(--gold); font-size:13px;">Crear cuenta nueva</a></p>
   </div>
 
@@ -342,6 +345,17 @@
           y pegá acá el ID. Las reseñas de Facebook no necesitan nada extra: se leen con el mismo Page Access Token de arriba.
         </small>
         <input id="editClientGooglePlaceId" placeholder="Google Place ID (ej: ChIJN1t_tDeuEmsRUsoyG83frY4)" />
+      </details>
+
+      <details>
+        <summary>📱 WhatsApp para el mensaje de referido/reseña (opcional)</summary>
+        <small class="hint" style="display:block; margin-top:10px;">
+          Si lo cargás, el mensaje sugerido que se le manda al lead cuando se convierte en cliente
+          va a incluir automáticamente un link a este WhatsApp (con código de país, ej: 5548999999999).
+          Podés poner el tuyo o el del cliente, el que tenga más sentido para este caso. El mensaje
+          siempre se puede editar a mano antes de aprobar.
+        </small>
+        <input id="editClientWhatsapp" placeholder="Ej: 5548999999999" />
       </details>
 
       <button type="submit">Guardar cambios</button>
