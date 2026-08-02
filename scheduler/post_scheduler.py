@@ -27,6 +27,11 @@ Ademas, en cada corrida:
     desde Meta Graph API (collect_post_metrics()). Esto es lo que despues
     usa content_planner.py (Fase 6) para saber que angulo/formato funciono
     mejor con cada cliente.
+  - Y actualiza en socialbot_audience_reach el alcance de CUENTA (no por
+    post) de cada cuenta de Instagram conectada, desglosado en
+    seguidor/no-seguidor de los ultimos 28 dias (collect_audience_reach()).
+    Es lo que muestra el % de seguidores/no-seguidores en "Métricas" del
+    panel de agencia -- se guarda solo el ultimo total, sin historial.
 
 No requiere servidor: corre como un job de GitHub Actions y termina.
 Todas las credenciales sensibles viven en Supabase (por cliente) o en
@@ -495,6 +500,51 @@ def _fetch_instagram_reach(media_id, access_token):
         return None
 
 
+def _fetch_instagram_audience_reach(ig_business_id, access_token, period="days_28"):
+    """
+    Alcance de CUENTA (no de un post puntual) desglosado por si la cuenta
+    alcanzada sigue o no el perfil -- metrica 'reach' con
+    breakdown=follow_type, metric_type=total_value (formato que pide Meta
+    para metricas con breakdown desde la v19+ de la Graph API).
+    period='days_28' porque Meta ya lo da como ventana movil agregada -- no
+    hace falta acumular dia por dia para tener "un total" (ver
+    socialbot_audience_reach, que solo guarda el ultimo snapshot).
+
+    Devuelve (follower_reach, non_follower_reach). Best-effort, igual que
+    _fetch_instagram_reach: si Meta no tiene el dato todavia (cuenta sin
+    actividad reciente) o el permiso no alcanza, devuelve (None, None) en
+    vez de cortar la corrida.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/insights",
+            params={
+                "metric": "reach",
+                "period": period,
+                "metric_type": "total_value",
+                "breakdown": "follow_type",
+                "access_token": access_token,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            return None, None
+        breakdowns = data[0].get("total_value", {}).get("breakdowns", [])
+        if not breakdowns:
+            return None, None
+        results = breakdowns[0].get("results", [])
+        by_type = {}
+        for item in results:
+            dims = item.get("dimension_values") or []
+            if dims:
+                by_type[dims[0]] = item.get("value")
+        return by_type.get("FOLLOWER"), by_type.get("NON_FOLLOWER")
+    except Exception:
+        return None, None
+
+
 def _fetch_facebook_shares(post_id, access_token):
     """
     'shares' se pide por separado del resto de los campos (likes, comments) a
@@ -653,6 +703,57 @@ def collect_post_metrics():
 
     cooldown_note = f" ({skipped_in_cooldown} en cooldown, reintentados igual esta vez)" if skipped_in_cooldown else ""
     print(f"Metricas actualizadas: {updated}/{len(posts)}.{cooldown_note}")
+
+
+def collect_audience_reach():
+    """
+    Trae, para cada cuenta de Instagram conectada, el alcance de CUENTA (no
+    por post) desglosado en seguidor/no seguidor de los ultimos 28 dias
+    (_fetch_instagram_audience_reach), y lo pisa -- upsert por
+    social_account_id -- en socialbot_audience_reach. Solo se guarda el
+    ultimo total, no hay historial dia por dia (alcanza con eso: es lo que
+    pidio la agencia, "un total me conformo"). Se corre junto con
+    collect_post_metrics() al principio de cada ejecucion del scheduler.
+
+    Facebook no tiene un equivalente directo de "follow_type" para Paginas
+    (ese desglose es especifico de cuentas de Instagram), asi que esto solo
+    aplica a cuentas platform='instagram'.
+    """
+    accounts = sb_get(
+        "socialbot_social_accounts",
+        {"platform": "eq.instagram", "select": "id,ig_business_id,page_access_token,page_name"},
+    )
+    if not accounts:
+        return
+
+    print(f"Actualizando alcance seguidor/no-seguidor de {len(accounts)} cuenta(s) de Instagram...")
+    updated = 0
+    for account in accounts:
+        ig_business_id = account.get("ig_business_id")
+        access_token = account.get("page_access_token")
+        if not ig_business_id or not access_token:
+            continue
+        try:
+            follower_reach, non_follower_reach = _fetch_instagram_audience_reach(ig_business_id, access_token)
+            if follower_reach is None and non_follower_reach is None:
+                continue  # Meta no tiene el dato todavia para esta cuenta -- no pisamos el ultimo valor bueno que hubiera
+
+            sb_upsert(
+                "socialbot_audience_reach",
+                [{
+                    "social_account_id": account["id"],
+                    "follower_reach": follower_reach,
+                    "non_follower_reach": non_follower_reach,
+                    "period": "days_28",
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                }],
+                on_conflict="social_account_id",
+            )
+            updated += 1
+        except Exception as e:
+            print(f"ERROR actualizando alcance seguidor/no-seguidor de {account.get('page_name') or account['id']}: {e}")
+
+    print(f"Alcance seguidor/no-seguidor actualizado: {updated}/{len(accounts)}.")
 
 
 # ---------------------------------------------------------------------------
@@ -1336,6 +1437,14 @@ def run():
         collect_post_metrics()
     except Exception as e:
         print(f"ERROR actualizando metricas de posts (no se corta la corrida): {e}")
+
+    # Alcance de cuenta (no por post) desglosado seguidor/no-seguidor, para
+    # el % que se muestra en "Métricas" del panel de agencia. Mismo criterio
+    # best-effort que arriba: si falla, no corta la corrida de publicacion.
+    try:
+        collect_audience_reach()
+    except Exception as e:
+        print(f"ERROR actualizando alcance seguidor/no-seguidor (no se corta la corrida): {e}")
 
     # Los horarios (hour/minute/day_of_week) estan en la hora LOCAL de cada cliente,
     # no en UTC. Por eso no comparamos una unica "hora actual" global: convertimos
