@@ -22,16 +22,20 @@ Ademas, en cada corrida:
     esperando aprobacion y el cliente ya aprobo desde su portal, y los
     publica (publish_approved_pending_posts()).
   - Tambien ANTES de generar posts nuevos, actualiza en
-    socialbot_post_metrics (likes/comments/shares/reach/impressions) los
-    posts publicados en los ultimos 30 dias, trayendo los numeros reales
-    desde Meta Graph API (collect_post_metrics()). Esto es lo que despues
-    usa content_planner.py (Fase 6) para saber que angulo/formato funciono
-    mejor con cada cliente.
+    socialbot_post_metrics (likes/comments/shares/reach/impressions/saved)
+    los posts publicados en los ultimos 30 dias, trayendo los numeros
+    reales desde Meta Graph API (collect_post_metrics()). Esto es lo que
+    despues usa content_planner.py (Fase 6) para saber que angulo/formato
+    funciono mejor con cada cliente.
   - Y actualiza en socialbot_audience_reach el alcance de CUENTA (no por
     post) de cada cuenta de Instagram conectada, desglosado en
     seguidor/no-seguidor de los ultimos 28 dias (collect_audience_reach()).
     Es lo que muestra el % de seguidores/no-seguidores en "Métricas" del
     panel de agencia -- se guarda solo el ultimo total, sin historial.
+  - Y guarda en socialbot_follower_snapshots un snapshot diario de
+    seguidores/fans totales de CADA cuenta conectada (Facebook e Instagram)
+    (collect_follower_snapshots()). Con eso, "Métricas" puede mostrar no
+    solo el total actual sino la variacion de los ultimos 7 dias.
 
 No requiere servidor: corre como un job de GitHub Actions y termina.
 Todas las credenciales sensibles viven en Supabase (por cliente) o en
@@ -484,20 +488,31 @@ def _fetch_facebook_post_insights(post_id, access_token):
         return None, None
 
 
-def _fetch_instagram_reach(media_id, access_token):
+def _fetch_instagram_reach_and_saved(media_id, access_token):
+    """
+    Reach Y guardados de un post de Instagram, en la misma llamada
+    (metric=reach,saved) para no duplicar el pedido a la API. 'saved' =
+    cuanta gente guardo el posteo -- señal mas fuerte de contenido que vale
+    la pena que el like, porque implica intencion de volver a verlo despues.
+
+    Devuelve (reach, saved). Best-effort: si Meta no tiene el dato todavia
+    (post muy reciente) o el permiso no alcanza, devuelve (None, None) en
+    vez de cortar la corrida.
+    """
     try:
         r = requests.get(
             f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
-            params={"metric": "reach", "access_token": access_token},
+            params={"metric": "reach,saved", "access_token": access_token},
             timeout=30,
         )
         r.raise_for_status()
-        data = r.json().get("data", [])
-        if data and data[0].get("values"):
-            return data[0]["values"][0]["value"]
-        return None
+        values = {}
+        for d in r.json().get("data", []):
+            if d.get("values"):
+                values[d["name"]] = d["values"][0]["value"]
+        return values.get("reach"), values.get("saved")
     except Exception:
-        return None
+        return None, None
 
 
 def _fetch_instagram_audience_reach(ig_business_id, access_token, period="days_28"):
@@ -511,9 +526,9 @@ def _fetch_instagram_audience_reach(ig_business_id, access_token, period="days_2
     socialbot_audience_reach, que solo guarda el ultimo snapshot).
 
     Devuelve (follower_reach, non_follower_reach). Best-effort, igual que
-    _fetch_instagram_reach: si Meta no tiene el dato todavia (cuenta sin
-    actividad reciente) o el permiso no alcanza, devuelve (None, None) en
-    vez de cortar la corrida.
+    _fetch_instagram_reach_and_saved: si Meta no tiene el dato todavia
+    (cuenta sin actividad reciente) o el permiso no alcanza, devuelve
+    (None, None) en vez de cortar la corrida.
     """
     try:
         r = requests.get(
@@ -571,9 +586,9 @@ def _fetch_facebook_shares(post_id, access_token):
 
 def fetch_post_metrics(platform, external_id, access_token):
     """
-    Devuelve un dict {likes, comments, shares, reach, impressions} o None si
-    no se pudo traer nada (post borrado, token vencido, etc. -- se loguea y
-    se sigue con el resto, no corta la corrida).
+    Devuelve un dict {likes, comments, shares, reach, impressions, saved} o
+    None si no se pudo traer nada (post borrado, token vencido, etc. -- se
+    loguea y se sigue con el resto, no corta la corrida).
     """
     try:
         if platform == "facebook":
@@ -588,7 +603,10 @@ def fetch_post_metrics(platform, external_id, access_token):
             comments = data.get("comments", {}).get("summary", {}).get("total_count", 0)
             shares = _fetch_facebook_shares(external_id, access_token)
             reach, impressions = _fetch_facebook_post_insights(external_id, access_token)
-            return {"likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions}
+            # Facebook no tiene un equivalente directo de "guardados" a nivel
+            # de post -- queda en None (no es "no se pudo traer", es "no
+            # existe esta metrica para esta plataforma").
+            return {"likes": likes, "comments": comments, "shares": shares, "reach": reach, "impressions": impressions, "saved": None}
         else:
             r = requests.get(
                 f"https://graph.facebook.com/{GRAPH_API_VERSION}/{external_id}",
@@ -599,8 +617,8 @@ def fetch_post_metrics(platform, external_id, access_token):
             data = r.json()
             likes = data.get("like_count", 0)
             comments = data.get("comments_count", 0)
-            reach = _fetch_instagram_reach(external_id, access_token)
-            return {"likes": likes, "comments": comments, "shares": 0, "reach": reach, "impressions": None}
+            reach, saved = _fetch_instagram_reach_and_saved(external_id, access_token)
+            return {"likes": likes, "comments": comments, "shares": 0, "reach": reach, "impressions": None, "saved": saved}
     except requests.HTTPError as e:
         detail = e.response.text[:200] if e.response is not None else str(e)
         print(f"No se pudieron traer metricas de {platform} {external_id}: {detail}")
@@ -754,6 +772,80 @@ def collect_audience_reach():
             print(f"ERROR actualizando alcance seguidor/no-seguidor de {account.get('page_name') or account['id']}: {e}")
 
     print(f"Alcance seguidor/no-seguidor actualizado: {updated}/{len(accounts)}.")
+
+
+def _fetch_follower_count(platform, page_id_or_ig_id, access_token):
+    """
+    Numero total de seguidores/fans de la cuenta AHORA MISMO (no un
+    historico -- eso lo arma collect_follower_snapshots() guardando un
+    snapshot por dia). Instagram usa 'followers_count' sobre el ig_business_id;
+    Facebook usa 'fan_count' sobre el page_id -- son campos normales del
+    objeto (no /insights), asi que es una sola llamada liviana.
+
+    Devuelve el numero o None (post/pagina sin permiso, token vencido, etc.
+    -- best-effort, no corta la corrida).
+    """
+    field = "followers_count" if platform == "instagram" else "fan_count"
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id_or_ig_id}",
+            params={"fields": field, "access_token": access_token},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json().get(field)
+    except Exception:
+        return None
+
+
+def collect_follower_snapshots():
+    """
+    Guarda, para CADA cuenta social conectada (Facebook y Instagram), el
+    numero total de seguidores/fans de hoy en socialbot_follower_snapshots
+    -- upsert por (social_account_id, snapshot_date), asi que corridas
+    repetidas el mismo dia pisan la misma fila en vez de acumular una por
+    corrida (el scheduler corre cada 15 min). Con snapshots de varios dias
+    guardados, el panel de agencia calcula la variacion semanal comparando
+    el ultimo contra el mas cercano a 7 dias atras.
+
+    Se corre junto con collect_post_metrics() y collect_audience_reach() al
+    principio de cada ejecucion del scheduler.
+    """
+    accounts = sb_get(
+        "socialbot_social_accounts",
+        {"select": "id,platform,page_id,ig_business_id,page_access_token,page_name"},
+    )
+    if not accounts:
+        return
+
+    print(f"Actualizando seguidores totales de {len(accounts)} cuenta(s)...")
+    updated = 0
+    for account in accounts:
+        platform = account.get("platform")
+        access_token = account.get("page_access_token")
+        target_id = account.get("ig_business_id") if platform == "instagram" else account.get("page_id")
+        if not target_id or not access_token:
+            continue
+        try:
+            follower_count = _fetch_follower_count(platform, target_id, access_token)
+            if follower_count is None:
+                continue
+
+            sb_upsert(
+                "socialbot_follower_snapshots",
+                [{
+                    "social_account_id": account["id"],
+                    "follower_count": follower_count,
+                    "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                }],
+                on_conflict="social_account_id,snapshot_date",
+            )
+            updated += 1
+        except Exception as e:
+            print(f"ERROR actualizando seguidores de {account.get('page_name') or account['id']}: {e}")
+
+    print(f"Seguidores totales actualizados: {updated}/{len(accounts)}.")
 
 
 # ---------------------------------------------------------------------------
@@ -1445,6 +1537,14 @@ def run():
         collect_audience_reach()
     except Exception as e:
         print(f"ERROR actualizando alcance seguidor/no-seguidor (no se corta la corrida): {e}")
+
+    # Snapshot diario de seguidores totales (todas las cuentas, no solo
+    # Instagram), para la variacion semanal que se muestra junto a lo
+    # anterior. Mismo criterio best-effort.
+    try:
+        collect_follower_snapshots()
+    except Exception as e:
+        print(f"ERROR actualizando seguidores totales (no se corta la corrida): {e}")
 
     # Los horarios (hour/minute/day_of_week) estan en la hora LOCAL de cada cliente,
     # no en UTC. Por eso no comparamos una unica "hora actual" global: convertimos
