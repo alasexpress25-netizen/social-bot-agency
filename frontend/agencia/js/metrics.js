@@ -4,7 +4,7 @@
 // agregaron los import/export necesarios para que funcione como
 // modulo ES nativo (<script type="module">).
 
-import { PLATFORM_META_AG, metricPeriod, sb } from "./state.js";
+import { PLATFORM_META_AG, metricPeriod, metricPlatform, sb } from "./state.js";
 import { normalizeUrl } from "./utils.js";
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,10 @@ function setMetricPeriod(clientId, period){
   metricPeriod[clientId] = period;
   renderMetrics(clientId);
 }
+function setMetricPlatform(clientId, platform){
+  metricPlatform[clientId] = platform;
+  renderMetrics(clientId);
+}
 // ---------------------------------------------------------------------------
 // Pestaña "Inicio": la última publicación del cliente seleccionado, mostrada
 // como tarjeta estilo Instagram — mismo criterio que loadDashboard() en el
@@ -193,14 +197,15 @@ function renderHomeView(c, posts){
 // (ultimas 8 semanas o ultimos 6 meses).
 async function renderMetrics(clientId){
   const period = metricPeriod[clientId] || 'week';
+  const platform = metricPlatform[clientId] || 'all';
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
-    sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes, comments, shares, reach, saved)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
-    sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', clientId).gte('clicked_at', windowStartIso),
+    sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, platform, external_post_id, socialbot_post_metrics(likes, comments, shares, reach, saved)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_link_clicks').select('source, clicked_at, external_post_id').eq('client_id', clientId).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo semanal/mensual
     // de arriba) desglosado seguidor/no-seguidor -- ver
     // collect_audience_reach() en post_scheduler.py. Solo se guarda el
@@ -214,9 +219,11 @@ async function renderMetrics(clientId){
     sb.from('socialbot_follower_snapshots').select('social_account_id, follower_count, snapshot_date, socialbot_social_accounts!inner(platform, page_name, client_id)').eq('socialbot_social_accounts.client_id', clientId).order('snapshot_date', { ascending: true }),
   ]);
 
-  const leadsRows = leads || [];
-  const postsRows = (postsWithMetrics||[]).map(p => ({
+  let leadsRows = leads || [];
+  let postsRows = (postsWithMetrics||[]).map(p => ({
     published_at: p.published_at,
+    platform: p.platform,
+    external_post_id: p.external_post_id,
     likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
     comments: (p.socialbot_post_metrics && p.socialbot_post_metrics.comments) || 0,
     shares: (p.socialbot_post_metrics && p.socialbot_post_metrics.shares) || 0,
@@ -230,6 +237,26 @@ async function renderMetrics(clientId){
     // mismo criterio que reach: null = "sin dato todavia", no "0 guardados".
     saved: (p.socialbot_post_metrics && p.socialbot_post_metrics.saved) ?? null,
   }));
+  let interactionsRows = interactions || [];
+
+  // Selector Facebook/Instagram/Todas: filtro client-side, no toca el
+  // scheduler ni las queries de arriba (que ya traen "platform" en el
+  // select). "Todas" no filtra nada.
+  if(platform !== 'all'){
+    leadsRows = leadsRows.filter(r => r.platform === platform);
+    postsRows = postsRows.filter(p => p.platform === platform);
+    interactionsRows = interactionsRows.filter(r => r.platform === platform);
+  }
+
+  // socialbot_link_clicks no tiene columna platform propia -- se resuelve
+  // con un mapa external_post_id -> platform armado a partir de los posts
+  // ya traidos arriba (ver plan-separar-metricas-facebook-instagram.txt).
+  const platformByExternalId = {};
+  (postsWithMetrics||[]).forEach(p => { if(p.external_post_id) platformByExternalId[p.external_post_id] = p.platform; });
+  let linkClicksRows = linkClicks || [];
+  if(platform !== 'all'){
+    linkClicksRows = linkClicksRows.filter(c => platformByExternalId[c.external_post_id] === platform);
+  }
 
   const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
   const convertedBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at', { filterFn: r => r.status === 'convertido' });
@@ -240,7 +267,7 @@ async function renderMetrics(clientId){
   // el KPI necesitamos distinguir "0 de alcance real" de "sin dato".
   const reachBuckets = fillBuckets(buildPeriodBuckets(period), postsRows.map(p => ({ ...p, reach: p.reach || 0 })), 'published_at', { sumField: 'reach' });
   const postsWithReach = postsRows.filter(p => p.reach !== null);
-  const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactions || [], 'created_at', { replyField: 'replied' });
+  const replyBuckets = fillBuckets(buildPeriodBuckets(period), interactionsRows, 'created_at', { replyField: 'replied' });
 
   const totalLeads = leadsRows.length;
   const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
@@ -255,7 +282,7 @@ async function renderMetrics(clientId){
   const totalSaved = postsWithSaved.reduce((s, p) => s + p.saved, 0);
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
-  const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
+  const repliedWithTimes = interactionsRows.filter(r => r.replied && r.replied_at && r.created_at);
   const avgResponseMinutes = repliedWithTimes.length
     ? Math.round(repliedWithTimes.reduce((sum, r) => sum + (new Date(r.replied_at) - new Date(r.created_at)) / 60000, 0) / repliedWithTimes.length)
     : null;
@@ -265,7 +292,7 @@ async function renderMetrics(clientId){
   // (socialbot_link_clicks), abiertos por canal para ver por dónde entra
   // el trafico que de verdad importa (a diferencia de likes/comments).
   const clicksBySource = { comment_reply: 0, dm_reply: 0, fallback_reply: 0, ai_reply: 0 };
-  (linkClicks || []).forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
+  linkClicksRows.forEach(c => { if(c.source in clicksBySource) clicksBySource[c.source]++; });
   const totalClicks = Object.values(clicksBySource).reduce((s, n) => s + n, 0);
 
   // % de seguidores vs. no-seguidores sobre el alcance total de Instagram
@@ -273,7 +300,10 @@ async function renderMetrics(clientId){
   // cuenta, no un total del periodo elegido arriba (semana/mes) -- por eso
   // se calcula aparte, sumando entre todas las cuentas de instagram del
   // cliente por si hubiera mas de una conectada.
-  const igAccounts = igAccountsRaw || [];
+  // Esta sección ya es Instagram-only (la query de arriba ya filtra
+  // .eq('platform','instagram')) -- si eligieron "Facebook" en el selector,
+  // no corresponde mostrarla (paso 5 del plan).
+  const igAccounts = platform === 'facebook' ? [] : (igAccountsRaw || []);
   let followerReach = 0, nonFollowerReach = 0, hasAudienceData = false;
   igAccounts.forEach(acc => {
     const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
@@ -311,14 +341,21 @@ async function renderMetrics(clientId){
       if(new Date(s.date) <= targetDate) weekAgo = s; // se queda con el ultimo que cumple, o sea el mas cercano a 7 dias atras
     }
     return { platform: acc.platform, name: acc.name, count: latest.count, delta: weekAgo ? latest.count - weekAgo.count : null };
-  }).filter(Boolean);
+  }).filter(Boolean).filter(f => platform === 'all' || f.platform === platform);
 
   const el = document.getElementById(`metrics-${clientId}`);
   if(!el) return;
   el.innerHTML = `
-    <div class="period-toggle">
-      <button class="${period==='week'?'active':''}" onclick="setMetricPeriod('${clientId}','week')">Semanal</button>
-      <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('${clientId}','month')">Mensual</button>
+    <div class="period-toggle" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <div style="display:flex; gap:6px;">
+        <button class="${period==='week'?'active':''}" onclick="setMetricPeriod('${clientId}','week')">Semanal</button>
+        <button class="${period==='month'?'active':''}" onclick="setMetricPeriod('${clientId}','month')">Mensual</button>
+      </div>
+      <select onchange="setMetricPlatform('${clientId}', this.value)" style="width:auto;">
+        <option value="all" ${platform==='all'?'selected':''}>Todas las plataformas</option>
+        <option value="facebook" ${platform==='facebook'?'selected':''}>📘 Facebook</option>
+        <option value="instagram" ${platform==='instagram'?'selected':''}>📷 Instagram</option>
+      </select>
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
     <div class="kpi-row kpi-row-5">
@@ -332,8 +369,8 @@ async function renderMetrics(clientId){
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Interacción en publicaciones (${windowLabel}):</div>
     <div class="kpi-row">
       <div class="kpi-card"><div class="kpi-value">${totalComments}</div><div class="kpi-label">💬 Comentarios</div></div>
-      <div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">🔁 Compartidos</div></div>
-      <div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>
+      ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔁 Compartidos<br><span style="font-size:10px; font-weight:400;">Instagram no lo reporta vía API</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">🔁 Compartidos</div></div>`}
+      ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔖 Guardados<br><span style="font-size:10px; font-weight:400;">Solo existe para Instagram</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>`}
     </div>
     ${followerCards.length ? `
     <div class="metric-title">Seguidores totales</div>
@@ -388,7 +425,7 @@ async function renderMetrics(clientId){
   renderBarChart(document.getElementById(`chartReplyRate-${clientId}`), replyBuckets, { rate: true });
 }
 
-export { buildPeriodBuckets, computeReportRange, fillBuckets, onReportPeriodChange, renderBarChart, renderHomeView, renderMetrics, sendReportNow, setMetricPeriod };
+export { buildPeriodBuckets, computeReportRange, fillBuckets, onReportPeriodChange, renderBarChart, renderHomeView, renderMetrics, sendReportNow, setMetricPeriod, setMetricPlatform };
 
 // Exposicion a window: estas funciones se llaman desde atributos
 // onclick="..." embebidos en HTML generado dinamicamente (renderPostsList,
@@ -397,3 +434,4 @@ export { buildPeriodBuckets, computeReportRange, fillBuckets, onReportPeriodChan
 window.onReportPeriodChange = onReportPeriodChange;
 window.sendReportNow = sendReportNow;
 window.setMetricPeriod = setMetricPeriod;
+window.setMetricPlatform = setMetricPlatform;
