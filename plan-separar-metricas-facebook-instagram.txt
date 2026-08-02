@@ -1,0 +1,119 @@
+SEPARAR MÉTRICAS FACEBOOK / INSTAGRAM EN "MÉTRICAS"
+(agencia/js/metrics.js + cliente/Cliente.html)
+=====================================================
+
+DIAGNÓSTICO (ya confirmado, no hace falta re-chequear)
+--------------------------------------------------------
+- post_scheduler.py YA trae insights reales de Meta para las dos
+  plataformas (_fetch_facebook_post_insights, _fetch_instagram_reach_and_saved,
+  _fetch_instagram_audience_reach, _fetch_follower_count) y los guarda en
+  socialbot_post_metrics / socialbot_audience_reach / socialbot_follower_snapshots.
+  NO HAY QUE TOCAR EL SCHEDULER.
+
+- Los dos paneles (agencia/js/metrics.js y el loadMetrics() inline de
+  cliente/Cliente.html) leen esas mismas tablas con código casi idéntico.
+  Cualquier cambio hay que replicarlo en LOS DOS ARCHIVOS.
+
+- Columnas de plataforma ya existentes (confirmado en Supabase):
+    socialbot_posts.platform            -> 'facebook' | 'instagram'
+    socialbot_leads.platform            -> 'facebook' | 'instagram'
+    socialbot_interactions_log.platform -> 'facebook' | 'instagram'
+    socialbot_link_clicks               -> NO tiene columna platform directa,
+      pero tiene external_post_id, que hace match con
+      socialbot_posts.external_post_id (ahí sí está platform). Hay que
+      resolverlo con un mapa en JS (post_id -> platform), no con un JOIN de
+      PostgREST porque no hay foreign key formal entre esas dos columnas.
+
+- Secciones que YA vienen separadas por plataforma y no necesitan cambios:
+    "Seguidores totales" (usa socialbot_follower_snapshots + platform)
+    "Audiencia de Instagram: seguidores vs no seguidores" (ya es IG-only,
+      la query ya filtra .eq('platform','instagram'))
+
+- Métricas que solo existen para una plataforma (ya lo dice el código con
+  comentarios): 'saved' (Guardados) es solo Instagram; Facebook no tiene
+  equivalente. Facebook sí tiene 'shares' (Compartidos); Instagram no lo
+  trackea igual, por eso hoy ese KPI en la práctica es ~Facebook-only.
+
+
+PASOS DE IMPLEMENTACIÓN
+--------------------------------------------------------
+
+1) Agregar el selector Facebook/Instagram/Todas en el HTML
+   - agencia/js/metrics.js: buscar dónde arma el HTML de la pestaña
+     Métricas (cerca de donde están los botones SEMANAL/MENSUAL) y agregar
+     un <select> con opciones: "Todas", "Facebook", "Instagram".
+   - cliente/Cliente.html: mismo select en la sección equivalente de
+     loadMetrics()/su HTML, con los strings ya traducidos ES/PT (agregar
+     claves nuevas al diccionario i18n que ya usa el resto del archivo,
+     ej: metricsPlatformAll / metricsPlatformFb / metricsPlatformIg).
+   - Guardar la selección en un objeto de estado por cliente, igual patrón
+     que ya usan con metricPeriod[clientId] (semana/mes). Ej:
+     metricPlatform[clientId] = 'all' | 'facebook' | 'instagram'
+   - onchange del select: volver a llamar a renderMetrics(clientId) /
+     loadMetrics().
+
+2) Incluir "platform" en las queries que ya se hacen
+   En las dos funciones (renderMetrics de agencia, loadMetrics de cliente),
+   agregar platform al .select() de:
+     - socialbot_leads            .select('created_at, status, platform')
+     - socialbot_interactions_log .select('created_at, replied, replied_at, platform')
+     - socialbot_posts            .select('published_at, platform,
+                                     socialbot_post_metrics(likes, comments,
+                                     shares, reach, saved)')
+   (el resto de columnas seleccionadas se mantienen igual, solo se suma
+   platform a cada una)
+
+3) Filtrar client-side según la selección
+   Justo después de recibir leadsRows / postsRows / interactions (antes de
+   los .reduce()/fillBuckets), si metricPlatform[clientId] !== 'all':
+     leadsRows = leadsRows.filter(r => r.platform === metricPlatform[clientId])
+     postsRows = postsRows.filter(p => p.platform === metricPlatform[clientId])
+     interactions = (interactions||[]).filter(r => r.platform === metricPlatform[clientId])
+   Todo lo que sigue (totalLikes, totalComments, buckets de los gráficos,
+   avgResponseMinutes, etc.) ya opera sobre esas listas filtradas sin
+   tocar más código: los totales y gráficos quedan automáticamente
+   separados por plataforma.
+
+4) Resolver socialbot_link_clicks (no tiene platform propio)
+   Antes de calcular clicksBySource, armar un mapa id de post -> platform
+   a partir de postsWithMetrics (que ya se trajo con external_post_id si
+   se agrega esa columna al select de socialbot_posts) y usarlo para
+   filtrar linkClicks por platform cuando corresponda:
+     const platformByExternalId = {};
+     postsWithMetrics.forEach(p => { platformByExternalId[p.external_post_id] = p.platform; });
+     let linkClicksRows = linkClicks || [];
+     if (metricPlatform[clientId] !== 'all') {
+       linkClicksRows = linkClicksRows.filter(
+         c => platformByExternalId[c.external_post_id] === metricPlatform[clientId]
+       );
+     }
+   (agregar external_post_id al select de socialbot_posts si no está ya)
+
+5) Ocultar/avisar en los KPIs que no aplican a la plataforma elegida
+   - Si metricPlatform === 'facebook': ocultar o poner "—" en "Guardados
+     (Instagram)" y en la sección "Audiencia de Instagram" (ya es IG-only).
+   - Si metricPlatform === 'instagram': "Compartidos" probablemente quede
+     siempre en 0 (no es un dato real de Meta para IG) — considerar
+     ocultarlo también en ese caso, o dejarlo con una aclaración chica
+     tipo "Instagram no reporta compartidos vía API".
+   - "Seguidores totales" y el resto de KPIs (Consultas recibidas,
+     Clientes nuevos, Me gusta, Alcance real, Min. resp. promedio,
+     Comentarios) sí aplican a las dos y se filtran solos con el paso 3.
+
+6) Replicar EXACTAMENTE los mismos cambios en cliente/Cliente.html
+   Mismo select, mismo estado, mismos filtros — el código de loadMetrics()
+   ahí es casi un calco de metrics.js, así que es copiar/pegar la misma
+   lógica adaptando nombres de función/estado si difieren.
+
+7) Probar con un cliente que tenga posts en las dos plataformas
+   (Alas Tecno o La Visual Marketing sirven) alternando el selector y
+   verificando que los números cambien coherentemente y que "Todas" sea
+   igual a Facebook + Instagram sumado.
+
+NO HACE FALTA:
+- Tocar post_scheduler.py, content_planner.py, ni ninguna función del
+  scheduler/backend.
+- Tocar migraciones de Supabase (las columnas platform ya existen en
+  todas las tablas necesarias).
+- Agregar ningún endpoint nuevo de Meta Graph API (los datos ya se
+  piden y guardan hoy, para las dos plataformas).
