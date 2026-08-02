@@ -516,6 +516,7 @@ const I18N = {
     audienceTitle: '¿Quién te ve en Instagram? (últimos 28 días)',
     audienceFollowerLabel: '👥 Seguidores', audienceNonFollowerLabel: '🌟 Gente nueva',
     kpiProfileViews: '🔎 Visitas al perfil',
+    kpiEngagementRate: '📈 Engagement real (s/alcance)',
     audienceFootnote: (n) => `Alcance total: ${n.toLocaleString('es')} cuentas.`,
     audienceEmptyMsg: 'Todavía no hay datos de tu audiencia (puede tardar unos días en aparecer).',
     followersTitle: 'Tus seguidores',
@@ -600,6 +601,7 @@ const I18N = {
     audienceTitle: 'Quem te vê no Instagram? (últimos 28 dias)',
     audienceFollowerLabel: '👥 Seguidores', audienceNonFollowerLabel: '🌟 Gente nova',
     kpiProfileViews: '🔎 Visitas ao perfil',
+    kpiEngagementRate: '📈 Engajamento real (s/alcance)',
     audienceFootnote: (n) => `Alcance total: ${n.toLocaleString('pt-BR')} contas.`,
     audienceEmptyMsg: 'Ainda não há dados da sua audiência (pode levar alguns dias para aparecer).',
     followersTitle: 'Seus seguidores',
@@ -1444,7 +1446,7 @@ async function loadMetrics(){
     // Alcance de cuenta (no por post, no depende del periodo elegido arriba)
     // desglosado seguidor/no-seguidor -- ver collect_audience_reach() en
     // post_scheduler.py. Solo se guarda el ultimo snapshot por cuenta.
-    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views)').eq('client_id', currentClient.id).eq('platform', 'instagram'),
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, accounts_engaged)').eq('client_id', currentClient.id).eq('platform', 'instagram'),
     // Historial de seguidores/fans totales (todas las plataformas) -- ver
     // collect_follower_snapshots() en post_scheduler.py.
     sb.from('socialbot_follower_snapshots').select('social_account_id, follower_count, snapshot_date, socialbot_social_accounts!inner(platform, page_name, client_id)').eq('socialbot_social_accounts.client_id', currentClient.id).order('snapshot_date', { ascending: true }),
@@ -1513,6 +1515,7 @@ async function loadMetrics(){
   const igAccounts = (platform === 'facebook' ? [] : (igAccountsRaw || []));
   let followerReach = 0, nonFollowerReach = 0, hasAudienceData = false;
   let totalProfileViews = 0, hasProfileViewsData = false;
+  let totalAccountsEngaged = 0, hasEngagedData = false;
   igAccounts.forEach(acc => {
     const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
     if(row && (row.follower_reach != null || row.non_follower_reach != null)){
@@ -1524,10 +1527,15 @@ async function loadMetrics(){
       hasProfileViewsData = true;
       totalProfileViews += row.profile_views;
     }
+    if(row && row.accounts_engaged != null){
+      hasEngagedData = true;
+      totalAccountsEngaged += row.accounts_engaged;
+    }
   });
   const totalAudienceReach = followerReach + nonFollowerReach;
   const followerPct = totalAudienceReach ? Math.round((followerReach / totalAudienceReach) * 100) : null;
   const nonFollowerPct = followerPct === null ? null : 100 - followerPct;
+  const engagementRate = (hasEngagedData && totalAudienceReach) ? Math.round((totalAccountsEngaged / totalAudienceReach) * 100) : null;
 
   // Seguidores/fans totales por cuenta + variacion vs. hace 7 dias (ver
   // collect_follower_snapshots() en post_scheduler.py).
@@ -1591,13 +1599,14 @@ async function loadMetrics(){
     ` : ''}
     ${igAccounts.length ? `
     <div class="metric-title">${t('audienceTitle')}</div>
-    ${hasAudienceData || hasProfileViewsData ? `
+    ${hasAudienceData || hasProfileViewsData || hasEngagedData ? `
     <div style="display:flex; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
       ${hasAudienceData ? `
       <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${followerPct}%</div><div class="kpi-label">${t('audienceFollowerLabel')}</div></div>
       <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">${t('audienceNonFollowerLabel')}</div></div>
       ` : ''}
       ${hasProfileViewsData ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${totalProfileViews.toLocaleString(currentLang === 'pt' ? 'pt-BR' : 'es')}</div><div class="kpi-label">${t('kpiProfileViews')}</div></div>` : ''}
+      ${engagementRate !== null ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${engagementRate}%</div><div class="kpi-label">${t('kpiEngagementRate')}</div></div>` : ''}
     </div>
     ${hasAudienceData ? `
     <div style="height:8px; border-radius:99px; overflow:hidden; display:flex; margin-bottom:6px;">
