@@ -513,6 +513,7 @@ const I18N = {
     reachFootnote: 'Todavía no tenemos este dato para algunas publicaciones recientes.',
     interactionLabel: 'Interacción en tus publicaciones:',
     kpiComments: '💬 Comentarios', kpiShares: '🔁 Compartieron', kpiSaved: '🔖 Guardaron (Instagram)',
+    kpiPlays: '▶️ Reproducciones (Reels)', kpiWatchTime: '⏱️ Duración promedio vista',
     audienceTitle: '¿Quién te ve en Instagram? (últimos 28 días)',
     audienceFollowerLabel: '👥 Seguidores', audienceNonFollowerLabel: '🌟 Gente nueva',
     kpiProfileViews: '🔎 Visitas al perfil',
@@ -521,6 +522,8 @@ const I18N = {
     audienceEmptyMsg: 'Todavía no hay datos de tu audiencia (puede tardar unos días en aparecer).',
     followersTitle: 'Tus seguidores',
     followersDelta: (n) => n === null ? '' : ` · ${n >= 0 ? '+' : ''}${n} esta semana`,
+    fbEngagementTitle: 'Engagement de tu página de Facebook (últimos 28 días)',
+    kpiPageEngagement: '📘 Engagement total',
     clicksLabel: (n, w) => `🔗 Clics al link (${n} en total, ${w}):`,
     kpiClicksComment: '💬 Comentarios', kpiClicksDm: '✉️ Mensajes directos', kpiClicksAi: '🤖 Respuesta IA', kpiClicksKeyword: '🔤 Palabra clave',
     chartLeadsTitle: 'Consultas recibidas', chartConvertedTitle: 'Clientes nuevos (convertidos)',
@@ -598,6 +601,7 @@ const I18N = {
     reachFootnote: 'Ainda não temos esse dado para algumas publicações recentes.',
     interactionLabel: 'Interação nas suas publicações:',
     kpiComments: '💬 Comentários', kpiShares: '🔁 Compartilharam', kpiSaved: '🔖 Salvaram (Instagram)',
+    kpiPlays: '▶️ Reproduções (Reels)', kpiWatchTime: '⏱️ Duração média de visualização',
     audienceTitle: 'Quem te vê no Instagram? (últimos 28 dias)',
     audienceFollowerLabel: '👥 Seguidores', audienceNonFollowerLabel: '🌟 Gente nova',
     kpiProfileViews: '🔎 Visitas ao perfil',
@@ -606,6 +610,8 @@ const I18N = {
     audienceEmptyMsg: 'Ainda não há dados da sua audiência (pode levar alguns dias para aparecer).',
     followersTitle: 'Seus seguidores',
     followersDelta: (n) => n === null ? '' : ` · ${n >= 0 ? '+' : ''}${n} essa semana`,
+    fbEngagementTitle: 'Engajamento da sua página do Facebook (últimos 28 dias)',
+    kpiPageEngagement: '📘 Engajamento total',
     clicksLabel: (n, w) => `🔗 Cliques no link (${n} no total, ${w}):`,
     kpiClicksComment: '💬 Comentários', kpiClicksDm: '✉️ Mensagens diretas', kpiClicksAi: '🤖 Resposta IA', kpiClicksKeyword: '🔤 Palavra-chave',
     chartLeadsTitle: 'Consultas recebidas', chartConvertedTitle: 'Clientes novos (convertidos)',
@@ -1438,15 +1444,19 @@ async function loadMetrics(){
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, platform, external_post_id, socialbot_post_metrics(likes, comments, shares, reach, saved)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at, external_post_id').eq('client_id', currentClient.id).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo elegido arriba)
     // desglosado seguidor/no-seguidor -- ver collect_audience_reach() en
     // post_scheduler.py. Solo se guarda el ultimo snapshot por cuenta.
     sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, accounts_engaged)').eq('client_id', currentClient.id).eq('platform', 'instagram'),
+    // Engagement total de Pagina de Facebook (page_post_engagements) -- ver
+    // collect_facebook_page_engagement() en post_scheduler.py. Query
+    // separada de la de arriba (platform='facebook', columna distinta).
+    sb.from('socialbot_social_accounts').select('platform, page_name, socialbot_audience_reach(page_engagement)').eq('client_id', currentClient.id).eq('platform', 'facebook'),
     // Historial de seguidores/fans totales (todas las plataformas) -- ver
     // collect_follower_snapshots() en post_scheduler.py.
     sb.from('socialbot_follower_snapshots').select('social_account_id, follower_count, snapshot_date, socialbot_social_accounts!inner(platform, page_name, client_id)').eq('socialbot_social_accounts.client_id', currentClient.id).order('snapshot_date', { ascending: true }),
@@ -1466,6 +1476,10 @@ async function loadMetrics(){
     // 'saved' solo existe para Instagram -- null = "sin dato todavía", no
     // "0 guardados".
     saved: (p.socialbot_post_metrics && p.socialbot_post_metrics.saved) ?? null,
+    // 'plays'/'avg_watch_time_ms' solo existen para Reels de Instagram (ver
+    // _fetch_instagram_reel_metrics en post_scheduler.py).
+    plays: (p.socialbot_post_metrics && p.socialbot_post_metrics.plays) ?? null,
+    avg_watch_time_ms: (p.socialbot_post_metrics && p.socialbot_post_metrics.avg_watch_time_ms) ?? null,
   }));
   let interactionsRows = interactions || [];
 
@@ -1501,6 +1515,14 @@ async function loadMetrics(){
   const totalReach = postsWithReach.reduce((s, p) => s + p.reach, 0);
   const postsWithSaved = postsRows.filter(p => p.saved !== null);
   const totalSaved = postsWithSaved.reduce((s, p) => s + p.saved, 0);
+  // Reels de Instagram con dato de plays/avg_watch_time -- mismo criterio
+  // que el panel de agencia (ver metrics.js).
+  const postsWithPlays = postsRows.filter(p => p.plays !== null);
+  const totalPlays = postsWithPlays.reduce((s, p) => s + p.plays, 0);
+  const postsWithWatchTime = postsRows.filter(p => p.avg_watch_time_ms !== null);
+  const avgWatchTimeSeconds = postsWithWatchTime.length
+    ? Math.round(postsWithWatchTime.reduce((s, p) => s + p.avg_watch_time_ms, 0) / postsWithWatchTime.length / 1000)
+    : null;
   const windowLabel = period === 'week' ? t('last8weeks') : t('last6months');
 
   // Item 1 de propuestas-30-07-2026.md: clics reales al link del cliente,
@@ -1536,6 +1558,16 @@ async function loadMetrics(){
   const followerPct = totalAudienceReach ? Math.round((followerReach / totalAudienceReach) * 100) : null;
   const nonFollowerPct = followerPct === null ? null : 100 - followerPct;
   const engagementRate = (hasEngagedData && totalAudienceReach) ? Math.round((totalAccountsEngaged / totalAudienceReach) * 100) : null;
+
+  // Engagement de Pagina de Facebook (page_post_engagements) -- ver
+  // collect_facebook_page_engagement() en post_scheduler.py. KPI de cuenta
+  // (una tarjeta por Pagina), no se suma como el resto de esta seccion.
+  const fbAccounts = (platform === 'instagram' ? [] : (fbAccountsRaw || []));
+  const fbEngagementCards = fbAccounts.map(acc => {
+    const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
+    if(!row || row.page_engagement == null) return null;
+    return { name: acc.page_name, value: row.page_engagement };
+  }).filter(Boolean);
 
   // Seguidores/fans totales por cuenta + variacion vs. hace 7 dias (ver
   // collect_follower_snapshots() en post_scheduler.py).
@@ -1586,6 +1618,12 @@ async function loadMetrics(){
       ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiShares')}<br><span style="font-size:10px; font-weight:400;">${t('sharesNotOnIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">${t('kpiShares')}</div></div>`}
       ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiSaved')}<br><span style="font-size:10px; font-weight:400;">${t('savedOnlyIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">${t('kpiSaved')}</div></div>`}
     </div>
+    ${platform !== 'facebook' && postsWithPlays.length ? `
+    <div class="kpi-row">
+      <div class="kpi-card"><div class="kpi-value">${totalPlays.toLocaleString(currentLang === 'pt' ? 'pt-BR' : 'es')}</div><div class="kpi-label">${t('kpiPlays')}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${avgWatchTimeSeconds}s</div><div class="kpi-label">${t('kpiWatchTime')}</div></div>
+    </div>
+    ` : ''}
     ${followerCards.length ? `
     <div class="metric-title">${t('followersTitle')}</div>
     <div class="kpi-row" style="grid-template-columns:repeat(${Math.min(followerCards.length, 3)}, 1fr); margin-bottom:14px;">
@@ -1616,6 +1654,17 @@ async function loadMetrics(){
     <div class="meta-row" style="font-size:11px; margin-bottom:14px;">${t('audienceFootnote')(totalAudienceReach)}</div>
     ` : ''}
     ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">${t('audienceEmptyMsg')}</div>`}
+    ` : ''}
+    ${fbEngagementCards.length ? `
+    <div class="metric-title">${t('fbEngagementTitle')}</div>
+    <div class="kpi-row" style="grid-template-columns:repeat(${Math.min(fbEngagementCards.length, 3)}, 1fr); margin-bottom:14px;">
+      ${fbEngagementCards.map(f => `
+        <div class="kpi-card">
+          <div class="kpi-value">${f.value.toLocaleString(currentLang === 'pt' ? 'pt-BR' : 'es')}</div>
+          <div class="kpi-label">${t('kpiPageEngagement')} · ${f.name || 'Facebook'}</div>
+        </div>
+      `).join('')}
+    </div>
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('clicksLabel')(totalClicks, windowLabel)}</div>
     <div class="kpi-row kpi-row-4">
