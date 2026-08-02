@@ -525,6 +525,7 @@ const I18N = {
     fbEngagementTitle: 'Engagement de tu página de Facebook (últimos 28 días)',
     kpiPageEngagement: '📘 Engagement total',
     clicksLabel: (n, w) => `🔗 Clics al link (${n} en total, ${w}):`,
+    kpiTotalClicks: '🔗 Clics al link',
     kpiClicksComment: '💬 Comentarios', kpiClicksDm: '✉️ Mensajes directos', kpiClicksAi: '🤖 Respuesta IA', kpiClicksKeyword: '🔤 Palabra clave',
     chartLeadsTitle: 'Consultas recibidas', chartConvertedTitle: 'Clientes nuevos (convertidos)',
     chartLikesTitle: 'Me gusta en publicaciones', chartPostsTitle: 'Publicaciones', chartReplyTitle: 'Tasa de respuesta automática (%)',
@@ -613,6 +614,7 @@ const I18N = {
     fbEngagementTitle: 'Engajamento da sua página do Facebook (últimos 28 dias)',
     kpiPageEngagement: '📘 Engajamento total',
     clicksLabel: (n, w) => `🔗 Cliques no link (${n} no total, ${w}):`,
+    kpiTotalClicks: '🔗 Cliques no link',
     kpiClicksComment: '💬 Comentários', kpiClicksDm: '✉️ Mensagens diretas', kpiClicksAi: '🤖 Resposta IA', kpiClicksKeyword: '🔤 Palavra-chave',
     chartLeadsTitle: 'Consultas recebidas', chartConvertedTitle: 'Clientes novos (convertidos)',
     chartLikesTitle: 'Curtidas nas publicações', chartPostsTitle: 'Publicações', chartReplyTitle: 'Taxa de resposta automática (%)',
@@ -1667,11 +1669,14 @@ async function loadMetrics(){
     </div>
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('clicksLabel')(totalClicks, windowLabel)}</div>
-    <div class="kpi-row kpi-row-4">
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}</div><div class="kpi-label">${t('kpiClicksComment')}</div></div>
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.dm_reply}</div><div class="kpi-label">${t('kpiClicksDm')}</div></div>
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.ai_reply}</div><div class="kpi-label">${t('kpiClicksAi')}</div></div>
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.fallback_reply}</div><div class="kpi-label">${t('kpiClicksKeyword')}</div></div>
+    <!-- El desglose por canal (comentario/DM/IA/palabra clave) se quita del panel
+         del cliente a proposito: es detalle interno de como el bot categoriza el
+         clic, no un resultado. El total ya queda dicho en el meta-row de arriba;
+         se muestra ademas como card para que no quede solo como texto chico. Ese
+         desglose SI se mantiene en el panel de agencia (metrics.js) porque ahi
+         sirve para optimizar el enrutamiento de las respuestas. -->
+    <div class="kpi-row" style="grid-template-columns:1fr; margin-bottom:14px;">
+      <div class="kpi-card"><div class="kpi-value">${totalClicks}</div><div class="kpi-label">${t('kpiTotalClicks')}</div></div>
     </div>
     <div class="card">
       <div class="metric-title">${t('chartLeadsTitle')}</div>
@@ -1689,16 +1694,15 @@ async function loadMetrics(){
       <div class="metric-title">${t('chartPostsTitle')}</div>
       <div id="chartPosts"></div>
     </div>
-    <div class="card">
-      <div class="metric-title">${t('chartReplyTitle')}</div>
-      <div id="chartReplyRate"></div>
-    </div>
+    <!-- Se saca a proposito el chart "Tasa de respuesta automatica (%)": es
+         info operativa de como funciona el bot puertas adentro, no un
+         resultado para mostrarle al cliente. Sigue estando en el panel de
+         agencia (metrics.js), donde SI tiene sentido para monitorear el bot. -->
   `;
   renderBarChart(document.getElementById('chartLeads'), leadsBuckets);
   renderBarChart(document.getElementById('chartConverted'), convertedBuckets);
   renderBarChart(document.getElementById('chartLikes'), likesBuckets, { sum: true });
   renderBarChart(document.getElementById('chartPosts'), postsBuckets);
-  renderBarChart(document.getElementById('chartReplyRate'), replyBuckets, { rate: true });
 }
 
 // ---------------------------------------------------------------------------
