@@ -210,7 +210,7 @@ async function renderMetrics(clientId){
     // de arriba) desglosado seguidor/no-seguidor -- ver
     // collect_audience_reach() en post_scheduler.py. Solo se guarda el
     // ultimo snapshot por cuenta, así que no hace falta filtrar por fecha.
-    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, accounts_engaged, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
     // Historial de seguidores/fans totales (todas las plataformas) -- ver
     // collect_follower_snapshots() en post_scheduler.py. Tampoco depende
     // del periodo de arriba: se pide todo el historial guardado (como
@@ -306,6 +306,7 @@ async function renderMetrics(clientId){
   const igAccounts = platform === 'facebook' ? [] : (igAccountsRaw || []);
   let followerReach = 0, nonFollowerReach = 0, hasAudienceData = false;
   let totalProfileViews = 0, hasProfileViewsData = false;
+  let totalAccountsEngaged = 0, hasEngagedData = false;
   igAccounts.forEach(acc => {
     const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
     if(row && (row.follower_reach != null || row.non_follower_reach != null)){
@@ -317,10 +318,18 @@ async function renderMetrics(clientId){
       hasProfileViewsData = true;
       totalProfileViews += row.profile_views;
     }
+    if(row && row.accounts_engaged != null){
+      hasEngagedData = true;
+      totalAccountsEngaged += row.accounts_engaged;
+    }
   });
   const totalAudienceReach = followerReach + nonFollowerReach;
   const followerPct = totalAudienceReach ? Math.round((followerReach / totalAudienceReach) * 100) : null;
   const nonFollowerPct = followerPct === null ? null : 100 - followerPct;
+  // % de cuentas unicas que interactuaron sobre el alcance total -- solo
+  // se puede calcular si tenemos ambos datos (accounts_engaged y el
+  // alcance de cuenta desglosado).
+  const engagementRate = (hasEngagedData && totalAudienceReach) ? Math.round((totalAccountsEngaged / totalAudienceReach) * 100) : null;
 
   // Seguidores/fans totales por cuenta + variacion vs. hace 7 dias (ver
   // collect_follower_snapshots() en post_scheduler.py). Agrupamos los
@@ -397,13 +406,14 @@ async function renderMetrics(clientId){
     </div>
     ${igAccounts.length ? `
     <div class="metric-title">Audiencia de Instagram: seguidores vs. no seguidores (últimos 28 días)</div>
-    ${hasAudienceData || hasProfileViewsData ? `
+    ${hasAudienceData || hasProfileViewsData || hasEngagedData ? `
     <div style="display:flex; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
       ${hasAudienceData ? `
       <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${followerPct}%</div><div class="kpi-label">👥 Seguidores</div></div>
       <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">🌐 No seguidores</div></div>
       ` : ''}
       ${hasProfileViewsData ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${totalProfileViews.toLocaleString('es')}</div><div class="kpi-label">🔎 Visitas al perfil</div></div>` : ''}
+      ${engagementRate !== null ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${engagementRate}%</div><div class="kpi-label">📈 Engagement real (s/alcance)</div></div>` : ''}
     </div>
     ${hasAudienceData ? `
     <div style="height:8px; border-radius:99px; overflow:hidden; display:flex; margin-bottom:6px;">
