@@ -35,6 +35,10 @@
     <button type="button" class="icon-btn add-client-btn" title="Nuevo cliente" onclick="openNewClientModal()">+</button>
   </div>
   <div class="right">
+    <button type="button" class="icon-btn" id="saludTopbarBtn" title="Salud de clientes" aria-label="Salud de clientes (todos los clientes)" onclick="switchView('salud')" style="position:relative;">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      <span id="saludBadge" style="display:none; position:absolute; top:-6px; right:-6px; background:var(--panel,#1a1a1a); border:1px solid var(--line,#333); border-radius:99px; font-size:10px; line-height:1; padding:2px 5px; white-space:nowrap;">0</span>
+    </button>
     <span class="tag" id="userTag"></span>
     <button type="button" onclick="goToCrearApp()" style="padding:6px 14px; font-size:11px;">Crear Publicación</button>
     <button onclick="logout()" class="secondary" style="padding:6px 14px; font-size:11px;">Salir</button>
@@ -136,6 +140,12 @@
       <h2>Inicio</h2>
       <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">Última publicación del cliente seleccionado, tal como se ve en sus redes.</p>
       <div id="homeList"></div>
+    </section>
+
+    <section class="view-section" id="view-salud" style="display:none;">
+      <h2>Salud de clientes</h2>
+      <p class="section-hint" style="color:var(--muted); font-size:13px; margin:-10px 0 16px;">Compara esta semana vs. la anterior en 7 métricas clave, por cliente. 🔴 la mayoría bajó · 🟡 se mantuvo · 🟢 la mayoría creció. Requiere 2 semanas cerradas de datos (recién disponible a partir de la 2ª semana de uso).</p>
+      <div id="saludList"></div>
     </section>
 
     <section class="view-section" id="view-clientes" style="display:none;">
