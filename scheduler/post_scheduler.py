@@ -682,7 +682,40 @@ def _fetch_facebook_shares(post_id, access_token):
         return 0
 
 
-def fetch_post_metrics(platform, external_id, access_token):
+def _fetch_instagram_reel_metrics(media_id, access_token):
+    """
+    'plays' (cuantas veces se reprodujo) e 'ig_reels_avg_watch_time' (tiempo
+    promedio de reproduccion, en milisegundos) de un Reel puntual. Estas dos
+    metricas SOLO existen para media_type='REELS' -- pedirlas sobre una
+    imagen o un carrusel devuelve error de Meta, por eso solo se llama a
+    esta funcion cuando ya se sabe que el post es un Reel (ver
+    fetch_post_metrics).
+
+    Juntas dicen si la gente ve el video completo o lo abandona a los
+    primeros segundos -- dato que hasta ahora no se pedia para ningun tipo
+    de post.
+
+    Devuelve (plays, avg_watch_time_ms). Best-effort: si Meta no tiene el
+    dato todavia (reel muy reciente) o el permiso no alcanza, devuelve
+    (None, None) en vez de cortar la corrida.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}/insights",
+            params={"metric": "plays,ig_reels_avg_watch_time", "access_token": access_token},
+            timeout=30,
+        )
+        r.raise_for_status()
+        values = {}
+        for d in r.json().get("data", []):
+            if d.get("values"):
+                values[d["name"]] = d["values"][0]["value"]
+        return values.get("plays"), values.get("ig_reels_avg_watch_time")
+    except Exception:
+        return None, None
+
+
+def fetch_post_metrics(platform, external_id, access_token, media_type=None):
     """
     Devuelve un dict {likes, comments, shares, reach, impressions, saved} o
     None si no se pudo traer nada (post borrado, token vencido, etc. -- se
@@ -770,7 +803,7 @@ def collect_post_metrics():
                 f"metrics_last_fetch_attempt.is.null,"
                 f"metrics_last_fetch_attempt.lt.{retry_cutoff})"
             ),
-            "select": "id,external_post_id,social_account_id,metrics_fetch_failures",
+            "select": "id,external_post_id,social_account_id,metrics_fetch_failures,media_type",
         },
     )
     if not posts:
@@ -804,7 +837,7 @@ def collect_post_metrics():
                 continue
             account = accounts[0]
 
-            metrics = fetch_post_metrics(account["platform"], clean_id, account["page_access_token"])
+            metrics = fetch_post_metrics(account["platform"], clean_id, account["page_access_token"], media_type=post.get("media_type"))
             if metrics is None:
                 _record_fetch_failure()
                 continue
