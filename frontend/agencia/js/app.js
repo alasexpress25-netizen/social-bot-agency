@@ -11,6 +11,7 @@ import { hashtagEditorHtml, hashtagsToArray, renderHashtagChips } from "./hashta
 import { applyClientFilter } from "./ui-chrome.js";
 import { updateArchivosHostStorageBadge } from "./archivos-host.js";
 import { renderHomeView, renderMetrics } from "./metrics.js";
+import { loadClientHealth } from "./client-health.js";
 import { buildPlanCalendarHtml } from "./content-plan.js";
 import { renderPostsList } from "./posts.js";
 // Los siguientes imports son por efecto lateral: cada uno de estos
@@ -81,6 +82,7 @@ async function loadClients(){
   updateClientesBadge();
   updateReferidosBadge();
   updateQuejasBadge();
+  loadClientHealth(clients);
 
   // A partir de acá, todo lo pesado (cuentas, IA, horarios, medios, reglas,
   // posts, leads, plan de contenido, reseñas) se pide y se renderiza SOLO
