@@ -1938,28 +1938,39 @@ async function renderMetrics(clientId){
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes, reach)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, socialbot_post_metrics(likes, comments, shares, reach, saved)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at').eq('client_id', clientId).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo semanal/mensual
     // de arriba) desglosado seguidor/no-seguidor -- ver
     // collect_audience_reach() en post_scheduler.py. Solo se guarda el
     // ultimo snapshot por cuenta, así que no hace falta filtrar por fecha.
     sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
+    // Historial de seguidores/fans totales (todas las plataformas) -- ver
+    // collect_follower_snapshots() en post_scheduler.py. Tampoco depende
+    // del periodo de arriba: se pide todo el historial guardado (como
+    // mucho 1 fila por cuenta por dia) y se calcula la variacion semanal
+    // aca abajo, comparando el ultimo contra el mas cercano a 7 dias atras.
+    sb.from('socialbot_follower_snapshots').select('social_account_id, follower_count, snapshot_date, socialbot_social_accounts!inner(platform, page_name, client_id)').eq('socialbot_social_accounts.client_id', clientId).order('snapshot_date', { ascending: true }),
   ]);
 
   const leadsRows = leads || [];
   const postsRows = (postsWithMetrics||[]).map(p => ({
     published_at: p.published_at,
     likes: (p.socialbot_post_metrics && p.socialbot_post_metrics.likes) || 0,
+    comments: (p.socialbot_post_metrics && p.socialbot_post_metrics.comments) || 0,
+    shares: (p.socialbot_post_metrics && p.socialbot_post_metrics.shares) || 0,
     // Punto 11 de propuestas-30-07-2026.md: reach real (ya corregido el bug
     // de Facebook que lo dejaba en null). Puede venir null si a esta altura
     // todavia no se pudo pedir la metrica -- se cuenta como 0 en la suma,
     // pero se guarda aparte cuantos posts SI tienen dato para no mostrar
     // "0 de alcance" cuando en realidad es "todavia no tenemos el dato".
     reach: (p.socialbot_post_metrics && p.socialbot_post_metrics.reach) ?? null,
+    // 'saved' solo existe para Instagram (Facebook no tiene equivalente) --
+    // mismo criterio que reach: null = "sin dato todavia", no "0 guardados".
+    saved: (p.socialbot_post_metrics && p.socialbot_post_metrics.saved) ?? null,
   }));
 
   const leadsBuckets = fillBuckets(buildPeriodBuckets(period), leadsRows, 'created_at');
@@ -1976,7 +1987,14 @@ async function renderMetrics(clientId){
   const totalLeads = leadsRows.length;
   const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
+  const totalComments = postsRows.reduce((s, p) => s + p.comments, 0);
+  const totalShares = postsRows.reduce((s, p) => s + p.shares, 0);
   const totalReach = postsWithReach.reduce((s, p) => s + p.reach, 0);
+  // 'saved' solo aplica a Instagram -- igual que con reach, separamos
+  // cuantos posts tienen el dato realmente (no todos son de Instagram, y a
+  // los de Facebook ese campo directamente no les corresponde).
+  const postsWithSaved = postsRows.filter(p => p.saved !== null);
+  const totalSaved = postsWithSaved.reduce((s, p) => s + p.saved, 0);
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
   const repliedWithTimes = (interactions || []).filter(r => r.replied && r.replied_at && r.created_at);
@@ -2011,6 +2029,32 @@ async function renderMetrics(clientId){
   const followerPct = totalAudienceReach ? Math.round((followerReach / totalAudienceReach) * 100) : null;
   const nonFollowerPct = followerPct === null ? null : 100 - followerPct;
 
+  // Seguidores/fans totales por cuenta + variacion vs. hace 7 dias (ver
+  // collect_follower_snapshots() en post_scheduler.py). Agrupamos los
+  // snapshots (ya vienen ordenados por fecha ascendente) por cuenta, y para
+  // cada una buscamos el ultimo valor y el snapshot mas cercano a 7 dias
+  // antes de ese ultimo (no necesariamente exacto -- puede faltar algun
+  // dia si el scheduler no corrio o la cuenta se conecto hace poco).
+  const snapshotsByAccount = {};
+  (followerSnapshotsRaw || []).forEach(row => {
+    const acc = row.socialbot_social_accounts;
+    if(!acc) return;
+    if(!snapshotsByAccount[row.social_account_id]) snapshotsByAccount[row.social_account_id] = { platform: acc.platform, name: acc.page_name, snaps: [] };
+    snapshotsByAccount[row.social_account_id].snaps.push({ date: row.snapshot_date, count: row.follower_count });
+  });
+  const followerCards = Object.values(snapshotsByAccount).map(acc => {
+    const snaps = acc.snaps.filter(s => s.count != null);
+    if(!snaps.length) return null;
+    const latest = snaps[snaps.length - 1];
+    const targetDate = new Date(latest.date);
+    targetDate.setDate(targetDate.getDate() - 7);
+    let weekAgo = null;
+    for(const s of snaps){
+      if(new Date(s.date) <= targetDate) weekAgo = s; // se queda con el ultimo que cumple, o sea el mas cercano a 7 dias atras
+    }
+    return { platform: acc.platform, name: acc.name, count: latest.count, delta: weekAgo ? latest.count - weekAgo.count : null };
+  }).filter(Boolean);
+
   const el = document.getElementById(`metrics-${clientId}`);
   if(!el) return;
   el.innerHTML = `
@@ -2027,6 +2071,23 @@ async function renderMetrics(clientId){
       <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
     </div>
     ${postsWithReach.length < postsRows.length ? `<div class="meta-row" style="margin-top:-6px; font-size:11px;">* ${postsRows.length - postsWithReach.length} de ${postsRows.length} posts todavía sin dato de alcance (Meta tarda unos días en calcularlo, o es reciente).</div>` : ''}
+    <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Interacción en publicaciones (${windowLabel}):</div>
+    <div class="kpi-row">
+      <div class="kpi-card"><div class="kpi-value">${totalComments}</div><div class="kpi-label">💬 Comentarios</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">🔁 Compartidos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>
+    </div>
+    ${followerCards.length ? `
+    <div class="metric-title">Seguidores totales</div>
+    <div class="kpi-row" style="grid-template-columns:repeat(${Math.min(followerCards.length, 3)}, 1fr);">
+      ${followerCards.map(f => `
+        <div class="kpi-card">
+          <div class="kpi-value">${f.count.toLocaleString('es')}</div>
+          <div class="kpi-label">${f.platform === 'instagram' ? '📸' : '📘'} ${f.name || (f.platform === 'instagram' ? 'Instagram' : 'Facebook')}${f.delta !== null ? ` · ${f.delta >= 0 ? '+' : ''}${f.delta} esta semana` : ''}</div>
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">🔗 Clics al link (${totalClicks} en total, ${windowLabel}):</div>
     <div class="kpi-row kpi-row-4">
       <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}</div><div class="kpi-label">💬 Comentarios</div></div>
