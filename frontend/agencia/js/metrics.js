@@ -204,7 +204,7 @@ async function renderMetrics(clientId){
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, caption, media_url, permalink_url, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at, external_post_id').eq('client_id', clientId).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo semanal/mensual
     // de arriba) desglosado seguidor/no-seguidor -- ver
@@ -251,6 +251,11 @@ async function renderMetrics(clientId){
     // que reach/saved: null = "sin dato todavia o no es un Reel".
     plays: (p.socialbot_post_metrics && p.socialbot_post_metrics.plays) ?? null,
     avg_watch_time_ms: (p.socialbot_post_metrics && p.socialbot_post_metrics.avg_watch_time_ms) ?? null,
+    // Se usan solo para armar la card de "post destacado" (ver mas abajo) --
+    // caption se recorta ahi mismo, no se toca aca.
+    caption: p.caption,
+    media_url: p.media_url,
+    permalink_url: p.permalink_url,
   }));
   let interactionsRows = interactions || [];
 
@@ -305,6 +310,22 @@ async function renderMetrics(clientId){
   const avgWatchTimeSeconds = postsWithWatchTime.length
     ? Math.round(postsWithWatchTime.reduce((s, p) => s + p.avg_watch_time_ms, 0) / postsWithWatchTime.length / 1000)
     : null;
+
+  // Post destacado del periodo: el de mayor interaccion total (likes +
+  // comments + shares + saved). Se usa interaccion total y no reach/
+  // engagement-rate a proposito -- reach puede venir null (Meta todavia no
+  // lo calculo) y dejaria afuera posts recientes que en realidad son el
+  // mejor candidato; likes/comments nunca vienen null, asi que siempre hay
+  // un post destacado en cuanto existe al menos 1 post con alguna
+  // interaccion. Empate -> queda el primero encontrado (orden de llegada).
+  let topPost = null, topScore = -1;
+  postsRows.forEach(p => {
+    const score = p.likes + p.comments + p.shares + (p.saved || 0);
+    if (score > topScore) { topScore = score; topPost = p; }
+  });
+  // No tiene sentido destacar un post con 0 interacciones (recien publicado,
+  // o de verdad no funciono) -- en ese caso no se muestra ninguna card.
+  if (topPost && topScore <= 0) topPost = null;
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
   const repliedWithTimes = interactionsRows.filter(r => r.replied && r.replied_at && r.created_at);
@@ -418,6 +439,27 @@ async function renderMetrics(clientId){
       <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
     </div>
     ${postsWithReach.length < postsRows.length ? `<div class="meta-row" style="margin-top:-6px; font-size:11px;">* ${postsRows.length - postsWithReach.length} de ${postsRows.length} posts todavía sin dato de alcance (Meta tarda unos días en calcularlo, o es reciente).</div>` : ''}
+    ${topPost ? `
+    <div class="card" style="display:flex; gap:12px; align-items:flex-start; margin-bottom:14px;">
+      <div style="font-size:28px; line-height:1;">🏆</div>
+      <div style="flex:1; min-width:0;">
+        <div class="metric-title" style="margin:0 0 4px;">Post destacado (${windowLabel})</div>
+        <div style="font-size:13px; color:var(--muted); margin-bottom:6px;">
+          ${topPost.platform === 'instagram' ? '📸 Instagram' : '📘 Facebook'}${topPost.media_type === 'video' ? ' · 🎬 Video/Reel' : ''}
+          ${topPost.caption ? ' — ' + topPost.caption.slice(0, 100) + (topPost.caption.length > 100 ? '...' : '') : ''}
+        </div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:13px;">
+          <span>❤️ ${topPost.likes}</span>
+          <span>💬 ${topPost.comments}</span>
+          ${topPost.platform === 'facebook' ? `<span>🔁 ${topPost.shares}</span>` : ''}
+          ${topPost.saved !== null ? `<span>🔖 ${topPost.saved}</span>` : ''}
+          ${topPost.reach !== null ? `<span>👁️ ${topPost.reach}</span>` : ''}
+          ${topPost.plays !== null ? `<span>▶️ ${topPost.plays}</span>` : ''}
+        </div>
+        ${topPost.permalink_url ? `<a href="${topPost.permalink_url}" target="_blank" rel="noopener" style="font-size:12px;">Ver publicación original ↗</a>` : ''}
+      </div>
+    </div>
+    ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Interacción en publicaciones (${windowLabel}):</div>
     <div class="kpi-row">
       <div class="kpi-card"><div class="kpi-value">${totalComments}</div><div class="kpi-label">💬 Comentarios</div></div>
