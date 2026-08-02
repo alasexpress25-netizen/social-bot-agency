@@ -13,6 +13,11 @@ import { updateArchivosHostStorageBadge } from "./archivos-host.js";
 import { renderHomeView, renderMetrics } from "./metrics.js";
 import { buildPlanCalendarHtml } from "./content-plan.js";
 import { renderPostsList } from "./posts.js";
+// Los siguientes imports son por efecto lateral: cada uno de estos
+// archivos termina con window.funcion = funcion para exponer sus
+// funciones a los onclick="..." generados en el HTML (inline y via
+// innerHTML). Sin importarlos aca, esas funciones quedan "not defined"
+// apenas se los llama, aunque el archivo exista y este bien escrito.
 import "./auth.js";     // login, logout, signup
 import "./clients.js";  // createClient, saveAccount, openEditClientModal, etc.
 import "./leads.js";    // approveReferralSuggestion, rejectReferralSuggestion, updateLeadStatus, etc.
@@ -189,11 +194,11 @@ async function loadClients(){
             <div class="card pending" style="margin-top:8px;">
               <div class="card-row" style="margin-bottom:6px;">
                 <label style="font-size:13px; color:var(--muted);">
-                  <input type="checkbox" class="pending-check" data-post-id="${p.id}" style="width:auto; vertical-align:middle;" />
+                  <input aria-label="Seleccionar publicación" type="checkbox" class="pending-check" data-post-id="${p.id}" style="width:auto; vertical-align:middle;" />
                   Seleccionar este post
                 </label>
               </div>
-              <textarea id="agency-caption-${p.id}" rows="3">${(p.caption||'').replace(/</g,'&lt;')}</textarea>
+              <textarea id="agency-caption-${p.id}" aria-label="Texto del post" rows="3">${(p.caption||'').replace(/</g,'&lt;')}</textarea>
               <div class="btn-row">
                 <button class="secondary" onclick="saveCaptionAsAgency('${p.id}')">Guardar texto</button>
                 <button onclick="reviewPostAsAgency('${p.id}', 'approved')">Aprobar</button>
@@ -206,9 +211,9 @@ async function loadClients(){
       ` : ''}
 
       <form class="inline" onsubmit="saveClientPortalAccess(event, '${c.id}')" style="margin-top:8px; max-width:340px;">
-        <input name="client_email" placeholder="Email del cliente (portal)" value="${c.client_email || ''}" />
+        <input aria-label="Email del cliente para el portal" name="client_email" placeholder="Email del cliente (portal)" value="${c.client_email || ''}" />
         <label style="font-size:13px; color:var(--muted);">
-          <input type="checkbox" name="require_approval" ${c.require_approval ? 'checked' : ''} style="width:auto; vertical-align:middle;" />
+          <input aria-label="Requiere aprobación antes de publicar" type="checkbox" name="require_approval" ${c.require_approval ? 'checked' : ''} style="width:auto; vertical-align:middle;" />
           El cliente debe aprobar cada post antes de publicarse
         </label>
         <button type="submit" class="secondary">Guardar acceso</button>
@@ -276,7 +281,7 @@ async function loadClients(){
               ${item.status === 'approved' ? ' · <span class="pill">aprobado, se publica solo</span>' : ''}
             </div>
             ${item.based_on ? `<div class="meta-row" style="font-style:italic; margin-bottom:8px;">${item.based_on}</div>` : ''}
-            <textarea id="plan-caption-${item.id}" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
+            <textarea id="plan-caption-${item.id}" aria-label="Texto del post" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
             <label style="font-size:12px; color:var(--muted); display:block; margin-top:8px;">Hashtags de este post (los propuso la IA — editalos, borralos, o agregá los tuyos antes de aprobar)</label>
             ${item.status === 'approved'
               ? `<div class="hashtag-row">${hashtagsToArray(item.hashtags).map(t => `<span class="hashtag-chip" style="padding:3px 12px;">${t}</span>`).join('') || '<span class="meta-row" style="margin-top:0;">sin hashtags</span>'}</div>`
@@ -366,27 +371,27 @@ async function loadClients(){
       </div>
       <form class="inline" onsubmit="saveAi(event, '${c.id}')">
         <div class="grid2">
-          <select name="provider">
+          <select aria-label="Proveedor de IA" name="provider">
             <option value="groq" ${ai.provider==='groq'?'selected':''}>IA (gratis)</option>
             <option value="openai" ${ai.provider==='openai'?'selected':''}>OpenAI</option>
             <option value="claude" ${ai.provider==='claude'?'selected':''}>Claude</option>
           </select>
-          <input name="tone" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
+          <input aria-label="Tono de las respuestas" name="tone" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
         </div>
         <label style="font-size:13px; color:var(--muted);">Límite de respuestas con IA por día — al llegar acá, el bot sigue respondiendo pero con una plantilla fija en vez de generar con IA</label>
-        <input name="daily_ai_reply_limit" type="number" min="1" placeholder="30" value="${ai.daily_ai_reply_limit || ''}" />
+        <input aria-label="Límite diario de respuestas con IA" name="daily_ai_reply_limit" type="number" min="1" placeholder="30" value="${ai.daily_ai_reply_limit || ''}" />
         <label style="font-size:13px; color:var(--muted);">Modelo para el plan semanal de contenido (Fase 6) — independiente del de arriba, para no compartir cuota gratuita con las respuestas automáticas</label>
-        <select name="content_plan_provider">
+        <select aria-label="Proveedor de IA para el plan de contenido" name="content_plan_provider">
           <option value="groq" ${ai.content_plan_provider==='groq'?'selected':''}>IA (gratis)</option>
           <option value="openai" ${ai.content_plan_provider==='openai'?'selected':''}>OpenAI</option>
           <option value="claude" ${ai.content_plan_provider==='claude'?'selected':''}>Claude</option>
         </select>
-        <textarea name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
+        <textarea aria-label="Temas o palabras clave del negocio" name="topics" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
         <label style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando 2-4 propios del tema del día. Si el cliente cargó sus propios hashtags desde su portal, los de él tienen prioridad sobre estos.</label>
         ${hashtagEditorHtml(`hashtags-${c.id}`, ai.default_hashtags)}
         <label style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</label>
-        <textarea name="knowledge_base" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
-        <textarea name="system_prompt" placeholder="Instrucciones para la IA">${ai.system_prompt||''}</textarea>
+        <textarea aria-label="Base de conocimiento" name="knowledge_base" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
+        <textarea aria-label="Instrucciones para la IA" name="system_prompt" placeholder="Instrucciones para la IA">${ai.system_prompt||''}</textarea>
         <button type="submit">Guardar configuración</button>
       </form>
     `;
@@ -463,10 +468,10 @@ async function loadClients(){
         ${sortedSlots.map(s => `
           <div class="slot-card" data-slot-id="${s.id}" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
             <div class="grid2">
-              <input data-field="hour" type="number" min="0" max="23" value="${s.hour}" placeholder="Hora (0-23)" required />
-              <input data-field="minute" type="number" min="0" max="59" value="${s.minute}" placeholder="Minuto" />
+              <input data-field="hour" id="slotHour-${s.id}" name="slotHour-${s.id}" type="number" min="0" max="23" value="${s.hour}" placeholder="Hora (0-23)" aria-label="Hora" required />
+              <input data-field="minute" id="slotMinute-${s.id}" name="slotMinute-${s.id}" type="number" min="0" max="59" value="${s.minute}" placeholder="Minuto" aria-label="Minuto" />
             </div>
-            <select data-field="day_of_week">
+            <select data-field="day_of_week" id="slotDow-${s.id}" name="slotDow-${s.id}" aria-label="Día de la semana">
               <option value="" ${!s.day_of_week ? 'selected' : ''}>Todos los días</option>
               <option value="1" ${s.day_of_week===1?'selected':''}>Lunes</option>
               <option value="2" ${s.day_of_week===2?'selected':''}>Martes</option>
@@ -476,7 +481,7 @@ async function loadClients(){
               <option value="6" ${s.day_of_week===6?'selected':''}>Sábado</option>
               <option value="7" ${s.day_of_week===7?'selected':''}>Domingo</option>
             </select>
-            <label class="meta-row" style="margin-top:0;"><input data-field="active" type="checkbox" ${s.active ? 'checked' : ''} style="width:auto; vertical-align:middle;" /> Activo</label>
+            <label class="meta-row" style="margin-top:0;"><input data-field="active" id="slotActive-${s.id}" name="slotActive-${s.id}" type="checkbox" ${s.active ? 'checked' : ''} style="width:auto; vertical-align:middle;" /> Activo</label>
             <button type="button" class="secondary" title="Eliminar horario" aria-label="Eliminar horario" onclick="deleteSlot('${s.id}', '${c.id}')" style="display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; padding:0;">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="3 6 5 6 21 6"></polyline>
@@ -492,10 +497,10 @@ async function loadClients(){
       </form>
       <form class="inline" onsubmit="addSlot(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
         <div class="grid2">
-          <input name="hour" type="number" min="0" max="23" placeholder="Hora (0-23)" required />
-          <input name="minute" type="number" min="0" max="59" placeholder="Minuto" value="0" />
+          <input aria-label="Hora" name="hour" type="number" min="0" max="23" placeholder="Hora (0-23)" required />
+          <input aria-label="Minuto" name="minute" type="number" min="0" max="59" placeholder="Minuto" value="0" />
         </div>
-        <select name="day_of_week">
+        <select aria-label="Día de la semana" name="day_of_week">
           <option value="">Todos los días</option>
           <option value="1">Lunes</option>
           <option value="2">Martes</option>
@@ -541,15 +546,15 @@ async function loadClients(){
             <span class="pill" style="background:var(--accent-soft); color:var(--gold); font-weight:700; margin-right:6px;">${mediaQueueRank.get(m.id) === 1 ? '▶ Próxima a publicar' : `${mediaQueueRank.get(m.id)}º en la fila`}</span>
             ${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x${m.manual_order != null ? ` · orden manual: ${m.manual_order}` : ''}
           </div>
-          <input name="manual_order" type="number" min="1" step="1" value="${m.manual_order != null ? m.manual_order : ''}" placeholder="Orden manual (opcional, ej: 1). Vacío = automático" />
+          <input aria-label="Orden manual" name="manual_order" type="number" min="1" step="1" value="${m.manual_order != null ? m.manual_order : ''}" placeholder="Orden manual (opcional, ej: 1). Vacío = automático" />
           ${m.media_type === 'carousel' ? `
-          <textarea name="carousel_urls" placeholder="Una URL de imagen por línea (entre 2 y 10)">${(carouselUrlsByAsset[m.id]||[]).join('\n')}</textarea>
+          <textarea aria-label="URLs de imágenes del carrusel" name="carousel_urls" placeholder="Una URL de imagen por línea (entre 2 y 10)">${(carouselUrlsByAsset[m.id]||[]).join('\n')}</textarea>
           ` : `
-          <input name="url" value="${(m.url||'').replace(/"/g,'&quot;')}" placeholder="URL pública del video/imagen (https://...)" />
-          <input name="fb_photo_url" value="${(m.fb_photo_url||'').replace(/"/g,'&quot;')}" placeholder="URL de foto para Facebook (opcional, solo si es video)" />
+          <input aria-label="URL pública del video o imagen" name="url" value="${(m.url||'').replace(/"/g,'&quot;')}" placeholder="URL pública del video/imagen (https://...)" />
+          <input aria-label="URL de foto para Facebook" name="fb_photo_url" value="${(m.fb_photo_url||'').replace(/"/g,'&quot;')}" placeholder="URL de foto para Facebook (opcional, solo si es video)" />
           `}
-          <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez.">${m.caption_override||''}</textarea>
-          <input name="hashtags_override" value="${(m.hashtags_override||'').replace(/"/g,'&quot;')}" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta)" />
+          <textarea aria-label="Caption fijo" name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez.">${m.caption_override||''}</textarea>
+          <input aria-label="Hashtags fijos para este medio" name="hashtags_override" value="${(m.hashtags_override||'').replace(/"/g,'&quot;')}" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta)" />
           <div class="btn-row">
             <button type="submit" class="secondary">Guardar cambios</button>
             <button type="button" onclick="publishMediaNow('${m.id}', '${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')">Publicar ahora</button>
@@ -559,16 +564,16 @@ async function loadClients(){
       `).join('') || '<div class="meta-row">sin medios cargados</div>'}
       <form class="inline" onsubmit="addMedia(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
         <div class="meta-row" style="font-weight:600;">Agregar medio nuevo</div>
-        <select name="media_type" id="newMediaTypeSelect" onchange="toggleMediaTypeFields(this)">
+        <select aria-label="Tipo de medio" name="media_type" id="newMediaTypeSelect" onchange="toggleMediaTypeFields(this)">
           <option value="video">Video / Reel</option>
           <option value="image">Imagen</option>
           <option value="carousel">Carrusel (varias imágenes)</option>
         </select>
-        <input name="url" id="newMediaUrlInput" placeholder="URL pública del video/imagen (https://...)" />
-        <textarea name="carousel_urls" placeholder="Solo para carrusel: una URL de imagen por línea (entre 2 y 10)" style="display:none;"></textarea>
-        <input name="fb_photo_url" placeholder="URL de foto para Facebook (opcional, solo si el medio de arriba es un video). Si la cargás, en Facebook se publica esta foto en vez del video." />
-        <textarea name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez."></textarea>
-        <input name="hashtags_override" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta). Se agregan al final del caption fijo de arriba." />
+        <input aria-label="URL pública del video o imagen" name="url" id="newMediaUrlInput" placeholder="URL pública del video/imagen (https://...)" />
+        <textarea aria-label="URLs del carrusel" name="carousel_urls" placeholder="Solo para carrusel: una URL de imagen por línea (entre 2 y 10)" style="display:none;"></textarea>
+        <input aria-label="URL de foto para Facebook" name="fb_photo_url" placeholder="URL de foto para Facebook (opcional, solo si el medio de arriba es un video). Si la cargás, en Facebook se publica esta foto en vez del video." />
+        <textarea aria-label="Caption fijo" name="caption_override" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez."></textarea>
+        <input aria-label="Hashtags fijos para este medio" name="hashtags_override" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta). Se agregan al final del caption fijo de arriba." />
         <label class="meta-row" style="margin-top:0;">Si el cliente cargó su propio texto/hashtags fijos desde su portal, los del cliente tienen prioridad sobre estos.</label>
         <button type="submit">Agregar medio</button>
       </form>
@@ -584,14 +589,14 @@ async function loadClients(){
       ${(rules||[]).map(r => `
         <form class="inline" onsubmit="updateRule(event, '${r.id}', '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
           <div class="grid2">
-            <input name="keyword" value="${(r.keyword||'').replace(/"/g,'&quot;')}" placeholder="Palabra clave" required />
-            <select name="match_type">
+            <input aria-label="Palabra clave" name="keyword" value="${(r.keyword||'').replace(/"/g,'&quot;')}" placeholder="Palabra clave" required />
+            <select aria-label="Tipo de coincidencia" name="match_type">
               <option value="both" ${r.match_type==='both'?'selected':''}>Comentarios + DMs</option>
               <option value="comment" ${r.match_type==='comment'?'selected':''}>Solo comentarios</option>
               <option value="dm" ${r.match_type==='dm'?'selected':''}>Solo DMs</option>
             </select>
           </div>
-          <textarea name="reply_template" placeholder="Respuesta. Usá {{sales_link}} para el link" required>${r.reply_template||''}</textarea>
+          <textarea aria-label="Plantilla de respuesta" name="reply_template" placeholder="Respuesta. Usá {{sales_link}} para el link" required>${r.reply_template||''}</textarea>
           <div class="grid2">
             <button type="submit">Guardar cambios</button>
             <button type="button" class="secondary" onclick="deleteRule('${r.id}', '${c.id}')">Eliminar</button>
@@ -599,13 +604,13 @@ async function loadClients(){
         </form>
       `).join('') || '<div>sin reglas</div>'}
       <form class="inline" onsubmit="addRule(event, '${c.id}')" style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
-        <input name="keyword" placeholder="Palabra clave (ej: precio, quiero, info)" required />
-        <select name="match_type">
+        <input aria-label="Palabra clave" name="keyword" placeholder="Palabra clave (ej: precio, quiero, info)" required />
+        <select aria-label="Tipo de coincidencia" name="match_type">
           <option value="both">Comentarios + DMs</option>
           <option value="comment">Solo comentarios</option>
           <option value="dm">Solo DMs</option>
         </select>
-        <textarea name="reply_template" placeholder="Respuesta. Usá {{sales_link}} para el link" required></textarea>
+        <textarea aria-label="Plantilla de respuesta" name="reply_template" placeholder="Respuesta. Usá {{sales_link}} para el link" required></textarea>
         <button type="submit">Agregar regla</button>
       </form>
     `;
@@ -618,19 +623,19 @@ async function loadClients(){
     postsDiv.innerHTML = `
       <div class="section-client-heading">${c.name}</div>
       <div class="posts-filter-row" style="margin-bottom:10px;">
-        <select id="postsFilterStatus-${c.id}" onchange="renderPostsList('${c.id}')">
+        <select aria-label="Filtrar por estado" id="postsFilterStatus-${c.id}" onchange="renderPostsList('${c.id}')">
           <option value="all">Todos los estados</option>
           <option value="published">Publicados</option>
           <option value="failed">Fallidos</option>
           <option value="pending">Pendientes</option>
           <option value="publishing">Publicando</option>
         </select>
-        <select id="postsFilterPlatform-${c.id}" onchange="renderPostsList('${c.id}')">
+        <select aria-label="Filtrar por plataforma" id="postsFilterPlatform-${c.id}" onchange="renderPostsList('${c.id}')">
           <option value="all">Todas las plataformas</option>
           <option value="facebook">Facebook</option>
           <option value="instagram">Instagram</option>
         </select>
-        <select id="postsFilterDate-${c.id}" onchange="renderPostsList('${c.id}')">
+        <select aria-label="Filtrar por fecha" id="postsFilterDate-${c.id}" onchange="renderPostsList('${c.id}')">
           <option value="all">Todas las fechas</option>
         </select>
       </div>
@@ -650,14 +655,14 @@ async function loadClients(){
           Enviar resumen de métricas ahora ${c.client_email ? '' : '(cargá un email de portal en la pestaña Clientes primero)'}
         </label>
         <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-          <select id="reportPeriod-${c.id}" onchange="onReportPeriodChange('${c.id}')" style="width:auto;">
+          <select aria-label="Período del reporte" id="reportPeriod-${c.id}" onchange="onReportPeriodChange('${c.id}')" style="width:auto;">
             <option value="this_month">Este mes</option>
             <option value="last_month">Mes pasado</option>
             <option value="last_30_days">Últimos 30 días</option>
             <option value="custom">Personalizado…</option>
           </select>
-          <input type="date" id="reportStart-${c.id}" style="display:none; width:auto;" />
-          <input type="date" id="reportEnd-${c.id}" style="display:none; width:auto;" />
+          <input aria-label="Fecha de inicio" type="date" id="reportStart-${c.id}" style="display:none; width:auto;" />
+          <input aria-label="Fecha de fin" type="date" id="reportEnd-${c.id}" style="display:none; width:auto;" />
           <button type="button" class="secondary" ${c.client_email ? '' : 'disabled'} onclick="sendReportNow('${c.id}')">Enviar resumen</button>
         </div>
       </div>
@@ -696,7 +701,7 @@ async function loadClients(){
               <strong>${l.name || 'Sin nombre'}</strong>
               <div class="meta-row" style="margin-top:2px;">${l.platform} · ${l.contact || 'sin contacto'}</div>
             </div>
-            <select onchange="updateLeadStatus('${l.id}', this.value)">
+            <select id="leadStatus-${l.id}" name="leadStatus-${l.id}" aria-label="Estado del lead" onchange="updateLeadStatus('${l.id}', this.value)">
               <option value="nuevo" ${l.status==='nuevo'?'selected':''}>Nuevo</option>
               <option value="contactado" ${l.status==='contactado'?'selected':''}>Contactado</option>
               <option value="convertido" ${l.status==='convertido'?'selected':''}>Convertido</option>
@@ -749,7 +754,7 @@ async function loadClients(){
             </div>
             <span style="display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; background:${meta.color};">${meta.label}</span>
           </div>
-          <textarea id="referral-msg-${r.id}" ${editable ? '' : 'disabled'} style="width:100%; min-height:70px; margin-top:8px; ${editable ? '' : 'opacity:0.7;'}">${(r.message||'').replace(/</g,'&lt;')}</textarea>
+          <textarea aria-label="Mensaje sugerido para el referido" id="referral-msg-${r.id}" ${editable ? '' : 'disabled'} style="width:100%; min-height:70px; margin-top:8px; ${editable ? '' : 'opacity:0.7;'}">${(r.message||'').replace(/</g,'&lt;')}</textarea>
           ${r.answered_by ? `<div class="meta-row" style="font-size:12px;">Respondido por: ${r.answered_by === 'cliente' ? 'el cliente' : 'la agencia'}</div>` : ''}
           ${r.status === 'failed' && r.send_error ? `<div class="meta-row" style="color:#ef4444; font-size:12px;">Motivo: ${r.send_error}</div>` : ''}
           <div class="meta-row" style="opacity:0.7; font-size:12px; margin-top:2px;">${r.created_at ? new Date(r.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</div>
