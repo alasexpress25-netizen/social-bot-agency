@@ -1470,7 +1470,7 @@ async function loadMetrics(){
   const prevWindowStartIso = new Date(buckets[0].start.getTime() - windowMs).toISOString();
   const prevWindowEndIso = windowStartIso;
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }, { data: engagementSnapshotsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     // caption/media_url/permalink_url: solo se usan para armar la card de
@@ -1492,6 +1492,9 @@ async function loadMetrics(){
     // anterior, solo los campos necesarios para los totales que se comparan.
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', currentClient.id).gte('created_at', prevWindowStartIso).lt('created_at', prevWindowEndIso),
     sb.from('socialbot_posts').select('platform, socialbot_post_metrics(likes, reach)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', prevWindowStartIso).lt('published_at', prevWindowEndIso),
+    // Punto 3: historial diario de engagement rate (ver
+    // collect_engagement_snapshots() en scheduler/metrics_collector.py).
+    sb.from('socialbot_engagement_snapshots').select('snapshot_date, engagement_rate').eq('client_id', currentClient.id).gte('snapshot_date', prevWindowStartIso.slice(0, 10)),
   ]);
 
   let leadsRows = leads || [];
@@ -1621,6 +1624,17 @@ async function loadMetrics(){
   const nonFollowerPct = followerPct === null ? null : 100 - followerPct;
   const engagementRate = (hasEngagedData && totalAudienceReach) ? Math.round((totalAccountsEngaged / totalAudienceReach) * 100) : null;
 
+  // Punto 3: promedio de engagement_rate del periodo anterior (historial
+  // en socialbot_engagement_snapshots) para comparar contra el valor
+  // actual -- mismo criterio que agencia/metrics.js. Sin snapshots
+  // guardados todavia para ese rango (tabla recien creada), simplemente no
+  // se muestra el badge.
+  const prevAvgEngagementRate = (() => {
+    const fromIso = prevWindowStartIso.slice(0, 10), toIso = prevWindowEndIso.slice(0, 10);
+    const vals = (engagementSnapshotsRaw||[]).filter(r => r.engagement_rate !== null && r.snapshot_date >= fromIso && r.snapshot_date < toIso).map(r => r.engagement_rate);
+    return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+  })();
+
   // Engagement de Pagina de Facebook (page_post_engagements) -- ver
   // collect_facebook_page_engagement() en post_scheduler.py. KPI de cuenta
   // (una tarjeta por Pagina), no se suma como el resto de esta seccion.
@@ -1728,7 +1742,7 @@ async function loadMetrics(){
       <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">${t('audienceNonFollowerLabel')}</div></div>
       ` : ''}
       ${hasProfileViewsData ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${totalProfileViews.toLocaleString(currentLang === 'pt' ? 'pt-BR' : 'es')}</div><div class="kpi-label">${t('kpiProfileViews')}</div></div>` : ''}
-      ${engagementRate !== null ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${engagementRate}%</div><div class="kpi-label">${t('kpiEngagementRate')}</div></div>` : ''}
+      ${engagementRate !== null ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${engagementRate}%${prevAvgEngagementRate !== null ? pctDeltaBadge(engagementRate, prevAvgEngagementRate) : ''}</div><div class="kpi-label">${t('kpiEngagementRate')}</div></div>` : ''}
     </div>
     ${hasAudienceData ? `
     <div style="height:8px; border-radius:99px; overflow:hidden; display:flex; margin-bottom:6px;">
