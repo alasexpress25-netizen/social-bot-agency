@@ -201,16 +201,22 @@ async function renderMetrics(clientId){
   const buckets = buildPeriodBuckets(period);
   const windowStartIso = buckets[0].start.toISOString();
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, platform, external_post_id, socialbot_post_metrics(likes, comments, shares, reach, saved)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
+    sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at, external_post_id').eq('client_id', clientId).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo semanal/mensual
     // de arriba) desglosado seguidor/no-seguidor -- ver
     // collect_audience_reach() en post_scheduler.py. Solo se guarda el
     // ultimo snapshot por cuenta, así que no hace falta filtrar por fecha.
     sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, accounts_engaged, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
+    // Engagement total de Pagina de Facebook (page_post_engagements) --
+    // ver collect_facebook_page_engagement() en post_scheduler.py. Query
+    // separada de la de arriba porque esta es platform='facebook' (la de
+    // arriba es Instagram-only) y trae una columna distinta de la misma
+    // tabla (socialbot_audience_reach.page_engagement).
+    sb.from('socialbot_social_accounts').select('platform, page_name, socialbot_audience_reach(page_engagement, period, fetched_at)').eq('client_id', clientId).eq('platform', 'facebook'),
     // Historial de seguidores/fans totales (todas las plataformas) -- ver
     // collect_follower_snapshots() en post_scheduler.py. Tampoco depende
     // del periodo de arriba: se pide todo el historial guardado (como
@@ -236,6 +242,15 @@ async function renderMetrics(clientId){
     // 'saved' solo existe para Instagram (Facebook no tiene equivalente) --
     // mismo criterio que reach: null = "sin dato todavia", no "0 guardados".
     saved: (p.socialbot_post_metrics && p.socialbot_post_metrics.saved) ?? null,
+    // media_type local (image/video/carousel) -- 'video' es lo que
+    // publish_instagram() sube como Reel. Se usa para saber si corresponde
+    // mostrar plays/avg_watch_time_ms (solo existen para Reels).
+    media_type: p.media_type,
+    // 'plays'/'avg_watch_time_ms': solo Reels de Instagram (ver
+    // _fetch_instagram_reel_metrics en post_scheduler.py). Mismo criterio
+    // que reach/saved: null = "sin dato todavia o no es un Reel".
+    plays: (p.socialbot_post_metrics && p.socialbot_post_metrics.plays) ?? null,
+    avg_watch_time_ms: (p.socialbot_post_metrics && p.socialbot_post_metrics.avg_watch_time_ms) ?? null,
   }));
   let interactionsRows = interactions || [];
 
@@ -280,6 +295,16 @@ async function renderMetrics(clientId){
   // los de Facebook ese campo directamente no les corresponde).
   const postsWithSaved = postsRows.filter(p => p.saved !== null);
   const totalSaved = postsWithSaved.reduce((s, p) => s + p.saved, 0);
+  // Reels de Instagram (media_type local === 'video') con dato de
+  // plays/avg_watch_time -- ver _fetch_instagram_reel_metrics en
+  // post_scheduler.py. avg_watch_time_ms se promedia entre Reels (no se
+  // suma, es un promedio de Meta por Reel) y se convierte a segundos.
+  const postsWithPlays = postsRows.filter(p => p.plays !== null);
+  const totalPlays = postsWithPlays.reduce((s, p) => s + p.plays, 0);
+  const postsWithWatchTime = postsRows.filter(p => p.avg_watch_time_ms !== null);
+  const avgWatchTimeSeconds = postsWithWatchTime.length
+    ? Math.round(postsWithWatchTime.reduce((s, p) => s + p.avg_watch_time_ms, 0) / postsWithWatchTime.length / 1000)
+    : null;
   const windowLabel = period === 'week' ? 'últimas 8 semanas' : 'últimos 6 meses';
 
   const repliedWithTimes = interactionsRows.filter(r => r.replied && r.replied_at && r.created_at);
@@ -330,6 +355,19 @@ async function renderMetrics(clientId){
   // se puede calcular si tenemos ambos datos (accounts_engaged y el
   // alcance de cuenta desglosado).
   const engagementRate = (hasEngagedData && totalAudienceReach) ? Math.round((totalAccountsEngaged / totalAudienceReach) * 100) : null;
+
+  // Engagement de Pagina de Facebook (page_post_engagements) -- ver
+  // collect_facebook_page_engagement() en post_scheduler.py. Es un KPI de
+  // cuenta (una tarjeta por Pagina conectada, no un total sumado), igual
+  // criterio del plan que "Seguidores totales" -- por eso no se suma entre
+  // cuentas como el resto de esta seccion. Instagram-only en el selector
+  // no debe mostrarlo (mismo criterio que igAccounts al reves).
+  const fbAccounts = platform === 'instagram' ? [] : (fbAccountsRaw || []);
+  const fbEngagementCards = fbAccounts.map(acc => {
+    const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
+    if(!row || row.page_engagement == null) return null;
+    return { name: acc.page_name, value: row.page_engagement };
+  }).filter(Boolean);
 
   // Seguidores/fans totales por cuenta + variacion vs. hace 7 dias (ver
   // collect_follower_snapshots() en post_scheduler.py). Agrupamos los
@@ -386,6 +424,12 @@ async function renderMetrics(clientId){
       ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔁 Compartidos<br><span style="font-size:10px; font-weight:400;">Instagram no lo reporta vía API</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">🔁 Compartidos</div></div>`}
       ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔖 Guardados<br><span style="font-size:10px; font-weight:400;">Solo existe para Instagram</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>`}
     </div>
+    ${platform !== 'facebook' && postsWithPlays.length ? `
+    <div class="kpi-row">
+      <div class="kpi-card"><div class="kpi-value">${totalPlays.toLocaleString('es')}</div><div class="kpi-label">▶️ Reproducciones (Reels)</div></div>
+      <div class="kpi-card"><div class="kpi-value">${avgWatchTimeSeconds}s</div><div class="kpi-label">⏱️ Duración promedio vista</div></div>
+    </div>
+    ` : ''}
     ${followerCards.length ? `
     <div class="metric-title">Seguidores totales</div>
     <div class="kpi-row" style="grid-template-columns:repeat(${Math.min(followerCards.length, 3)}, 1fr);">
@@ -423,6 +467,17 @@ async function renderMetrics(clientId){
     <div class="meta-row" style="font-size:11px; margin-bottom:14px;">Alcance total de la cuenta en el periodo: ${totalAudienceReach.toLocaleString('es')} cuentas.</div>
     ` : ''}
     ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">Todavía no hay datos de audiencia para esta cuenta (Meta puede tardar unos días en tenerlos disponibles, o recién se conectó).</div>`}
+    ` : ''}
+    ${fbEngagementCards.length ? `
+    <div class="metric-title">Audiencia de Facebook: engagement de página (últimos 28 días)</div>
+    <div class="kpi-row" style="grid-template-columns:repeat(${Math.min(fbEngagementCards.length, 3)}, 1fr);">
+      ${fbEngagementCards.map(f => `
+        <div class="kpi-card">
+          <div class="kpi-value">${f.value.toLocaleString('es')}</div>
+          <div class="kpi-label">📘 ${f.name || 'Facebook'} · engagement total</div>
+        </div>
+      `).join('')}
+    </div>
     ` : ''}
     <div class="metric-title">Consultas recibidas</div>
     <div id="chartLeads-${clientId}"></div>
