@@ -7,7 +7,8 @@
 import { sb } from "./state.js";
 import { boot } from "./app.js";
 
-async function login(){
+async function login(event){
+  if(event) event.preventDefault(); // ahora se llama desde <form onsubmit>, no un boton suelto
   const email = document.getElementById('email').value;
   const password = document.getElementById('password').value;
   const { error } = await sb.auth.signInWithPassword({ email, password });
