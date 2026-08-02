@@ -1,0 +1,35 @@
+name: Recolectar métricas (posts, audiencia, engagement)
+
+# Separado de post_scheduler.py el 02/08/2026: la recoleccion de metricas
+# (likes/comments/shares/reach/saved/plays de posts, alcance de cuenta
+# seguidor/no-seguidor, engagement de pagina de Facebook, snapshots de
+# seguidores) vivia dentro de post_scheduler.py y corria cada 15 minutos
+# antes de publicar -- a medida que crecio la cantidad de posts/clientes
+# empezo a tardar mas de 10 minutos y atrasaba la publicacion real. Estas
+# metricas no necesitan esa frecuencia (reach/alcance de 28 dias no cambia
+# de un momento a otro), asi que quedaron en su propio workflow, cada 30
+# minutos. Ajustar el cron de abajo si con el tiempo conviene espaciarlo
+# mas (o menos).
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}   # permite dispararlo manualmente desde GitHub para probar
+
+jobs:
+  recolectar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r scheduler/requirements.txt
+
+      - name: Recolectar metricas de Meta Graph API
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scheduler/metrics_collector.py
