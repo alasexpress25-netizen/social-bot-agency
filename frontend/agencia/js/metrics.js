@@ -231,7 +231,7 @@ async function renderMetrics(clientId){
     // de arriba) desglosado seguidor/no-seguidor -- ver
     // collect_audience_reach() en post_scheduler.py. Solo se guarda el
     // ultimo snapshot por cuenta, así que no hace falta filtrar por fecha.
-    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, accounts_engaged, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_reach(follower_reach, non_follower_reach, profile_views, accounts_engaged, online_followers, period, fetched_at)').eq('client_id', clientId).eq('platform', 'instagram'),
     // Engagement total de Pagina de Facebook (page_post_engagements) --
     // ver collect_facebook_page_engagement() en post_scheduler.py. Query
     // separada de la de arriba porque esta es platform='facebook' (la de
@@ -400,6 +400,12 @@ async function renderMetrics(clientId){
   let followerReach = 0, nonFollowerReach = 0, hasAudienceData = false;
   let totalProfileViews = 0, hasProfileViewsData = false;
   let totalAccountsEngaged = 0, hasEngagedData = false;
+  // Punto 4: horario de mayor actividad de la audiencia (online_followers,
+  // ver _fetch_instagram_online_followers en metrics_collector.py) --
+  // sumado hora por hora entre todas las cuentas de Instagram del cliente,
+  // por si hubiera mas de una conectada.
+  const onlineByHour = new Array(24).fill(0);
+  let hasOnlineFollowersData = false;
   igAccounts.forEach(acc => {
     const row = Array.isArray(acc.socialbot_audience_reach) ? acc.socialbot_audience_reach[0] : acc.socialbot_audience_reach;
     if(row && (row.follower_reach != null || row.non_follower_reach != null)){
@@ -415,7 +421,19 @@ async function renderMetrics(clientId){
       hasEngagedData = true;
       totalAccountsEngaged += row.accounts_engaged;
     }
+    if(row && row.online_followers){
+      hasOnlineFollowersData = true;
+      for(let h = 0; h < 24; h++){
+        onlineByHour[h] += row.online_followers[String(h)] || 0;
+      }
+    }
   });
+  // Top 3 horas con mas seguidores conectados, para resaltar como sugerencia.
+  const topHours = onlineByHour
+    .map((count, hour) => ({ hour, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3)
+    .filter(h => h.count > 0);
   const totalAudienceReach = followerReach + nonFollowerReach;
   const followerPct = totalAudienceReach ? Math.round((followerReach / totalAudienceReach) * 100) : null;
   const nonFollowerPct = followerPct === null ? null : 100 - followerPct;
@@ -568,6 +586,22 @@ async function renderMetrics(clientId){
       <div style="height:100%; width:${nonFollowerPct}%; background:var(--line);"></div>
     </div>
     <div class="meta-row" style="font-size:11px; margin-bottom:14px;">Alcance total de la cuenta en el periodo: ${totalAudienceReach.toLocaleString('es')} cuentas.</div>
+    ` : ''}
+    ${hasOnlineFollowersData ? `
+    <div class="metric-title" style="margin-top:4px;">🕒 Horario en que tu audiencia está más conectada (promedio últimos 7 días)</div>
+    <div class="chart-wrap" style="align-items:flex-end;">
+      ${onlineByHour.map((count, hour) => {
+        const max = Math.max(1, ...onlineByHour);
+        const h = Math.max(3, (count / max) * 60);
+        const isTop = topHours.some(t => t.hour === hour);
+        return `
+          <div class="chart-bar-col">
+            <div class="chart-bar" style="height:${h}px; ${isTop ? 'background:var(--gold);' : ''}" title="${hour}hs: ${count}"></div>
+            <div class="chart-label" style="${isTop ? 'color:var(--gold); font-weight:600;' : ''}">${hour}</div>
+          </div>`;
+      }).join('')}
+    </div>
+    ${topHours.length ? `<div class="meta-row" style="font-size:11px; margin-bottom:14px;">Mejores horarios sugeridos para publicar: ${topHours.map(t => `${t.hour}hs`).join(', ')} (ver pestaña "Horarios").</div>` : ''}
     ` : ''}
     ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">Todavía no hay datos de audiencia para esta cuenta (Meta puede tardar unos días en tenerlos disponibles, o recién se conectó).</div>`}
     ` : ''}
