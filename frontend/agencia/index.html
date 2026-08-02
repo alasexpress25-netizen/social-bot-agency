@@ -375,6 +375,7 @@
     </p>
     <form class="inline" onsubmit="confirmDeleteClient(event)">
       <input type="hidden" id="deleteClientId" />
+      <input type="email" id="deleteClientUsername" name="username" autocomplete="username" style="display:none" aria-hidden="true" tabindex="-1" />
       <label style="font-size:13px; color:var(--muted);">Ingresá tu contraseña para confirmar</label>
       <input type="password" id="deleteClientPassword" placeholder="Tu contraseña" required autocomplete="current-password" />
       <div id="deleteClientError" class="meta-row" style="color:var(--warn); display:none;"></div>
