@@ -19,6 +19,7 @@ function hashtagEditorHtml(fieldId, hashtagsStr){
     <input type="hidden" name="default_hashtags" id="${fieldId}" value="${(hashtagsStr||'').replace(/"/g,'&quot;')}" />
     <div class="hashtag-row" id="${fieldId}-chips"></div>
     <div class="hashtag-add-row">
+      <label class="sr-only" for="${fieldId}-input">Agregar hashtag</label>
       <input type="text" id="${fieldId}-input" aria-label="Agregar hashtag" placeholder="Agregar hashtag (ej: marketing)"
         onkeydown="if(event.key==='Enter'){ event.preventDefault(); addHashtag('${fieldId}'); }" />
       <button type="button" class="secondary" onclick="addHashtag('${fieldId}')">+ Agregar</button>

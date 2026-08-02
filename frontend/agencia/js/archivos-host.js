@@ -349,9 +349,11 @@ function renderArchivosHostRow(file){
   const safeId = (file.url || '').replace(/[^a-zA-Z0-9_-]/g, '_');
   row.innerHTML = `
     <div style="display:flex; align-items:flex-start; gap:10px;">
+      <label class="sr-only" for="archivosHostCheck-${safeId}">Seleccionar ${file.name}</label>
       <input type="checkbox" id="archivosHostCheck-${safeId}" name="archivosHostCheck-${safeId}" aria-label="Seleccionar ${file.name}" class="archivos-host-check" data-url="${file.url}" onchange="onArchivosHostCheckChange()" style="margin-top:4px; flex-shrink:0;" />
       <div style="flex:1; min-width:0;">
         <div class="meta-row">${file.media_type === 'video' ? 'Video' : 'Imagen'} · ${sizeMb} MB · ${fecha}</div>
+        <label class="sr-only" for="archivosHostName-${safeId}">Nombre del archivo</label>
         <input type="text" id="archivosHostName-${safeId}" name="archivosHostName-${safeId}" aria-label="Nombre del archivo" readonly value="${file.name}" title="${file.url}" onclick="this.select()" style="margin-top:6px; width:100%; box-sizing:border-box; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-family:inherit; background:var(--dark); color:var(--white);" />
       </div>
     </div>

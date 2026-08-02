@@ -30,6 +30,7 @@
     <h1>Panel de agencia</h1>
   </div>
   <div class="client-switch-bar">
+    <label class="sr-only" for="clientSelector">Cliente</label>
     <select id="clientSelector" onchange="onClientSelectorChange()" aria-label="Cliente"></select>
     <button type="button" class="icon-btn add-client-btn" title="Nuevo cliente" onclick="openNewClientModal()">+</button>
   </div>
@@ -116,7 +117,9 @@
   <div class="auth-box" id="authBox">
     <p style="color:var(--muted); margin-bottom:18px;">Iniciá sesión para gestionar tus clientes</p>
     <form onsubmit="login(event)">
+      <label class="sr-only" for="email">Email</label>
       <input type="email" id="email" name="email" placeholder="Email" autocomplete="username" aria-label="Email" />
+      <label class="sr-only" for="password">Contraseña</label>
       <input type="password" id="password" name="password" placeholder="Contraseña" autocomplete="current-password" aria-label="Contraseña" />
       <button type="submit" style="width:100%;">Entrar</button>
     </form>
@@ -227,6 +230,7 @@
           lista y usá el botón "Usar como Carrusel".
         </p>
         <form class="inline" onsubmit="uploadFilesToArchivosHost(event)">
+          <label class="sr-only" for="archivosHostFileInput">Seleccionar archivos para subir</label>
           <input type="file" id="archivosHostFileInput" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" multiple required aria-label="Seleccionar archivos para subir" />
           <button type="submit" id="archivosHostFileSubmitBtn">Subir archivo(s)</button>
           <small class="hint">Imágenes: jpg, jpeg, png, webp (máx. 15MB c/u). Videos: mp4, mov (máx. 100MB c/u).</small>
@@ -269,21 +273,28 @@
       <button type="button" class="modal-close" onclick="closeNewClientModal()">✕</button>
     </div>
     <form class="inline" onsubmit="createClient(event)">
+      <label class="sr-only" for="newClientName">Nombre del cliente o negocio</label>
       <input id="newClientName" placeholder="Nombre del cliente / negocio" required aria-label="Nombre del cliente o negocio" />
+      <label class="sr-only" for="newClientLink">Link de venta</label>
       <input id="newClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" aria-label="Link de venta" />
 
       <details>
         <summary>Conectar cuenta de Facebook / Instagram</summary>
         <small class="hint" style="display:block; margin-top:10px;">Opcional, podés cargarla ahora o más tarde desde "Editar cliente". Generá el Page Access Token de larga duración en Graph API Explorer (ver README).</small>
         <div class="grid2">
+          <label class="sr-only" for="newClientPlatform">Plataforma</label>
           <select id="newClientPlatform" aria-label="Plataforma">
             <option value="facebook">Facebook</option>
             <option value="instagram">Instagram</option>
           </select>
+          <label class="sr-only" for="newClientPageName">Nombre de la página</label>
           <input id="newClientPageName" placeholder="Nombre de la página" aria-label="Nombre de la página" />
         </div>
+        <label class="sr-only" for="newClientPageId">Page ID</label>
         <input id="newClientPageId" placeholder="Page ID" aria-label="Page ID" />
+        <label class="sr-only" for="newClientIgId">Instagram Business ID</label>
         <input id="newClientIgId" placeholder="Instagram Business ID (solo si es Instagram)" aria-label="Instagram Business ID" />
+        <label class="sr-only" for="newClientPageToken">Page Access Token</label>
         <input id="newClientPageToken" placeholder="Page Access Token" aria-label="Page Access Token" />
       </details>
 
@@ -300,6 +311,7 @@
       <button type="button" class="modal-close" onclick="closeCameraScriptModal()">✕</button>
     </div>
     <small class="hint" style="display:block; margin-bottom:10px;">Plantilla de 30-45 segundos para ayudar al comerciante que no sabe qué decir frente a la cámara. Se le puede pasar así, solo llena los espacios entre corchetes con su realidad. Editable antes de copiar.</small>
+    <label class="sr-only" for="cameraScriptText">Guion de cámara</label>
     <textarea id="cameraScriptText" rows="16" style="width:100%; font-family:inherit; font-size:13px; line-height:1.5;" aria-label="Guion de cámara"></textarea>
     <div class="card-row" style="margin-top:10px;">
       <button type="button" class="secondary" onclick="copyCameraScript(this)">Copiar guion</button>
@@ -317,8 +329,11 @@
     <form class="inline" onsubmit="saveClientEdit(event)">
       <input type="hidden" id="editClientId" />
       <input type="hidden" id="editClientAccountId" />
+      <label class="sr-only" for="editClientName">Nombre del cliente o negocio</label>
       <input id="editClientName" placeholder="Nombre del cliente / negocio" required aria-label="Nombre del cliente o negocio" />
+      <label class="sr-only" for="editClientLink">Link de venta</label>
       <input id="editClientLink" placeholder="Link de venta (Hotmart, Gumroad, Payhip...)" aria-label="Link de venta" />
+      <label class="sr-only" for="editClientLogoUrl">URL del logo del cliente</label>
       <input id="editClientLogoUrl" placeholder="URL del logo del cliente (para su portal)" aria-label="URL del logo del cliente" />
       <img id="editClientLogoPreview" src="" alt="" style="display:none; max-height:48px; max-width:120px; object-fit:contain; margin-top:-4px;" onerror="this.style.display='none';" onload="this.style.display='block';" />
 
@@ -326,14 +341,19 @@
         <summary>Conectar cuenta de Facebook / Instagram</summary>
         <small class="hint" style="display:block; margin-top:10px;">Generá el Page Access Token de larga duración en Graph API Explorer (ver README).</small>
         <div class="grid2">
+          <label class="sr-only" for="editClientPlatform">Plataforma</label>
           <select id="editClientPlatform" onchange="onEditClientPlatformChange()" aria-label="Plataforma">
             <option value="facebook">Facebook</option>
             <option value="instagram">Instagram</option>
           </select>
+          <label class="sr-only" for="editClientPageName">Nombre de la página</label>
           <input id="editClientPageName" placeholder="Nombre de la página" aria-label="Nombre de la página" />
         </div>
+        <label class="sr-only" for="editClientPageId">Page ID</label>
         <input id="editClientPageId" placeholder="Page ID" aria-label="Page ID" />
+        <label class="sr-only" for="editClientIgId">Instagram Business ID</label>
         <input id="editClientIgId" placeholder="Instagram Business ID (solo si es Instagram)" aria-label="Instagram Business ID" />
+        <label class="sr-only" for="editClientPageToken">Page Access Token</label>
         <input id="editClientPageToken" placeholder="Page Access Token" aria-label="Page Access Token" />
       </details>
 
@@ -344,6 +364,7 @@
           <a href="https://developers.google.com/maps/documentation/places/web-service/place-id" target="_blank">buscador de Place ID de Google</a>
           y pegá acá el ID. Las reseñas de Facebook no necesitan nada extra: se leen con el mismo Page Access Token de arriba.
         </small>
+        <label class="sr-only" for="editClientGooglePlaceId">Google Place ID</label>
         <input id="editClientGooglePlaceId" placeholder="Google Place ID (ej: ChIJN1t_tDeuEmsRUsoyG83frY4)" aria-label="Google Place ID" />
       </details>
 
@@ -355,6 +376,7 @@
           Podés poner el tuyo o el del cliente, el que tenga más sentido para este caso. El mensaje
           siempre se puede editar a mano antes de aprobar.
         </small>
+        <label class="sr-only" for="editClientWhatsapp">WhatsApp para el mensaje de referido</label>
         <input id="editClientWhatsapp" placeholder="Ej: 5548999999999" aria-label="WhatsApp para el mensaje de referido" />
       </details>
 
