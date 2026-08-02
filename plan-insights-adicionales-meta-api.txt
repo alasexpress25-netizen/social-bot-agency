@@ -1,0 +1,149 @@
+INSIGHTS ADICIONALES DE META API QUE HOY NO SE ESTAN USANDO
+(post_scheduler.py + agencia/js/metrics.js + cliente/Cliente.html)
+=====================================================
+
+CONTEXTO
+--------------------------------------------------------
+Ya implementado (no tocar de nuevo): profile_views de cuenta de Instagram
+(_fetch_instagram_profile_views en post_scheduler.py, columna
+socialbot_audience_reach.profile_views, migracion
+0034_audience_profile_views.sql). Sirve de MODELO para el resto de este
+plan: mismo patron de "funcion _fetch_* -> columna nueva en una tabla que
+ya existe -> se pide junto con lo que ya se pide en collect_* -> se
+muestra en los dos paneles con el mismo criterio de siempre (Instagram
+-only o Facebook-only queda en null, nunca rompe nada)".
+
+Quedan 3 metricas por meter, en orden de esfuerzo (de menor a mayor):
+
+
+1) ACCOUNTS_ENGAGED (cuentas de Instagram) -- esfuerzo BAJO
+--------------------------------------------------------
+Que es: cuantas cuentas UNICAS interactuaron (like, comment, save, share)
+con el contenido en la ventana elegida (period=days_28). Con esto se puede
+calcular un % de engagement real (accounts_engaged / reach), en vez de
+sumar likes+comments como proxy indirecto.
+
+Donde: es una metrica de CUENTA (no por post), mismo tipo que
+profile_views y el reach con breakdown -- se pide sobre el mismo
+ig_business_id, en la misma llamada a /insights que ya se usa para
+profile_views (se puede pedir "metric": "profile_views,accounts_engaged"
+en un solo request en vez de dos, para no duplicar llamadas a la API).
+
+Pasos:
+  a) post_scheduler.py: extender _fetch_instagram_profile_views (o
+     renombrarla a algo como _fetch_instagram_account_engagement) para
+     pedir metric=profile_views,accounts_engaged en la misma llamada, y
+     devolver ambos valores. metric_type=total_value, sin breakdown (igual
+     que profile_views).
+  b) collect_audience_reach(): agregar accounts_engaged al payload que ya
+     arma para el upsert en socialbot_audience_reach, con el mismo
+     criterio de "solo se incluye la columna si se pudo traer, para no
+     pisar con null un valor bueno anterior" que ya se uso con
+     profile_views.
+  c) Migracion nueva (0035_...): alter table socialbot_audience_reach add
+     column if not exists accounts_engaged int.
+  d) Frontend (los dos paneles): agregar accounts_engaged al select() de
+     socialbot_audience_reach en la query de audiencia, sumarlo entre
+     cuentas igual que profile_views, y calcular
+     engagementRate = totalAudienceReach ? round(accountsEngaged /
+     totalAudienceReach * 100) : null. Mostrar como KPI nuevo "📈 Engagement
+     real (% del alcance)" junto a Seguidores/No seguidores/Visitas al
+     perfil, oculto si platform==='facebook' (mismo criterio que ya existe
+     para toda esa seccion).
+
+
+2) PLAYS + IG_REELS_AVG_WATCH_TIME (por Reel de Instagram) -- esfuerzo MEDIO
+--------------------------------------------------------
+Que es: 'plays' = cuantas veces se reprodujo el Reel; 'ig_reels_avg_watch_time'
+= tiempo promedio de reproduccion (en ms). Juntas dicen si la gente ve el
+Reel completo o lo abandona a los 2 segundos -- dato que hoy no se pide
+para NINGUN tipo de post.
+
+Solo aplica a media_type='REELS' (no a imagenes ni carruseles) -- por eso
+el esfuerzo es mayor: hay que revisar que tipo de post es cada uno antes
+de pedir la metrica (pedirla sobre un post que no es Reel devuelve error).
+
+Pasos:
+  a) Revisar en post_scheduler.py como se guarda hoy el tipo de media al
+     publicar (publish_instagram / publish_instagram_carousel) -- si ya
+     hay una columna tipo socialbot_posts.media_type o similar que
+     distinga Reels de imagenes/carruseles. Si no existe, hay que
+     agregarla (migracion) y setearla al momento de publicar, porque sin
+     saber que posts son Reels no se puede filtrar antes de pedir la
+     metrica.
+  b) Nueva funcion _fetch_instagram_reel_metrics(media_id, access_token):
+     GET /{media_id}/insights con metric="plays,ig_reels_avg_watch_time",
+     mismo patron best-effort (try/except, devuelve (None, None) si Meta
+     no tiene el dato o el permiso no alcanza) que
+     _fetch_instagram_reach_and_saved.
+  c) fetch_post_metrics(): en la rama de Instagram, si el post es un Reel
+     (media_type === 'REELS'), llamar tambien a
+     _fetch_instagram_reel_metrics y sumar plays/avg_watch_time_ms al
+     dict que ya devuelve (junto a likes/comments/reach/saved).
+  d) Migracion: alter table socialbot_post_metrics add column if not
+     exists plays int, add column if not exists avg_watch_time_ms int.
+  e) Frontend: agregar plays y avg_watch_time_ms al select() de
+     socialbot_post_metrics en las dos queries de posts (agencia y
+     cliente), sumar postsWithPlays/totalPlays igual que se hace hoy con
+     reach/saved (null = "sin dato todavia", no "0"), y agregar 2 KPIs
+     nuevos en la seccion de interaccion: "▶️ Reproducciones (Reels)" y
+     "⏱️ Duracion promedio vista" (convertir avg_watch_time_ms a segundos
+     para mostrar). Mismo criterio de ocultar si platform==='facebook' (no
+     aplica a Facebook) Y ademas si el cliente no publico ningun Reel en
+     la ventana elegida (postsWithPlays.length === 0).
+
+
+3) PAGE_POST_ENGAGEMENTS (cuenta de Facebook, agregado) -- esfuerzo MEDIO
+--------------------------------------------------------
+Que es: engagement total de la PAGINA de Facebook en el periodo (no de un
+post puntual) -- suma de reacciones, comentarios, compartidos y clics de
+TODOS los posts de la pagina en la ventana elegida. Sirve como KPI de
+cuenta (ademas de lo que ya se mide por post individual), parecido en
+espiritu a como "Seguidores totales" es un dato de cuenta separado de
+cada post.
+
+Pasos:
+  a) Nueva funcion en post_scheduler.py, ej.
+     _fetch_facebook_page_engagement(page_id, access_token, period='days_28'):
+     GET /{page_id}/insights con metric="page_post_engagements",
+     period=days_28. Facebook Page Insights (a diferencia de las metricas
+     de post) NO necesita metric_type=total_value -- devuelve
+     directamente values=[{value: N}] por period, se toma el ultimo. Mismo
+     try/except best-effort de siempre.
+  b) Se puede llamar desde collect_audience_reach() (aunque el nombre de
+     esa funcion ya no seria 100% preciso -- evaluar si conviene
+     renombrarla a algo como collect_account_insights() ya que a esta
+     altura del plan mezcla Instagram Y Facebook) o crear una funcion
+     separada collect_facebook_page_engagement() que se corra en el mismo
+     punto del loop (al principio de cada ejecucion del scheduler, junto a
+     collect_post_metrics()).
+  c) Guardar en socialbot_audience_reach (agregando alli una columna
+     page_engagement, aunque el nombre de la tabla tampoco sea 100%
+     preciso ya para cuentas de Facebook) O crear una tabla nueva
+     socialbot_page_insights (social_account_id, page_engagement, period,
+     fetched_at) si se prefiere no seguir sobrecargando
+     socialbot_audience_reach con datos que no son de audiencia
+     seguidor/no-seguidor. Evaluar cual conviene segun cuanto se quiera
+     reusar el codigo de upsert existente.
+  d) Frontend: mostrar como KPI de cuenta (no por post), similar a
+     "Seguidores totales" -- una tarjeta por cada cuenta de Facebook
+     conectada, visible solo si platform==='all' o platform==='facebook'.
+
+
+ORDEN SUGERIDO DE IMPLEMENTACION
+--------------------------------------------------------
+1. accounts_engaged (mismo patron ya probado con profile_views, un solo
+   request adicional reusando la llamada que ya existe)
+2. page_post_engagements (nueva funcion pero simple, sin breakdown ni
+   filtro por tipo de post)
+3. plays + ig_reels_avg_watch_time (el mas laborioso: requiere saber que
+   posts son Reels antes de pedir la metrica, posible migracion para
+   guardar media_type si todavia no existe)
+
+
+NO HACE FALTA (para las 3):
+- Ningun endpoint nuevo de autenticacion ni cambio de permisos de Meta:
+  con los scopes que ya tiene el System User "SocialBot-Publisher" alcanza
+  (mismos permisos que ya usan reach/saved/profile_views).
+- Tocar el frontend de "Archivos en Host" ni ninguna otra pestaña fuera de
+  Metricas.
