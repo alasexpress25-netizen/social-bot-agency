@@ -7,8 +7,11 @@
 // llevan la sesión del usuario logueado.
 //
 // Estrategia:
-//  - Peticiones a supabase.co (API, auth, storage) -> nunca se tocan, van
-//    directo a la red (fetch pass-through, ni siquiera entran al cache).
+//  - Peticiones a otros dominios (Supabase API/auth/storage, Edge
+//    Functions, CDNs, buckets de medios como R2, etc.) -> nunca se
+//    tocan, van directo a la red (fetch pass-through, ni siquiera
+//    entran al cache). Se decide por origin, no por una lista de
+//    dominios a mano.
 //  - Navegación (abrir la app / F5) -> "network first, cache fallback": si
 //    hay internet, siempre trae la versión más nueva del HTML; si no hay
 //    señal, muestra la última copia guardada en vez de un error blanco.
@@ -16,7 +19,7 @@
 //    actualiza en segundo plano" (stale-while-revalidate), para que carguen
 //    instantáneo y a la vez se mantengan al día solos.
 
-const CACHE_NAME = 'lavmk-agencia-v1';
+const CACHE_NAME = 'lavmk-agencia-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -45,14 +48,18 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-function isSupabaseOrExternal(url) {
-  // Nunca cachear ni interceptar: Supabase (datos/auth en vivo), llamadas a
-  // Edge Functions, ni CDNs externos (supabase-js viene de jsdelivr).
-  return (
-    url.hostname.endsWith('supabase.co') ||
-    url.hostname.endsWith('jsdelivr.net') ||
-    url.hostname.endsWith('googleapis.com')
-  );
+function isCrossOrigin(url) {
+  // Cualquier pedido que NO sea del propio dominio del panel pasa de largo,
+  // sin cache ni logica del SW: Supabase (datos/auth en vivo), Edge
+  // Functions, CDNs externos (supabase-js via jsdelivr), y CUALQUIER otro
+  // host de medios (ej: bucket R2 de las imagenes de posts/leads/reseñas).
+  // Antes esto era una lista fija de dominios (supabase.co, jsdelivr.net,
+  // googleapis.com) y no incluia el host de R2 -> el SW intentaba
+  // cachear esas imagenes con su propia logica y la request fallaba
+  // ("Fetch failed loading"). Comparar contra el origin propio es a
+  // prueba de futuros dominios nuevos, no hace falta acordarse de
+  // agregarlos a mano cada vez.
+  return url.origin !== self.location.origin;
 }
 
 self.addEventListener('fetch', (event) => {
@@ -60,7 +67,7 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return; // nunca cachear POST/PUT/DELETE
 
   const url = new URL(request.url);
-  if (isSupabaseOrExternal(url)) return; // deja pasar tal cual, sin SW
+  if (isCrossOrigin(url)) return; // deja pasar tal cual, sin SW
 
   // Navegación (abrir/recargar la app): network-first con fallback a cache.
   if (request.mode === 'navigate') {
