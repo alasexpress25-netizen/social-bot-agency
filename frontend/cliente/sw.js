@@ -3,7 +3,7 @@
 // nada de Supabase (datos dinámicos) ni el propio cliente.html, para evitar
 // que el cliente vea contenido viejo. Solo cachea el "shell" estático
 // (íconos + manifest) que casi nunca cambia.
-const CACHE_NAME = 'lav-shell-v1';
+const CACHE_NAME = 'lav-shell-v2';
 const SHELL_FILES = [
   'icons/icon-192.png',
   'icons/icon-512.png',
