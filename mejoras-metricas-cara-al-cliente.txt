@@ -1,0 +1,110 @@
+MEJORAS DE METRICAS ORIENTADAS A DAR VALOR AL CLIENTE DE LA AGENCIA
+(agencia/js/metrics.js + scheduler/monthly_report.py)
+=====================================================
+
+CONTEXTO
+--------------------------------------------------------
+El panel web de la agencia (renderMetrics() en metrics.js) ya esta
+bastante completo: reach, reels (plays/avg_watch_time_ms, recien
+arreglado el bug de 'plays' deprecado por Meta), engagement rate
+(accounts_engaged), crecimiento semanal de seguidores por cuenta
+(socialbot_follower_snapshots), desglose seguidor/no-seguidor, clics al
+link por canal, engagement de pagina de Facebook (page_post_engagements).
+
+El problema no es falta de datos -- es que el email mensual automatico
+que le llega al cliente (monthly_report.py) quedo MUY atras de todo eso:
+hoy solo manda consultas recibidas, clientes nuevos y me gusta. El
+cliente que solo lee el mail (no entra al panel) nunca ve el resto.
+
+Con eso en mente, 4 mejoras en orden de prioridad (menor a mayor
+esfuerzo):
+
+
+1) ACTUALIZAR monthly_report.py PARA QUE MANDE LO MISMO QUE YA CALCULA
+   renderMetrics() -- esfuerzo BAJO
+--------------------------------------------------------
+Es el gap mas importante: no falta pedirle un dato nuevo a Meta, falta
+que el dato que YA se calcula en el panel llegue tambien al email.
+
+Agregar al cuerpo del mail: reach del periodo, crecimiento de
+seguidores (delta vs. snapshot de hace ~30 dias, mismo criterio que ya
+usa metrics.js con socialbot_follower_snapshots pero comparando contra
+~30 dias en vez de 7), engagement rate (accounts_engaged / alcance) y
+reproducciones de reels si el cliente publico alguno en el mes.
+
+Mismo patron ya usado en el archivo: sb_get() contra las mismas tablas
+que ya consulta metrics.js (socialbot_post_metrics, socialbot_audience_reach,
+socialbot_follower_snapshots), sin agregar dependencias nuevas.
+
+
+2) POST DESTACADO DEL PERIODO ("tu mejor publicacion este mes")
+   -- esfuerzo BAJO
+--------------------------------------------------------
+Ya esta toda la data (likes, comments, reach, saved por post en
+socialbot_post_metrics) pero en ningun lado se resalta cual fue el mejor
+post. Es lo primero que un cliente quiere ver -- "mostrame que funciono"
+-- y es un sort() sobre datos que ya se traen, no requiere pedirle nada
+nuevo a Meta.
+
+Ranking sugerido: por reach, o por una formula simple de engagement
+((likes + comments + saved) / reach) para no favorecer solo a las cuentas
+con mas alcance. Mostrar en una card aparte: imagen/thumbnail, caption
+(recortado), y sus metricas principales. Aplica tanto al panel de
+agencia como al reporte mensual del cliente (punto 1).
+
+
+3) COMPARACION VS. PERIODO ANTERIOR (% de variacion) -- esfuerzo MEDIO
+--------------------------------------------------------
+Hoy todos los KPIs son numeros absolutos ("36 me gusta"). Un cliente
+entiende mucho mejor "36 me gusta (+20% vs. las 8 semanas anteriores)".
+
+Ya esta armado buildPeriodBuckets() en metrics.js -- se trata de correr
+la misma query con el rango anterior (mismo largo de ventana, corrido
+hacia atras) y calcular el delta % para los KPIs principales (leads,
+clientes convertidos, reach, likes, engagement rate). Esto es lo que
+hace que un reporte de agencia se sienta profesional en vez de una lista
+de numeros sueltos sin contexto.
+
+
+4) HORARIO DE MAYOR ACTIVIDAD DE LA AUDIENCIA -- esfuerzo MEDIO
+   (dato nuevo de Meta, no esta pedido todavia)
+--------------------------------------------------------
+GET /{ig-user-id}/insights?metric=online_followers da en que franja
+horaria esta conectada la audiencia de Instagram. Es el tipo de insight
+que un cliente no puede sacar mirando su propia cuenta, y ayuda a
+justificar objetivamente por que la agencia programa los posts a
+determinada hora (horarios.html ya gestiona cuando se publica, esto le
+daria un respaldo de datos a esa decision).
+
+Mismo patron best-effort que el resto de las funciones _fetch_* en
+post_scheduler.py -- se pediria junto con la llamada que ya existe para
+profile_views/accounts_engaged sobre el mismo ig_business_id.
+
+
+0) [YA HECHO] SEGMENTAR QUE VE LA AGENCIA VS. QUE VE EL CLIENTE
+--------------------------------------------------------
+Cliente.html era practicamente un espejo 1:1 de metrics.js (mismos KPIs,
+solo con traduccion es/pt). Se saco del panel del cliente lo que es
+detalle operativo interno del bot (no resultado):
+
+  - Desglose de clics al link por canal (comentario/DM/respuesta IA/
+    palabra clave) -- se reemplazo por un solo KPI agregado "Clics al
+    link". El desglose por canal sigue estando en el panel de agencia,
+    donde sirve para optimizar el enrutamiento de las respuestas.
+  - Chart "Tasa de respuesta automatica (%)" -- se saco por completo del
+    panel del cliente (revela que un bot contesta, es info operativa, no
+    resultado). Sigue en agencia.
+
+Criterio general para futuras metricas nuevas: si el dato mide "que tan
+bien le esta yendo al cliente en redes" -> va a los dos paneles. Si mide
+"como esta funcionando el bot/la automatizacion por dentro" -> agencia
+unicamente.
+
+
+ORDEN SUGERIDO DE IMPLEMENTACION
+--------------------------------------------------------
+1. monthly_report.py al dia con el panel (mayor impacto, menor esfuerzo)
+2. Post destacado del periodo (panel + mail)
+3. Comparacion % vs. periodo anterior
+4. Horario de mayor actividad de audiencia (unico que pide algo nuevo a
+   la API de Meta)
