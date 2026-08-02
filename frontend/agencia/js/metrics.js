@@ -222,7 +222,7 @@ async function renderMetrics(clientId){
   const prevWindowStartIso = new Date(buckets[0].start.getTime() - windowMs).toISOString();
   const prevWindowEndIso = windowStartIso;
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }, { data: engagementSnapshotsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, caption, media_url, permalink_url, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
@@ -250,6 +250,11 @@ async function renderMetrics(clientId){
     // (interactions, link clicks, audiencia) porque esos no se comparan.
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', prevWindowStartIso).lt('created_at', prevWindowEndIso),
     sb.from('socialbot_posts').select('platform, socialbot_post_metrics(likes, reach)').eq('client_id', clientId).eq('status', 'published').gte('published_at', prevWindowStartIso).lt('published_at', prevWindowEndIso),
+    // Punto 3: historial diario de engagement rate (ver
+    // collect_engagement_snapshots() en scheduler/metrics_collector.py) --
+    // socialbot_audience_reach solo tiene el ultimo valor, esta tabla si
+    // permite promediar por periodo y compararlo contra el anterior.
+    sb.from('socialbot_engagement_snapshots').select('snapshot_date, engagement_rate').eq('client_id', clientId).gte('snapshot_date', prevWindowStartIso.slice(0, 10)),
   ]);
 
   let leadsRows = leads || [];
@@ -419,6 +424,19 @@ async function renderMetrics(clientId){
   // alcance de cuenta desglosado).
   const engagementRate = (hasEngagedData && totalAudienceReach) ? Math.round((totalAccountsEngaged / totalAudienceReach) * 100) : null;
 
+  // Punto 3: promedio de engagement_rate (socialbot_engagement_snapshots)
+  // dentro de la ventana actual vs. la anterior -- a diferencia del resto
+  // de los KPIs (que se SUMAN), esto es un promedio de un %, no un total.
+  // Como la tabla recien se empieza a poblar de ahora en mas, es normal
+  // que todavia no haya snapshots de periodos viejos -- en ese caso
+  // simplemente no se muestra el badge (no hay con que comparar).
+  const avgEngagementRate = (rows, fromIso, toIso) => {
+    const vals = (rows||[]).filter(r => r.engagement_rate !== null && r.snapshot_date >= fromIso && r.snapshot_date < toIso).map(r => r.engagement_rate);
+    return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+  };
+  const engagementRateSnapshots = engagementSnapshotsRaw || [];
+  const prevAvgEngagementRate = avgEngagementRate(engagementRateSnapshots, prevWindowStartIso.slice(0, 10), prevWindowEndIso.slice(0, 10));
+
   // Engagement de Pagina de Facebook (page_post_engagements) -- ver
   // collect_facebook_page_engagement() en post_scheduler.py. Es un KPI de
   // cuenta (una tarjeta por Pagina conectada, no un total sumado), igual
@@ -542,7 +560,7 @@ async function renderMetrics(clientId){
       <div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${nonFollowerPct}%</div><div class="kpi-label">🌐 No seguidores</div></div>
       ` : ''}
       ${hasProfileViewsData ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${totalProfileViews.toLocaleString('es')}</div><div class="kpi-label">🔎 Visitas al perfil</div></div>` : ''}
-      ${engagementRate !== null ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${engagementRate}%</div><div class="kpi-label">📈 Engagement real (s/alcance)</div></div>` : ''}
+      ${engagementRate !== null ? `<div class="kpi-card" style="flex:1; min-width:120px;"><div class="kpi-value">${engagementRate}%${prevAvgEngagementRate !== null ? pctDeltaBadge(engagementRate, prevAvgEngagementRate) : ''}</div><div class="kpi-label">📈 Engagement real (s/alcance)</div></div>` : ''}
     </div>
     ${hasAudienceData ? `
     <div style="height:8px; border-radius:99px; overflow:hidden; display:flex; margin-bottom:6px;">
