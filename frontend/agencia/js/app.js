@@ -285,7 +285,7 @@ async function loadClients(){
             ${item.based_on ? `<div class="meta-row" style="font-style:italic; margin-bottom:8px;">${item.based_on}</div>` : ''}
             <label class="sr-only" for="plan-caption-${item.id}">Texto del post</label>
             <textarea id="plan-caption-${item.id}" aria-label="Texto del post" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
-            <label style="font-size:12px; color:var(--muted); display:block; margin-top:8px;">Hashtags de este post (los propuso la IA — editalos, borralos, o agregá los tuyos antes de aprobar)</label>
+            <div style="font-size:12px; color:var(--muted); display:block; margin-top:8px;">Hashtags de este post (los propuso la IA — editalos, borralos, o agregá los tuyos antes de aprobar)</div>
             ${item.status === 'approved'
               ? `<div class="hashtag-row">${hashtagsToArray(item.hashtags).map(t => `<span class="hashtag-chip" style="padding:3px 12px;">${t}</span>`).join('') || '<span class="meta-row" style="margin-top:0;">sin hashtags</span>'}</div>`
               : hashtagEditorHtml(`plan-hashtags-${item.id}`, item.hashtags)}
@@ -383,10 +383,10 @@ async function loadClients(){
           <label class="sr-only" for="aiTone-${c.id}">Tono de las respuestas</label>
           <input aria-label="Tono de las respuestas" name="tone" id="aiTone-${c.id}" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
         </div>
-        <label style="font-size:13px; color:var(--muted);">Límite de respuestas con IA por día — al llegar acá, el bot sigue respondiendo pero con una plantilla fija en vez de generar con IA</label>
+        <div style="font-size:13px; color:var(--muted);">Límite de respuestas con IA por día — al llegar acá, el bot sigue respondiendo pero con una plantilla fija en vez de generar con IA</div>
         <label class="sr-only" for="aiDailyLimit-${c.id}">Límite diario de respuestas con IA</label>
         <input aria-label="Límite diario de respuestas con IA" name="daily_ai_reply_limit" id="aiDailyLimit-${c.id}" type="number" min="1" placeholder="30" value="${ai.daily_ai_reply_limit || ''}" />
-        <label style="font-size:13px; color:var(--muted);">Modelo para el plan semanal de contenido (Fase 6) — independiente del de arriba, para no compartir cuota gratuita con las respuestas automáticas</label>
+        <div style="font-size:13px; color:var(--muted);">Modelo para el plan semanal de contenido (Fase 6) — independiente del de arriba, para no compartir cuota gratuita con las respuestas automáticas</div>
         <label class="sr-only" for="aiContentPlanProvider-${c.id}">Proveedor de IA para el plan de contenido</label>
         <select aria-label="Proveedor de IA para el plan de contenido" name="content_plan_provider" id="aiContentPlanProvider-${c.id}">
           <option value="groq" ${ai.content_plan_provider==='groq'?'selected':''}>IA (gratis)</option>
@@ -395,9 +395,9 @@ async function loadClients(){
         </select>
         <label class="sr-only" for="aiTopics-${c.id}">Temas o palabras clave del negocio</label>
         <textarea aria-label="Temas o palabras clave del negocio" name="topics" id="aiTopics-${c.id}" placeholder="Temas/keywords del negocio">${ai.topics||''}</textarea>
-        <label style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando 2-4 propios del tema del día. Si el cliente cargó sus propios hashtags desde su portal, los de él tienen prioridad sobre estos.</label>
+        <div style="font-size:13px; color:var(--muted);">Hashtags de marca (fijos) — la IA los usa como base en cada idea del plan semanal, sumando 2-4 propios del tema del día. Si el cliente cargó sus propios hashtags desde su portal, los de él tienen prioridad sobre estos.</div>
         ${hashtagEditorHtml(`hashtags-${c.id}`, ai.default_hashtags)}
-        <label style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</label>
+        <div style="font-size:13px; color:var(--muted);">Base de conocimiento (servicios, precios reales, FAQ, políticas — la IA la usa como fuente de verdad, no inventa datos)</div>
         <label class="sr-only" for="aiKnowledgeBase-${c.id}">Base de conocimiento</label>
         <textarea aria-label="Base de conocimiento" name="knowledge_base" id="aiKnowledgeBase-${c.id}" rows="6" placeholder="Ej: Ofrecemos gestión de redes desde $200/mes. Horario de atención: L-V 9-18hs. No hacemos devoluciones después de 7 días. Envíos a todo el país...">${ai.knowledge_base||''}</textarea>
         <label class="sr-only" for="aiSystemPrompt-${c.id}">Instrucciones para la IA</label>
@@ -602,7 +602,7 @@ async function loadClients(){
         <textarea aria-label="Caption fijo" name="caption_override" id="newMediaCaptionOverride-${c.id}" placeholder="Caption fijo (opcional). Si lo dejás vacío, el bot genera uno con IA cada vez."></textarea>
         <label class="sr-only" for="newMediaHashtagsOverride-${c.id}">Hashtags fijos para este medio</label>
         <input aria-label="Hashtags fijos para este medio" name="hashtags_override" id="newMediaHashtagsOverride-${c.id}" placeholder="Hashtags fijos para este medio (opcional, ej: #promo #oferta). Se agregan al final del caption fijo de arriba." />
-        <label class="meta-row" style="margin-top:0;">Si el cliente cargó su propio texto/hashtags fijos desde su portal, los del cliente tienen prioridad sobre estos.</label>
+        <div class="meta-row" style="margin-top:0;">Si el cliente cargó su propio texto/hashtags fijos desde su portal, los del cliente tienen prioridad sobre estos.</div>
         <button type="submit">Agregar medio</button>
       </form>
     `;
@@ -688,9 +688,9 @@ async function loadClients(){
     metricasDiv.innerHTML = `
       <div class="section-client-heading">${c.name}</div>
       <div class="meta-row" style="margin-top:0;">
-        <label style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">
+        <div style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">
           Enviar resumen de métricas ahora ${c.client_email ? '' : '(cargá un email de portal en la pestaña Clientes primero)'}
-        </label>
+        </div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
           <label class="sr-only" for="reportPeriod-${c.id}">Período del reporte</label>
           <select aria-label="Período del reporte" id="reportPeriod-${c.id}" onchange="onReportPeriodChange('${c.id}')" style="width:auto;">
