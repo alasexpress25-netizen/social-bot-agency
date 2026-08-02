@@ -511,6 +511,8 @@ const I18N = {
     totalsLabel: (w) => `Totales de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
     kpiLeads: '📩 Consultas recibidas', kpiConverted: '🤝 Clientes nuevos', kpiLikes: '❤️ Me gusta', kpiReach: '👀 Te vieron',
     reachFootnote: 'Todavía no tenemos este dato para algunas publicaciones recientes.',
+    topPostTitle: (w) => `Tu publicación más destacada (${w})`,
+    topPostVideo: ' · 🎬 Video/Reel', topPostViewLink: 'Ver publicación original ↗',
     interactionLabel: 'Interacción en tus publicaciones:',
     kpiComments: '💬 Comentarios', kpiShares: '🔁 Compartieron', kpiSaved: '🔖 Guardaron (Instagram)',
     kpiPlays: '▶️ Reproducciones (Reels)', kpiWatchTime: '⏱️ Duración promedio vista',
@@ -600,6 +602,8 @@ const I18N = {
     totalsLabel: (w) => `Totais de ${w}:`, last8weeks: 'últimas 8 semanas', last6months: 'últimos 6 meses',
     kpiLeads: '📩 Consultas recebidas', kpiConverted: '🤝 Clientes novos', kpiLikes: '❤️ Curtidas', kpiReach: '👀 Te viram',
     reachFootnote: 'Ainda não temos esse dado para algumas publicações recentes.',
+    topPostTitle: (w) => `Sua publicação mais destacada (${w})`,
+    topPostVideo: ' · 🎬 Vídeo/Reel', topPostViewLink: 'Ver publicação original ↗',
     interactionLabel: 'Interação nas suas publicações:',
     kpiComments: '💬 Comentários', kpiShares: '🔁 Compartilharam', kpiSaved: '🔖 Salvaram (Instagram)',
     kpiPlays: '▶️ Reproduções (Reels)', kpiWatchTime: '⏱️ Duração média de visualização',
@@ -1449,7 +1453,9 @@ async function loadMetrics(){
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
-    sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
+    // caption/media_url/permalink_url: solo se usan para armar la card de
+    // "post destacado" (ver mas abajo) -- mismo patron que agencia/metrics.js.
+    sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, caption, media_url, permalink_url, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', currentClient.id).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at, external_post_id').eq('client_id', currentClient.id).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo elegido arriba)
     // desglosado seguidor/no-seguidor -- ver collect_audience_reach() en
@@ -1482,6 +1488,10 @@ async function loadMetrics(){
     // _fetch_instagram_reel_metrics en post_scheduler.py).
     plays: (p.socialbot_post_metrics && p.socialbot_post_metrics.plays) ?? null,
     avg_watch_time_ms: (p.socialbot_post_metrics && p.socialbot_post_metrics.avg_watch_time_ms) ?? null,
+    // Se usan solo para armar la card de "post destacado" (ver mas abajo).
+    caption: p.caption,
+    media_url: p.media_url,
+    permalink_url: p.permalink_url,
   }));
   let interactionsRows = interactions || [];
 
@@ -1526,6 +1536,19 @@ async function loadMetrics(){
     ? Math.round(postsWithWatchTime.reduce((s, p) => s + p.avg_watch_time_ms, 0) / postsWithWatchTime.length / 1000)
     : null;
   const windowLabel = period === 'week' ? t('last8weeks') : t('last6months');
+
+  // Post destacado del periodo -- mismo criterio que agencia/metrics.js:
+  // interaccion total (likes + comments + shares + saved), no reach/engagement
+  // rate, para no dejar afuera posts recientes a los que Meta todavia no les
+  // calculo el alcance. Es exactamente el tipo de dato que le importa al
+  // cliente ("mostrame que funciono"), a diferencia del desglose de clics por
+  // canal o la tasa de respuesta del bot, que son detalle operativo interno.
+  let topPost = null, topScore = -1;
+  postsRows.forEach(p => {
+    const score = p.likes + p.comments + p.shares + (p.saved || 0);
+    if (score > topScore) { topScore = score; topPost = p; }
+  });
+  if (topPost && topScore <= 0) topPost = null;
 
   // Item 1 de propuestas-30-07-2026.md: clics reales al link del cliente,
   // abiertos por canal (mismo criterio que en el panel de agencia).
@@ -1614,6 +1637,27 @@ async function loadMetrics(){
       <div class="kpi-card"><div class="kpi-value">${postsWithReach.length ? totalReach : '—'}</div><div class="kpi-label">${t('kpiReach')}</div></div>
     </div>
     ${postsWithReach.length < postsRows.length ? `<div class="meta-row" style="margin-top:-6px; font-size:11px;">${t('reachFootnote')}</div>` : ''}
+    ${topPost ? `
+    <div class="card" style="display:flex; gap:12px; align-items:flex-start; margin-bottom:14px;">
+      <div style="font-size:28px; line-height:1;">🏆</div>
+      <div style="flex:1; min-width:0;">
+        <div class="metric-title" style="margin:0 0 4px;">${t('topPostTitle')(windowLabel)}</div>
+        <div style="font-size:13px; color:var(--muted); margin-bottom:6px;">
+          ${topPost.platform === 'instagram' ? t('platformIg') : t('platformFb')}${topPost.media_type === 'video' ? t('topPostVideo') : ''}
+          ${topPost.caption ? ' — ' + topPost.caption.slice(0, 100) + (topPost.caption.length > 100 ? '...' : '') : ''}
+        </div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:13px;">
+          <span>❤️ ${topPost.likes}</span>
+          <span>💬 ${topPost.comments}</span>
+          ${topPost.platform === 'facebook' ? `<span>🔁 ${topPost.shares}</span>` : ''}
+          ${topPost.saved !== null ? `<span>🔖 ${topPost.saved}</span>` : ''}
+          ${topPost.reach !== null ? `<span>👁️ ${topPost.reach}</span>` : ''}
+          ${topPost.plays !== null ? `<span>▶️ ${topPost.plays}</span>` : ''}
+        </div>
+        ${topPost.permalink_url ? `<a href="${topPost.permalink_url}" target="_blank" rel="noopener" style="font-size:12px;">${t('topPostViewLink')}</a>` : ''}
+      </div>
+    </div>
+    ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('interactionLabel')}</div>
     <div class="kpi-row">
       <div class="kpi-card"><div class="kpi-value">${totalComments}</div><div class="kpi-label">${t('kpiComments')}</div></div>
