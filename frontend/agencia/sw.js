@@ -76,20 +76,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Assets propios: cache-first, revalidando en segundo plano.
+  // Assets propios (JS/CSS/etc): network-first con fallback a cache.
+  // Antes era cache-first (stale-while-revalidate): mostraba SIEMPRE la
+  // version vieja primero y recien la proxima carga se veia la nueva --
+  // eso obligaba a hacer 2 reloads despues de cada deploy. Con
+  // network-first, si hay señal siempre se ve el cambio en el primer
+  // load; el cache solo se usa como respaldo sin conexion.
   event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((response) => {
-          if (response && response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => cached); // sin señal: nos quedamos con lo cacheado
-
-      return cached || network;
-    })
+    fetch(request)
+      .then((response) => {
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(request))
   );
 });
