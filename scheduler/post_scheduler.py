@@ -560,7 +560,41 @@ def _fetch_instagram_audience_reach(ig_business_id, access_token, period="days_2
         return None, None
 
 
-def _fetch_instagram_post_audience_reach(media_id, access_token):
+def _fetch_instagram_profile_views(ig_business_id, access_token, period="days_28"):
+    """
+    Cuanta gente VISITO el perfil de Instagram (no solo vio un post) en la
+    ventana elegida -- metrica 'profile_views' de cuenta, sin breakdown.
+    Señal mas fuerte que el reach: implica que alguien se tomo el trabajo de
+    tocar el nombre de usuario para ver el perfil completo (bio, link,
+    historial de posts), no solo se cruzo con un post en el feed.
+
+    Mismo formato que _fetch_instagram_audience_reach (metric_type=
+    total_value, que Meta empezo a pedir para metricas de cuenta desde la
+    v19+ de la Graph API), pero sin 'breakdown' porque esta metrica no lo
+    admite.
+
+    Devuelve un int, o None si Meta todavia no tiene el dato (cuenta sin
+    actividad reciente) o el permiso no alcanza -- best-effort, no corta la
+    corrida.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/insights",
+            params={
+                "metric": "profile_views",
+                "period": period,
+                "metric_type": "total_value",
+                "access_token": access_token,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            return None
+        return data[0].get("total_value", {}).get("value")
+    except Exception:
+        return None
     """
     Igual que _fetch_instagram_audience_reach, pero para UN post puntual en
     vez de toda la cuenta: cuanto del alcance de ESTE post vino de gente que
@@ -817,20 +851,27 @@ def collect_audience_reach():
             continue
         try:
             follower_reach, non_follower_reach = _fetch_instagram_audience_reach(ig_business_id, access_token)
-            if follower_reach is None and non_follower_reach is None:
-                continue  # Meta no tiene el dato todavia para esta cuenta -- no pisamos el ultimo valor bueno que hubiera
+            profile_views = _fetch_instagram_profile_views(ig_business_id, access_token)
+            if follower_reach is None and non_follower_reach is None and profile_views is None:
+                continue  # Meta no tiene ningun dato todavia para esta cuenta -- no pisamos el ultimo valor bueno que hubiera
 
-            sb_upsert(
-                "socialbot_audience_reach",
-                [{
-                    "social_account_id": account["id"],
-                    "follower_reach": follower_reach,
-                    "non_follower_reach": non_follower_reach,
-                    "period": "days_28",
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
-                }],
-                on_conflict="social_account_id",
-            )
+            # Solo se incluyen las columnas que SI se pudieron traer en esta
+            # corrida -- si por ejemplo _fetch_instagram_audience_reach falla
+            # pero _fetch_instagram_profile_views funciona (o viceversa), no
+            # queremos pisar con null un valor bueno que ya estaba guardado
+            # de una corrida anterior.
+            payload = {
+                "social_account_id": account["id"],
+                "period": "days_28",
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if follower_reach is not None or non_follower_reach is not None:
+                payload["follower_reach"] = follower_reach
+                payload["non_follower_reach"] = non_follower_reach
+            if profile_views is not None:
+                payload["profile_views"] = profile_views
+
+            sb_upsert("socialbot_audience_reach", [payload], on_conflict="social_account_id")
             updated += 1
         except Exception as e:
             print(f"ERROR actualizando alcance seguidor/no-seguidor de {account.get('page_name') or account['id']}: {e}")
