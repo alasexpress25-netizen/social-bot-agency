@@ -515,15 +515,61 @@ def collect_post_metrics():
     print(f"Metricas actualizadas: {updated}/{len(posts)}.{cooldown_note}")
 
 
+def _fetch_instagram_online_followers(ig_business_id, access_token):
+    """
+    Punto 4 de propuestas-30-07-2026.md: en que franja horaria esta
+    conectada la audiencia de Instagram (metric=online_followers,
+    period=lifetime -- asi la pide Meta para esta metrica en particular,
+    NO admite period=days_28 como el resto de las llamadas de este
+    archivo). Devuelve un promedio de los ultimos 7 dias, no una ventana
+    configurable.
+
+    Formato de respuesta de Meta: data[0].values[0].value es un dict con
+    claves "0".."23" (hora del dia, en el huso horario de la cuenta) y
+    como valor la cantidad de seguidores conectados en esa hora.
+
+    Devuelve ese dict tal cual (para guardarlo directo como jsonb en
+    socialbot_audience_reach.online_followers), o None si Meta todavia no
+    tiene el dato (cuenta nueva o sin suficiente actividad) o el permiso no
+    alcanza -- best-effort, no corta la corrida.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/insights",
+            params={
+                "metric": "online_followers",
+                "period": "lifetime",
+                "access_token": access_token,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            return None
+        values = data[0].get("values", [])
+        if not values:
+            return None
+        by_hour = values[0].get("value")
+        return by_hour or None
+    except Exception:
+        return None
+
+
 def collect_audience_reach():
     """
     Trae, para cada cuenta de Instagram conectada, el alcance de CUENTA (no
     por post) desglosado en seguidor/no seguidor de los ultimos 28 dias
-    (_fetch_instagram_audience_reach), y lo pisa -- upsert por
-    social_account_id -- en socialbot_audience_reach. Solo se guarda el
-    ultimo total, no hay historial dia por dia (alcanza con eso: es lo que
-    pidio la agencia, "un total me conformo"). Se corre junto con
-    collect_post_metrics() al principio de cada ejecucion del scheduler.
+    (_fetch_instagram_audience_reach), profile_views/accounts_engaged
+    (_fetch_instagram_account_engagement), y el horario de mayor actividad
+    de la audiencia (_fetch_instagram_online_followers, punto 4 de
+    propuestas-30-07-2026.md) -- y lo pisa -- upsert por social_account_id
+    -- en socialbot_audience_reach. Solo se guarda el ultimo snapshot, no
+    hay historial dia por dia (alcanza con eso para todo esto, salvo
+    engagement rate -- ver collect_engagement_snapshots() para ese caso
+    puntual, que si necesita historial para el % de variacion del panel).
+    Se corre junto con collect_post_metrics() al principio de cada
+    ejecucion del scheduler.
 
     Facebook no tiene un equivalente directo de "follow_type" para Paginas
     (ese desglose es especifico de cuentas de Instagram), asi que esto solo
@@ -546,7 +592,8 @@ def collect_audience_reach():
         try:
             follower_reach, non_follower_reach = _fetch_instagram_audience_reach(ig_business_id, access_token)
             profile_views, accounts_engaged = _fetch_instagram_account_engagement(ig_business_id, access_token)
-            if follower_reach is None and non_follower_reach is None and profile_views is None and accounts_engaged is None:
+            online_followers = _fetch_instagram_online_followers(ig_business_id, access_token)
+            if follower_reach is None and non_follower_reach is None and profile_views is None and accounts_engaged is None and online_followers is None:
                 continue  # Meta no tiene ningun dato todavia para esta cuenta -- no pisamos el ultimo valor bueno que hubiera
 
             # Solo se incluyen las columnas que SI se pudieron traer en esta
@@ -566,6 +613,8 @@ def collect_audience_reach():
                 payload["profile_views"] = profile_views
             if accounts_engaged is not None:
                 payload["accounts_engaged"] = accounts_engaged
+            if online_followers is not None:
+                payload["online_followers"] = online_followers
 
             sb_upsert("socialbot_audience_reach", [payload], on_conflict="social_account_id")
             updated += 1
