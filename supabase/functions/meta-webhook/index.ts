@@ -18,6 +18,26 @@
 // handleComment/handleDm -- si el cliente esta pausado (ej. no pago este
 // mes), este webhook ya no gasta cuota de IA ni procesa nada para el hasta
 // que se reactive desde el panel de agencia.
+//
+// FIX 02/08/2026: se saca el envio automatico de private reply que habia
+// en handleComment despues de la respuesta publica. Motivo: Meta solo
+// permite UNA private reply por comentario en toda su vida (edge
+// /{comment_id}/private_replies), y ese mismo canal es el que usa
+// send-referral-prompt mas adelante para pedirle la reseña/referido al
+// lead cuando la agencia aprueba la sugerencia desde el panel. Como esta
+// funcion gastaba esa unica private reply apenas llegaba el comentario
+// (mandando en privado el mismo texto que ya se habia posteado en
+// publico -- redundante), el pedido de reseña posterior SIEMPRE rebotaba
+// con error de Graph API, sin excepcion, en el 100% de los leads
+// probados. Ahora esa private reply se reserva para el momento que
+// realmente vale la pena gastarla: el pedido de reseña aprobado por la
+// agencia.
+//
+// Actualizacion 03/08/2026 (actualizacion_popup_comentarios.txt): se
+// persiste tambien el texto del comentario/DM y de la respuesta del bot
+// (comment_text, external_post_id, reply_text en socialbot_interactions_log,
+// migracion 0041) para poder mostrarlos en el popup de la card
+// "Comentarios" del panel.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -174,7 +194,22 @@ function buildFallbackReply(aiSettings: any, clientId: string): string {
 // Esto reemplaza el chequeo previo (SELECT primero, INSERT despues al
 // final), que dejaba una ventana de carrera entre dos invocaciones
 // concurrentes procesando el mismo evento.
-async function claimInteraction(clientId: string, platform: string, type: string, externalId: string, senderId?: string | null): Promise<boolean> {
+//
+// Actualizacion 03/08/2026 (actualizacion_popup_comentarios.txt): guarda
+// tambien el texto del comentario/DM (commentText) y el post de origen
+// (externalPostId, null en DMs) -- antes se recibian pero se descartaban.
+// Se guardan siempre que llega la interaccion, sin importar si despues se
+// corta por anti-spam o queja escalada (para que el popup muestre el
+// listado completo, no solo lo que el bot efectivamente respondio).
+async function claimInteraction(
+  clientId: string,
+  platform: string,
+  type: string,
+  externalId: string,
+  senderId?: string | null,
+  commentText?: string | null,
+  externalPostId?: string | null,
+): Promise<boolean> {
   const { error } = await supabase.from("socialbot_interactions_log").insert({
     client_id: clientId,
     platform,
@@ -183,6 +218,8 @@ async function claimInteraction(clientId: string, platform: string, type: string
     sender_id: senderId ?? null,
     matched_keyword: null,
     replied: false,
+    comment_text: commentText ?? null,
+    external_post_id: externalPostId ?? null,
   });
   // Codigo 23505 = unique_violation en Postgres -- ya estaba reservado.
   if (error) {
@@ -192,10 +229,14 @@ async function claimInteraction(clientId: string, platform: string, type: string
   return true;
 }
 
-async function finishInteraction(platform: string, externalId: string, keyword: string | null, replied: boolean) {
+// Actualizacion 03/08/2026 (actualizacion_popup_comentarios.txt): guarda
+// tambien replyText (el texto que el bot decidio mandar), cuando lo hay --
+// se pasa aunque el envio a Meta haya fallado, para que quede registro de
+// lo que se intento contestar.
+async function finishInteraction(platform: string, externalId: string, keyword: string | null, replied: boolean, replyText?: string | null) {
   await supabase
     .from("socialbot_interactions_log")
-    .update({ matched_keyword: keyword, replied })
+    .update({ matched_keyword: keyword, replied, reply_text: replyText ?? null })
     .eq("platform", platform)
     .eq("external_id", externalId);
 }
@@ -655,7 +696,7 @@ async function handleComment(params: { platform: string; pageId: string; comment
   // Reserva atomica: si ya estaba reservado (por un reenvio del mismo
   // evento, o por esta misma pagina respondiendose en bucle a pesar del
   // filtro de arriba), se corta aca sin generar ni mandar nada.
-  const claimed = await claimInteraction(account.client_id, platform, "comment", commentId, senderId);
+  const claimed = await claimInteraction(account.client_id, platform, "comment", commentId, senderId, text, postId);
   if (!claimed) return;
 
   // Propuesta 11: si este sender_id viene insistiendo (mas de N interacciones
@@ -733,22 +774,15 @@ async function handleComment(params: { platform: string; pageId: string; comment
     body: new URLSearchParams({ message: replyText, access_token: account.page_access_token }),
   });
 
-  if (replyResp.ok) {
-    try {
-      await fetch(
-        `https://graph.facebook.com/${GRAPH_API_VERSION}/${commentId}/private_replies`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ message: replyText, access_token: account.page_access_token }),
-        },
-      );
-    } catch (e) {
-      console.error("Error enviando private reply:", e);
-    }
-  }
-
-  await finishInteraction(platform, commentId, matchedLabel, replyResp.ok);
+  // FIX 02/08/2026: aca antes se mandaba TAMBIEN una private reply con el
+  // mismo texto (redundante con el comentario publico de arriba). Se saca
+  // porque gastaba la unica private reply que admite Meta por comentario,
+  // dejando sin forma de mandar despues el pedido de reseña/referido
+  // (send-referral-prompt) cuando la agencia lo aprobaba -- SIEMPRE
+  // rebotaba. Ese fix se habia perdido en esta version (traia el popup de
+  // comentarios pero estaba ramificada de antes del 02/08) -- reaplicado
+  // aca para que no queden los dos cambios en conflicto.
+  await finishInteraction(platform, commentId, matchedLabel, replyResp.ok, replyText);
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +805,7 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
 
   const dmId = `${pageId}-${senderId}-${Date.now()}`;
 
-  const claimed = await claimInteraction(account.client_id, platform, "dm", dmId, senderId);
+  const claimed = await claimInteraction(account.client_id, platform, "dm", dmId, senderId, text);
   if (!claimed) return;
 
   // Propuesta 11: mismo chequeo anti-spam que en handleComment.
@@ -846,5 +880,5 @@ async function handleDm(params: { platform: string; pageId: string; senderId: st
     }),
   });
 
-  await finishInteraction(platform, dmId, matchedLabel, true);
+  await finishInteraction(platform, dmId, matchedLabel, true, replyText);
 }
