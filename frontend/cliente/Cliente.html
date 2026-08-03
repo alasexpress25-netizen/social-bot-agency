@@ -2080,7 +2080,7 @@ async function openCommentsModal(clientId, platform = 'all'){
   const [{ data: interactions, error: interactionsError }, { data: posts }] = await Promise.all([
     query,
     sb.from('socialbot_posts')
-      .select('external_post_id, caption, platform')
+      .select('external_post_id, caption, platform, permalink_url')
       .eq('client_id', clientId)
       .not('external_post_id', 'is', null),
   ]);
@@ -2091,9 +2091,14 @@ async function openCommentsModal(clientId, platform = 'all'){
   }
 
   const titleByPostId = {};
+  // Link directo a la publicacion desde cada comentario -- mismo criterio
+  // que el panel de agencia (metrics.js). Puede ser null en posts viejos
+  // (de antes de permalink_url, migracion 0025) o posts borrados del panel.
+  const permalinkByPostId = {};
   (posts || []).forEach(p => {
     if(!p.external_post_id) return;
     titleByPostId[p.external_post_id] = p.caption ? p.caption.slice(0, 80) + (p.caption.length > 80 ? '...' : '') : null;
+    permalinkByPostId[p.external_post_id] = p.permalink_url || null;
   });
 
   const rows = interactions || [];
@@ -2105,9 +2110,16 @@ async function openCommentsModal(clientId, platform = 'all'){
   body.innerHTML = rows.map(r => {
     const postTitle = r.external_post_id ? (titleByPostId[r.external_post_id] || null) : null;
     const platformIcon = r.platform === 'instagram' ? '📸' : '📘';
+    const platformLabel = r.platform === 'instagram' ? 'Instagram' : 'Facebook';
     const titleLine = postTitle
-      ? `${platformIcon} ${escapeHtmlComment(postTitle)}`
-      : (r.external_post_id ? `${platformIcon} ${t('commentsModalUntitledPost')}` : `${platformIcon} ${t('commentsModalNoPost')}`);
+      ? `${platformIcon} ${platformLabel} — ${escapeHtmlComment(postTitle)}`
+      : (r.external_post_id ? `${platformIcon} ${platformLabel} — ${t('commentsModalUntitledPost')}` : `${platformIcon} ${platformLabel} — ${t('commentsModalNoPost')}`);
+    // Link directo al post -- solo si guardamos permalink_url (posts de
+    // antes de la migracion 0025, o borrados del panel, no tienen link).
+    const permalink = r.external_post_id ? permalinkByPostId[r.external_post_id] : null;
+    const postLink = permalink
+      ? ` <a href="${permalink}" target="_blank" rel="noopener" style="font-size:11px; text-decoration:underline;">Ver publicación ↗</a>`
+      : '';
     const commentBody = r.comment_text
       ? escapeHtmlComment(r.comment_text)
       : `<span style="font-style:italic; color:var(--muted);">${t('commentsModalNoText')}</span>`;
@@ -2116,7 +2128,7 @@ async function openCommentsModal(clientId, platform = 'all'){
       : `<div class="comment-no-reply">${t('commentsModalNoReply')}</div>`;
     return `
       <div class="comment-item">
-        <div class="comment-post-title">${titleLine}</div>
+        <div class="comment-post-title">${titleLine}${postLink}</div>
         <div class="comment-text">${commentBody}</div>
         <div class="comment-meta">${formatCommentDateTime(r.created_at)}</div>
         ${replyBlock}
