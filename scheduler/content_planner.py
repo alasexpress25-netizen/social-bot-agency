@@ -558,7 +558,11 @@ def build_prompt(client, ai_settings, context, num_days):
         "Tu trabajo es proponer, con criterio real (no generico), que publicar esta semana para un cliente puntual, "
         "basandote en que temas le interesan a su audiencia real, que tipo de post funciono mejor antes, y rotando "
         "entre los pilares de contenido (ver mas abajo) para no repetir siempre el mismo tipo de post. "
-        "Cada idea debe incluir el TEXTO FINAL del post, listo para publicar, no solo el tema."
+        "Cada idea debe incluir el TEXTO FINAL del post, listo para publicar, no solo el tema. "
+        "El idioma de salida (español o portugués de Brasil) viene indicado mas abajo en el mensaje del usuario y es "
+        "una instruccion dura: se aplica a TODO el texto que generes, sin importar en que idioma esten redactados "
+        "los ejemplos, reseñas o captions anteriores que se te den como referencia (esos son solo para tema/tono/"
+        "gancho, nunca para el idioma de salida)."
     )
 
     # Idioma de los posts: mismo campo (socialbot_ai_settings.reply_language) que
@@ -569,9 +573,22 @@ def build_prompt(client, ai_settings, context, num_days):
     # español por default.
     reply_language = ai_settings.get("reply_language") or "pt-BR"
     if reply_language == "pt-BR":
-        language_line = "Escribí TODAS las captions en portugués de Brasil (pt-BR)."
+        language_line = (
+            "IDIOMA OBLIGATORIO: escribí TODAS las captions, ganchos y reply_template en portugués de Brasil "
+            "(pt-BR), de punta a punta. Esto NO es opcional ni una preferencia de estilo."
+        )
+        language_reminder = (
+            "RECORDATORIO FINAL DE IDIOMA (ignorá cualquier otro idioma que hayas visto mas arriba en este "
+            "mensaje, incluidos los ejemplos de posts/reseñas/captions anteriores citados como referencia de "
+            "tema y enganche): TODO el JSON de salida -- caption, angle, based_on, reply_template, hashtags -- "
+            "tiene que estar escrito en portugués de Brasil (pt-BR). Ni una sola palabra en español."
+        )
     else:
-        language_line = "Escribí TODAS las captions en español."
+        language_line = "IDIOMA OBLIGATORIO: escribí TODAS las captions en español, de punta a punta."
+        language_reminder = (
+            "RECORDATORIO FINAL DE IDIOMA: TODO el JSON de salida tiene que estar en español, ignorando el "
+            "idioma de cualquier ejemplo citado mas arriba."
+        )
 
     parts = [
         f"Negocio: {client['name']}. Temas/keywords habituales: {topics or '(sin cargar)'}. Tono de marca: {tone}.",
@@ -669,9 +686,10 @@ def build_prompt(client, ai_settings, context, num_days):
             f"Hashtags de marca fijos que la agencia ya tiene cargados (usalos como base en TODAS las ideas, sumando 2-4 propios del tema del dia): {default_hashtags}."
         )
     else:
+        hashtag_lang = "portugués de Brasil" if reply_language == "pt-BR" else "español"
         parts.append(
-            "Todavia no hay hashtags de marca cargados -- proponé vos 5-8 hashtags relevantes en español para cada idea, "
-            "mezclando genericos del rubro con algo puntual del tema del dia."
+            f"Todavia no hay hashtags de marca cargados -- proponé vos 5-8 hashtags relevantes en {hashtag_lang} "
+            "para cada idea, mezclando genericos del rubro con algo puntual del tema del dia."
         )
 
     parts.append(
@@ -687,6 +705,8 @@ def build_prompt(client, ai_settings, context, num_days):
         f"Variá la palabra clave entre ideas de la semana si tiene sentido (no hace falta que sea siempre la misma). "
         f"Variá el angulo entre ideas (no repitas el mismo gancho dos veces en la misma semana)."
     )
+
+    parts.append(language_reminder)
 
     parts.append(
         "Para cada idea generá tambien \"reply_template\": el mensaje automatico corto que el bot le va a responder a quien comente o escriba esa palabra clave "
