@@ -865,6 +865,32 @@ def publish_instagram_carousel(ig_business_id, page_access_token, caption, image
     r.raise_for_status()
     creation_id = r.json()["id"]
 
+    # Igual que con video (ver publish_instagram): Meta procesa el
+    # contenedor CAROUSEL de forma asincrona (tiene que bajar y validar
+    # cada imagen hija antes de que el padre quede FINISHED). Publicar
+    # apenas se crea el contenedor funciona la mayoria de las veces porque
+    # las imagenes suelen procesarse rapido, pero quedo demostrado en
+    # produccion (2 fallos de 9 carruseles, error 9007/2207027 "Media ID
+    # is not available") que a veces no alcanza. Se agrega el mismo
+    # polling que ya existe para video, con un timeout mas corto porque
+    # imagenes tardan bastante menos que un video en procesarse.
+    status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
+    finished = False
+    for _ in range(24):  # ~2 minutos (24 * 5s)
+        s = requests.get(status_url, params={"fields": "status_code", "access_token": page_access_token}, timeout=30)
+        status_code = s.json().get("status_code")
+        if status_code == "FINISHED":
+            finished = True
+            break
+        if status_code in ("ERROR", "EXPIRED"):
+            raise RuntimeError(f"Instagram: el carrusel quedo en estado '{status_code}' al procesarse (creation_id {creation_id}).")
+        time.sleep(5)
+    if not finished:
+        raise RuntimeError(
+            f"Instagram: el carrusel siguio sin terminar de procesarse despues de ~2 minutos "
+            f"(creation_id {creation_id}). Puede reintentarse mas tarde."
+        )
+
     publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/media_publish"
     r2 = requests.post(publish_url, data={"creation_id": creation_id, "access_token": page_access_token}, timeout=60)
     r2.raise_for_status()
