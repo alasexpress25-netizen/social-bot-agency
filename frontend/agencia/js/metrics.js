@@ -254,7 +254,7 @@ async function renderMetrics(clientId){
 
   const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }, { data: engagementSnapshotsRaw }, { data: demographicsAccountsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
-    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
+    sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform, type').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, caption, media_url, permalink_url, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
     sb.from('socialbot_link_clicks').select('source, clicked_at, external_post_id').eq('client_id', clientId).gte('clicked_at', windowStartIso),
     // Alcance de cuenta (no por post, no depende del periodo semanal/mensual
@@ -363,7 +363,17 @@ async function renderMetrics(clientId){
   const totalLeads = leadsRows.length;
   const totalConverted = leadsRows.filter(r => r.status === 'convertido').length;
   const totalLikes = postsRows.reduce((s, p) => s + p.likes, 0);
-  const totalComments = postsRows.reduce((s, p) => s + p.comments, 0);
+  // Comentarios reales (no cuenta las respuestas del bot -- Meta suma los
+  // replies dentro de comments.summary(true).total_count / comments_count,
+  // asi que sumar socialbot_post_metrics.comments mostraba de mas). Cuenta
+  // filas reales de socialbot_interactions_log (type='comment'): meta-webhook
+  // nunca crea fila para la respuesta del bot (filtra por senderId===page_id/
+  // ig_business_id antes de reservar), y backfill-post-comments hace lo mismo
+  // (mete el reply del bot en reply_text de la fila del comentario real, no
+  // como fila aparte). Incluye Instagram y Facebook juntos cuando
+  // platform==='all' (interactionsRows ya viene filtrado por plataforma).
+  const commentInteractionsRows = interactionsRows.filter(r => r.type === 'comment');
+  const totalComments = commentInteractionsRows.length;
   const totalShares = postsRows.reduce((s, p) => s + p.shares, 0);
   const totalReach = postsWithReach.reduce((s, p) => s + p.reach, 0);
 
@@ -639,7 +649,7 @@ async function renderMetrics(clientId){
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Interacción en publicaciones (${windowLabel}):</div>
     <div class="kpi-row">
-      <div class="kpi-card" style="cursor:pointer;" onclick="openCommentsModal('${clientId}')"><div class="kpi-value">${totalComments}${lastActivitySuffix(postsRows.filter(p => p.comments > 0), 'published_at')}</div><div class="kpi-label">💬 Comentarios</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openCommentsModal('${clientId}', '${platform}')"><div class="kpi-value">${totalComments}${lastActivitySuffix(commentInteractionsRows, 'created_at')}</div><div class="kpi-label">💬 Comentarios</div></div>
       ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔁 Compartidos<br><span style="font-size:10px; font-weight:400;">Instagram no lo reporta vía API</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}${lastActivitySuffix(postsRows.filter(p => p.shares > 0), 'published_at')}</div><div class="kpi-label">🔁 Compartidos</div></div>`}
       ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔖 Guardados<br><span style="font-size:10px; font-weight:400;">Solo existe para Instagram</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}${postsWithSaved.length ? lastActivitySuffix(postsWithSaved.filter(p => p.saved > 0), 'published_at') : ''}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>`}
     </div>
@@ -807,19 +817,28 @@ function formatDateTime(iso){
   if(!iso) return '';
   return new Date(iso).toLocaleString('es', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
-async function openCommentsModal(clientId){
+async function openCommentsModal(clientId, platform = 'all'){
   const modal = document.getElementById('commentsModal');
   const body = document.getElementById('commentsModalBody');
   body.innerHTML = `<div class="meta-row">Cargando...</div>`;
   modal.classList.add('open');
 
+  // Respeta el mismo filtro de plataforma elegido arriba (Todas/FB/IG) --
+  // si no, el popup podia traer mas filas de las que decia el numero de
+  // la card (ej. card en 3 por filtrar solo Instagram, popup trayendo
+  // tambien las de Facebook).
+  let query = sb.from('socialbot_interactions_log')
+    .select('comment_text, reply_text, created_at, replied_at, external_post_id, platform')
+    .eq('client_id', clientId)
+    .eq('type', 'comment')
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if(platform !== 'all'){
+    query = query.eq('platform', platform);
+  }
+
   const [{ data: interactions, error: interactionsError }, { data: posts }] = await Promise.all([
-    sb.from('socialbot_interactions_log')
-      .select('comment_text, reply_text, created_at, replied_at, external_post_id, platform')
-      .eq('client_id', clientId)
-      .eq('type', 'comment')
-      .order('created_at', { ascending: false })
-      .limit(200),
+    query,
     sb.from('socialbot_posts')
       .select('external_post_id, caption, platform')
       .eq('client_id', clientId)
