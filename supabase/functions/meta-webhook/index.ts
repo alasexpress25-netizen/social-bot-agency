@@ -209,6 +209,7 @@ async function claimInteraction(
   senderId?: string | null,
   commentText?: string | null,
   externalPostId?: string | null,
+  postPermalinkUrl?: string | null,
 ): Promise<boolean> {
   const { error } = await supabase.from("socialbot_interactions_log").insert({
     client_id: clientId,
@@ -220,6 +221,7 @@ async function claimInteraction(
     replied: false,
     comment_text: commentText ?? null,
     external_post_id: externalPostId ?? null,
+    post_permalink_url: postPermalinkUrl ?? null,
   });
   // Codigo 23505 = unique_violation en Postgres -- ya estaba reservado.
   if (error) {
@@ -672,6 +674,50 @@ async function tryAiReply(account: any, incomingText: string): Promise<{ reply: 
 }
 
 // ---------------------------------------------------------------------------
+// Actualizacion 03/08/2026 (migracion 0042): pide el link real de la
+// publicacion a la Graph API en el momento en que llega el comentario, en
+// vez de reconstruirlo despues cruzando con socialbot_posts (ese cruce
+// fallaba: publish_facebook() a veces guarda el external_post_id con un
+// sufijo pegado como " (foto manual)", que nunca matchea con el postId
+// limpio que manda el webhook, y ademas hay comentarios de posts que no
+// viven en socialbot_posts). Mismo patron que _build_permalink() en
+// scheduler/post_scheduler.py: para Facebook proba primero permalink_url,
+// despues link (los objetos Photo de fallback no tienen permalink_url);
+// para Instagram pide permalink directo. Best-effort: si falla, devuelve
+// null y el popup simplemente no muestra el link (no rompe el flujo de
+// respuesta al comentario).
+async function fetchPostPermalink(platform: string, postId: string | null, accessToken: string): Promise<string | null> {
+  if (!postId) return null;
+  try {
+    if (platform === "facebook") {
+      for (const field of ["permalink_url", "link"]) {
+        try {
+          const resp = await fetch(
+            `https://graph.facebook.com/${GRAPH_API_VERSION}/${postId}?fields=${field}&access_token=${accessToken}`,
+          );
+          if (!resp.ok) continue;
+          const data = await resp.json();
+          const value = data?.[field];
+          if (value) return value.startsWith("http") ? value : `https://www.facebook.com${value}`;
+        } catch (_e) {
+          continue;
+        }
+      }
+      return `https://www.facebook.com/${postId}`;
+    }
+    // Instagram
+    const resp = await fetch(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/${postId}?fields=permalink&access_token=${accessToken}`,
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data?.permalink ?? null;
+  } catch (e) {
+    console.error("Error pidiendo permalink de la publicacion:", e);
+    return null;
+  }
+}
+
 async function handleComment(params: { platform: string; pageId: string; commentId: string; text: string; senderId?: string; senderName?: string | null; postId?: string | null }) {
   const { platform, pageId, commentId, text, senderId, senderName, postId } = params;
   if (!commentId) return;
@@ -696,7 +742,8 @@ async function handleComment(params: { platform: string; pageId: string; comment
   // Reserva atomica: si ya estaba reservado (por un reenvio del mismo
   // evento, o por esta misma pagina respondiendose en bucle a pesar del
   // filtro de arriba), se corta aca sin generar ni mandar nada.
-  const claimed = await claimInteraction(account.client_id, platform, "comment", commentId, senderId, text, postId);
+  const postPermalinkUrl = await fetchPostPermalink(platform, postId ?? null, account.page_access_token);
+  const claimed = await claimInteraction(account.client_id, platform, "comment", commentId, senderId, text, postId, postPermalinkUrl);
   if (!claimed) return;
 
   // Propuesta 11: si este sender_id viene insistiendo (mas de N interacciones
