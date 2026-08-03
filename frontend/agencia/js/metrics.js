@@ -102,15 +102,30 @@ function buildPeriodBuckets(period){
 // valida para compararlo (ambos en 0 -- "sin cambios" no aporta nada).
 // previous=0 y current>0 se muestra como "nuevo" en vez de un % (division
 // por cero no tiene sentido como porcentaje).
-function pctDeltaBadge(current, previous){
+function pctDeltaBadge(current, previous, latestDateLabel){
   if(previous === 0 && current === 0) return '';
-  if(previous === 0) return ` <span style="font-size:11px; font-weight:600; color:#5fae6a;">· nuevo</span>`;
+  if(previous === 0){
+    // Actualización: cuando el badge dice "nuevo" (periodo anterior en 0),
+    // se agrega la fecha/hora del registro más reciente que compone ese
+    // total -- "nuevo" por si solo no dice si eso pasó hoy o hace 7
+    // semanas (el período de comparación es de hasta 8 semanas/6 meses).
+    const suffix = latestDateLabel ? ` (${latestDateLabel})` : '';
+    return ` <span style="font-size:11px; font-weight:600; color:#5fae6a;">· nuevo${suffix}</span>`;
+  }
   const pct = Math.round(((current - previous) / previous) * 100);
   if(pct === 0) return ` <span style="font-size:11px; font-weight:600; color:var(--muted);">· sin cambios</span>`;
   const positive = pct > 0;
   const color = positive ? '#5fae6a' : 'var(--warn)';
   const arrow = positive ? '▲' : '▼';
   return ` <span style="font-size:11px; font-weight:600; color:${color};">${arrow} ${Math.abs(pct)}%</span>`;
+}
+// Fecha/hora del registro más reciente de un set de filas, para el
+// sufijo de pctDeltaBadge() cuando marca "nuevo" -- ej. "hasta 02/08 18:40".
+function latestRowDateLabel(rows, dateField){
+  const dates = (rows||[]).map(r => r[dateField]).filter(Boolean).map(d => new Date(d));
+  if(!dates.length) return null;
+  const latest = new Date(Math.max(...dates));
+  return `hasta ${latest.toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}`;
 }
 function fillBuckets(buckets, rows, dateField, { replyField = null, sumField = null, filterFn = null } = {}){
   buckets.forEach(b => { b.count = 0; b.total = 0; b.replied = 0; b.sum = 0; });
@@ -585,10 +600,10 @@ async function renderMetrics(clientId){
     </div>
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
     <div class="kpi-row kpi-row-5">
-      <div class="kpi-card"><div class="kpi-value">${totalLeads}${pctDeltaBadge(totalLeads, prevTotalLeads)}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
-      <div class="kpi-card"><div class="kpi-value">${totalConverted}${pctDeltaBadge(totalConverted, prevTotalConverted)}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
-      <div class="kpi-card"><div class="kpi-value">${totalLikes}${pctDeltaBadge(totalLikes, prevTotalLikes)}</div><div class="kpi-label">❤️ Me gusta</div></div>
-      <div class="kpi-card"><div class="kpi-value">${postsWithReach.length ? totalReach : '—'}${postsWithReach.length ? pctDeltaBadge(totalReach, prevTotalReach) : ''}</div><div class="kpi-label">👁️ Alcance real${postsWithReach.length < postsRows.length ? ' *' : ''}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLeads}${pctDeltaBadge(totalLeads, prevTotalLeads, latestRowDateLabel(leadsRows, 'created_at'))}</div><div class="kpi-label">📩 Consultas recibidas</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalConverted}${pctDeltaBadge(totalConverted, prevTotalConverted, latestRowDateLabel(leadsRows.filter(r => r.status === 'convertido'), 'created_at'))}</div><div class="kpi-label">🤝 Clientes nuevos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalLikes}${pctDeltaBadge(totalLikes, prevTotalLikes, latestRowDateLabel(postsRows, 'published_at'))}</div><div class="kpi-label">❤️ Me gusta</div></div>
+      <div class="kpi-card"><div class="kpi-value">${postsWithReach.length ? totalReach : '—'}${postsWithReach.length ? pctDeltaBadge(totalReach, prevTotalReach, latestRowDateLabel(postsWithReach, 'published_at')) : ''}</div><div class="kpi-label">👁️ Alcance real${postsWithReach.length < postsRows.length ? ' *' : ''}</div></div>
       <div class="kpi-card"><div class="kpi-value">${avgResponseLabel}</div><div class="kpi-label">⏱️ Min. resp. promedio</div></div>
     </div>
     <div class="meta-row" style="margin-top:-6px; font-size:11px;">vs. periodo anterior (${windowLabel === 'últimas 8 semanas' ? 'las 8 semanas previas' : 'los 6 meses previos'})</div>
