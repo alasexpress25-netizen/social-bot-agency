@@ -101,7 +101,20 @@ async function loadClients(){
     const { data: hookTypeRanking } = await sb.from('socialbot_hook_type_ranking').select('*').eq('client_id', c.id).order('avg_score', { ascending: false });
     const { data: media } = await sb.from('socialbot_media_assets').select('*').eq('client_id', c.id).order('created_at', {ascending:false});
     const { data: rules } = await sb.from('socialbot_auto_reply_rules').select('*').eq('client_id', c.id);
-    const { data: posts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).order('created_at', {ascending:false}).limit(20);
+    // Actualización 03/08/2026 (actualizacion_posts_y_metricas.txt, Parte 1,
+    // cambio 1): antes traía solo los últimos 20 posts, lo que hacía que el
+    // filtro de fecha en la pestaña "Posts" (populateDateFilterOptions, en
+    // posts.js) solo pudiera ofrecer esas fechas recientes. Ahora se trae el
+    // historial completo del cliente (308 posts totales hoy repartidos en 3
+    // clientes -- no pesa) y se pide embebida socialbot_post_metrics de cada
+    // post en la misma consulta, para poder mostrar métricas en la tarjeta
+    // sin pegarle a Supabase de nuevo por cada post (ver renderPostsList,
+    // posts.js). Si el volumen crece mucho, la alternativa es paginar por
+    // mes/rango en vez de traer todo de una vez.
+    const { data: posts } = await sb.from('socialbot_posts')
+      .select('*, socialbot_post_metrics(likes, comments, shares, reach, impressions, saved, plays, avg_watch_time_ms, follower_reach, non_follower_reach)')
+      .eq('client_id', c.id)
+      .order('created_at', {ascending:false});
     const { data: leads } = await sb.from('socialbot_leads').select('*').eq('client_id', c.id).order('created_at', { ascending:false });
     // Punto 8 (propuestas-30-07-2026.md): sugerencias de mensaje de
     // referido/reseña armadas solas cuando un lead pasa a 'convertido'.

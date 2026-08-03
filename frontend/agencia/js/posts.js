@@ -97,6 +97,7 @@ function renderPostsList(clientId){
           ${dateLabel ? `<span style="color:var(--muted); font-weight:600; font-size:12px;">${dateLabel}</span>` : ''}
         </div>
         <div style="margin-top:4px;">${(p.caption||'').slice(0,80)}...</div>
+        ${renderPostMetricsChips(p)}
         ${p.status==='failed' && p.error_message ? `<div style="margin-top:4px; font-size:12px; color:var(--warn); font-weight:600;">${p.error_message.slice(0,160)}</div>` : ''}
         <div style="margin-top:6px; display:flex; gap:12px; align-items:center;">
           ${p.permalink_url ? `<a href="${p.permalink_url}" target="_blank" rel="noopener" style="font-size:12px; color:var(--white); text-decoration:underline; display:inline-flex; align-items:center; gap:4px;">Ver publicación<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a>` : ''}
@@ -105,6 +106,29 @@ function renderPostsList(clientId){
       </div>
     `;
   }).join('');
+}
+// Actualización 03/08/2026 (actualizacion_posts_y_metricas.txt, Parte 1,
+// cambio 2): chip de métricas por post, solo para publicados y con fila en
+// socialbot_post_metrics (metrics_collector.py puede no haber pasado
+// todavía por este post, en cuyo caso socialbot_post_metrics viene null
+// -- en ese caso no se muestra nada, no un "—" en cada campo).
+function renderPostMetricsChips(p){
+  if(p.status !== 'published') return '';
+  // Supabase devuelve la relación embebida como array (join 1-a-muchos a
+  // nivel de tipos), aunque acá siempre haya 0 o 1 fila por post.
+  const m = Array.isArray(p.socialbot_post_metrics) ? p.socialbot_post_metrics[0] : p.socialbot_post_metrics;
+  if(!m) return '';
+  const parts = [];
+  if(m.plays != null){
+    parts.push(`▶️ ${m.plays} reproducciones`);
+  } else {
+    parts.push(`👁 ${m.reach ?? '—'}`);
+  }
+  parts.push(`❤️ ${m.likes ?? '—'}`);
+  parts.push(`💬 ${m.comments ?? '—'}`);
+  parts.push(`🔁 ${m.shares ?? '—'}`);
+  parts.push(`📌 ${m.saved ?? '—'}`);
+  return `<div style="margin-top:6px; font-size:12px; color:var(--muted);">${parts.join(' · ')}</div>`;
 }
 async function retryPost(postId, clientId){
   if(!confirm('¿Reintentar esta publicación? Se va a volver a intentar publicar en el próximo ciclo del scheduler.')) return;
