@@ -590,6 +590,14 @@ def build_prompt(client, ai_settings, context, num_days):
             "idioma de cualquier ejemplo citado mas arriba."
         )
 
+    # El ejemplo de cierre/CTA que se le pasa a la IA como referencia de formato
+    # tiene que estar en el mismo idioma de salida (reply_language), si no la IA
+    # lo copia tal cual (esta marcado como obligatorio) e ignora el idioma pedido.
+    cta_example = (
+        "Comente INFO e te mando o link 💬" if reply_language == "pt-BR"
+        else "Comentá INFO y te paso el link 💬"
+    )
+
     parts = [
         f"Negocio: {client['name']}. Temas/keywords habituales: {topics or '(sin cargar)'}. Tono de marca: {tone}.",
         language_line,
@@ -697,10 +705,10 @@ def build_prompt(client, ai_settings, context, num_days):
         f"0 = el primer dia de publicacion de esta semana, en orden creciente, sin repetir offset). "
         f"Cada caption debe tener como maximo {max_chars} caracteres SIN CONTAR los hashtags, sin markdown ni asteriscos, "
         f"con un cierre que invite EXPLICITAMENTE a comentar UNA palabra clave concreta y corta (una sola palabra, en mayusculas, ej: "
-        f"\"Comentá INFO y te paso el link 💬\") para recibir el link de compra, sin poner el link directo en el texto. "
+        f"\"{cta_example}\") para recibir el link de compra, sin poner el link directo en el texto. "
         f"IMPORTANTE: los hashtags van DENTRO del mismo campo \"caption\" (no en un campo aparte), como el ultimo renglon del texto, "
         f"separados del resto por un salto de linea en blanco. Ejemplo de como debe terminar el campo \"caption\" completo: "
-        f"\"...Comentá INFO y te paso el link 💬\\n\\n#hashtag1 #hashtag2 #hashtag3\". Esto es obligatorio en TODAS las ideas, sin excepcion. "
+        f"\"...{cta_example}\\n\\n#hashtag1 #hashtag2 #hashtag3\". Esto es obligatorio en TODAS las ideas, sin excepcion. "
         f"Esa misma palabra clave (en minuscula, sin tildes ni signos) va tambien en el campo \"keyword\" del JSON, EXACTAMENTE la que aparece en el caption. "
         f"Variá la palabra clave entre ideas de la semana si tiene sentido (no hace falta que sea siempre la misma). "
         f"Variá el angulo entre ideas (no repitas el mismo gancho dos veces en la misma semana)."
