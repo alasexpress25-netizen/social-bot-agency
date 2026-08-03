@@ -71,6 +71,10 @@ const metricPeriod = {};
 // clientId -> 'all' | 'facebook' | 'instagram'. Filtro de plataforma en la
 // pestaña Métricas (selector Facebook/Instagram/Todas). Por defecto todas.
 const metricPlatform = {};
+// clientId -> 'country' | 'city'. Actualización 03/08/2026: toggle
+// Países/Ciudades del bloque "Principales ubicaciones" (demográficos de
+// audiencia) en la pestaña Métricas. Por defecto países.
+const metricLocationView = {};
 // clientId -> 'list' | 'calendar'. Vista del plan semanal de contenido
 // (item "menores" de PROPUESTAS-AGENCIA.md). Por defecto lista, igual que
 // siempre -- el calendario es solo un vistazo visual alternativo, de solo

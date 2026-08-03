@@ -4,7 +4,7 @@
 // agregaron los import/export necesarios para que funcione como
 // modulo ES nativo (<script type="module">).
 
-import { PLATFORM_META_AG, metricPeriod, metricPlatform, sb } from "./state.js";
+import { PLATFORM_META_AG, metricLocationView, metricPeriod, metricPlatform, sb } from "./state.js";
 import { normalizeUrl } from "./utils.js";
 
 // ---------------------------------------------------------------------------
@@ -150,6 +150,13 @@ function setMetricPlatform(clientId, platform){
   metricPlatform[clientId] = platform;
   renderMetrics(clientId);
 }
+// Actualización 03/08/2026: toggle Países/Ciudades del bloque "Principales
+// ubicaciones" (demográficos de audiencia) -- mismo patrón que
+// setMetricPeriod/setMetricPlatform.
+function setMetricLocationView(clientId, view){
+  metricLocationView[clientId] = view;
+  renderMetrics(clientId);
+}
 // ---------------------------------------------------------------------------
 // Pestaña "Inicio": la última publicación del cliente seleccionado, mostrada
 // como tarjeta estilo Instagram — mismo criterio que loadDashboard() en el
@@ -222,7 +229,7 @@ async function renderMetrics(clientId){
   const prevWindowStartIso = new Date(buckets[0].start.getTime() - windowMs).toISOString();
   const prevWindowEndIso = windowStartIso;
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }, { data: engagementSnapshotsRaw }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }, { data: engagementSnapshotsRaw }, { data: demographicsAccountsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, replied_at, platform').eq('client_id', clientId).gte('created_at', windowStartIso),
     sb.from('socialbot_posts').select('published_at, platform, external_post_id, media_type, caption, media_url, permalink_url, socialbot_post_metrics(likes, comments, shares, reach, saved, plays, avg_watch_time_ms)').eq('client_id', clientId).eq('status', 'published').gte('published_at', windowStartIso),
@@ -255,6 +262,15 @@ async function renderMetrics(clientId){
     // socialbot_audience_reach solo tiene el ultimo valor, esta tabla si
     // permite promediar por periodo y compararlo contra el anterior.
     sb.from('socialbot_engagement_snapshots').select('snapshot_date, engagement_rate').eq('client_id', clientId).gte('snapshot_date', prevWindowStartIso.slice(0, 10)),
+    // Actualización 03/08/2026 (actualizacion_posts_y_metricas.txt, Parte 2):
+    // demográficos de audiencia (género+edad, país, ciudad) -- ultimo
+    // snapshot por cuenta, ver collect_audience_demographics() en
+    // metrics_collector.py. No depende del periodo semanal/mensual de
+    // arriba (es "una foto actual"), igual que socialbot_audience_reach.
+    // Se trae de TODAS las cuentas del cliente (no se filtra por
+    // plataforma en la query) y se separa despues, igual que igAccounts/
+    // fbAccounts mas abajo, para respetar el selector de plataforma.
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_demographics(breakdown_type, breakdown_key, value)').eq('client_id', clientId),
   ]);
 
   let leadsRows = leads || [];
@@ -468,6 +484,65 @@ async function renderMetrics(clientId){
     return { name: acc.page_name, value: row.page_engagement };
   }).filter(Boolean);
 
+  // Actualización 03/08/2026 (actualizacion_posts_y_metricas.txt, Parte 2):
+  // demográficos de audiencia -- se combinan Instagram y Facebook segun el
+  // selector de plataforma (mismo criterio que igAccounts/fbAccounts de
+  // arriba), sumando entre cuentas por si hay mas de una del mismo tipo.
+  // gender_age en la práctica solo va a tener datos de Instagram (Facebook
+  // no manda esa columna -- ver nota en collect_audience_demographics(),
+  // metrics_collector.py); country/city sí combinan ambas plataformas.
+  const demoAccounts = (demographicsAccountsRaw || []).filter(acc => platform === 'all' || acc.platform === platform);
+  const demoTotals = { gender_age: {}, country: {}, city: {} };
+  demoAccounts.forEach(acc => {
+    (acc.socialbot_audience_demographics || []).forEach(row => {
+      const bucket = demoTotals[row.breakdown_type];
+      if(!bucket) return;
+      bucket[row.breakdown_key] = (bucket[row.breakdown_key] || 0) + Number(row.value || 0);
+    });
+  });
+  // Género: sumamos el primer componente de la clave 'GENERO.EDAD' (ej.
+  // 'F.35-44' -> 'F'). Meta usa 'F'/'M'/'U' (mujer/hombre/no especificado).
+  const GENDER_LABELS = { F: 'Mujeres', M: 'Hombres', U: 'No especificado' };
+  const genderTotals = {};
+  Object.entries(demoTotals.gender_age).forEach(([key, value]) => {
+    const gender = key.split('.')[0];
+    genderTotals[gender] = (genderTotals[gender] || 0) + value;
+  });
+  const genderGrandTotal = Object.values(genderTotals).reduce((s, v) => s + v, 0);
+  const genderRows = Object.entries(genderTotals)
+    .map(([gender, value]) => ({ gender, label: GENDER_LABELS[gender] || gender, value, pct: genderGrandTotal ? Math.round((value / genderGrandTotal) * 100) : 0 }))
+    .sort((a, b) => b.value - a.value);
+  // Franja etaria: agrupamos por el segundo componente de la clave (ej.
+  // 'F.35-44' -> '35-44'), con doble barra mujeres/hombres si Meta separa
+  // por género (que es como llega hoy). Orden fijo (no alfabético) para
+  // que las franjas queden de menor a mayor edad.
+  const AGE_ORDER = ['13-17', '18-24', '25-34', '35-44', '45-54', '55-64', '65+'];
+  const ageBuckets = {};
+  Object.entries(demoTotals.gender_age).forEach(([key, value]) => {
+    const [gender, age] = key.split('.');
+    if(!ageBuckets[age]) ageBuckets[age] = { F: 0, M: 0, U: 0 };
+    ageBuckets[age][gender] = (ageBuckets[age][gender] || 0) + value;
+  });
+  const ageRows = Object.keys(ageBuckets)
+    .sort((a, b) => AGE_ORDER.indexOf(a) - AGE_ORDER.indexOf(b))
+    .map(age => ({ age, ...ageBuckets[age], total: ageBuckets[age].F + ageBuckets[age].M + ageBuckets[age].U }));
+  const ageGrandTotal = ageRows.reduce((s, r) => s + r.total, 0);
+  const hasGenderAgeData = genderGrandTotal > 0;
+  // Principales ubicaciones: top 5 de país o ciudad segun el toggle
+  // (metricLocationView, por defecto 'country'). % sobre el total de ESE
+  // breakdown (no sobre seguidores totales -- Meta solo devuelve el top 45,
+  // así que el % ya es "sobre lo que Meta reportó", no sobre el 100% real
+  // si hay muchas ubicaciones chicas fuera del top 45).
+  const locationView = metricLocationView[clientId] || 'country';
+  const locationTotals = demoTotals[locationView] || {};
+  const locationGrandTotal = Object.values(locationTotals).reduce((s, v) => s + v, 0);
+  const locationRows = Object.entries(locationTotals)
+    .map(([key, value]) => ({ key, value, pct: locationGrandTotal ? Math.round((value / locationGrandTotal) * 100) : 0 }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+  const hasLocationData = locationRows.length > 0;
+  const hasAnyDemographics = hasGenderAgeData || hasLocationData;
+
   // Seguidores/fans totales por cuenta + variacion vs. hace 7 dias (ver
   // collect_follower_snapshots() en post_scheduler.py). Agrupamos los
   // snapshots (ya vienen ordenados por fecha ascendente) por cuenta, y para
@@ -616,6 +691,60 @@ async function renderMetrics(clientId){
       `).join('')}
     </div>
     ` : ''}
+    ${hasAnyDemographics ? `
+    <div class="metric-title">Demográficos de audiencia</div>
+    ${hasGenderAgeData ? `
+    <div class="meta-row" style="margin-bottom:6px;">Género</div>
+    <div style="margin-bottom:14px;">
+      ${genderRows.map(g => `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <div style="width:110px; font-size:12px; color:var(--muted);">${g.label}</div>
+          <div style="flex:1; height:10px; border-radius:99px; overflow:hidden; background:var(--line);">
+            <div style="height:100%; width:${g.pct}%; background:var(--gold);"></div>
+          </div>
+          <div style="width:40px; text-align:right; font-size:12px; font-weight:600;">${g.pct}%</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="meta-row" style="margin-bottom:6px;">Franja etaria</div>
+    <div class="chart-wrap" style="align-items:flex-end; margin-bottom:6px;">
+      ${ageRows.map(r => {
+        const max = Math.max(1, ...ageRows.map(x => x.total));
+        const hF = Math.max(0, (r.F / max) * 60);
+        const hM = Math.max(0, (r.M / max) * 60);
+        return `
+          <div class="chart-bar-col">
+            <div style="display:flex; gap:2px; align-items:flex-end;">
+              <div style="width:8px; height:${hF}px; background:var(--gold);" title="Mujeres ${r.age}: ${r.F}"></div>
+              <div style="width:8px; height:${hM}px; background:var(--line);" title="Hombres ${r.age}: ${r.M}"></div>
+            </div>
+            <div class="chart-label">${r.age}</div>
+          </div>`;
+      }).join('')}
+    </div>
+    <div class="meta-row" style="font-size:11px; margin-bottom:14px;">🟡 Mujeres · ⚪ Hombres · ${ageGrandTotal.toLocaleString('es')} seguidores con dato de edad.</div>
+    ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">Todavía no hay datos de género/edad para esta cuenta (solo disponible para Instagram; Meta dejó de dar este dato para Páginas de Facebook en 2024).</div>`}
+    ${hasLocationData ? `
+    <div class="meta-row" style="margin-bottom:6px; display:flex; align-items:center; justify-content:space-between;">
+      <span>Principales ubicaciones</span>
+      <span class="period-toggle">
+        <button type="button" class="${locationView==='country'?'active':''}" style="padding:2px 8px; font-size:11px;" onclick="setMetricLocationView('${clientId}', 'country')">Países</button>
+        <button type="button" class="${locationView==='city'?'active':''}" style="padding:2px 8px; font-size:11px;" onclick="setMetricLocationView('${clientId}', 'city')">Ciudades</button>
+      </span>
+    </div>
+    <div style="margin-bottom:14px;">
+      ${locationRows.map(l => `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <div style="width:110px; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${l.key}</div>
+          <div style="flex:1; height:10px; border-radius:99px; overflow:hidden; background:var(--line);">
+            <div style="height:100%; width:${l.pct}%; background:var(--gold);"></div>
+          </div>
+          <div style="width:40px; text-align:right; font-size:12px; font-weight:600;">${l.pct}%</div>
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+    ` : ''}
     <div class="metric-title">Consultas recibidas</div>
     <div id="chartLeads-${clientId}"></div>
     <div class="metric-title">Clientes nuevos (convertidos)</div>
@@ -637,7 +766,7 @@ async function renderMetrics(clientId){
   renderBarChart(document.getElementById(`chartReplyRate-${clientId}`), replyBuckets, { rate: true });
 }
 
-export { buildPeriodBuckets, computeReportRange, fillBuckets, onReportPeriodChange, renderBarChart, renderHomeView, renderMetrics, sendReportNow, setMetricPeriod, setMetricPlatform };
+export { buildPeriodBuckets, computeReportRange, fillBuckets, onReportPeriodChange, renderBarChart, renderHomeView, renderMetrics, sendReportNow, setMetricLocationView, setMetricPeriod, setMetricPlatform };
 
 // Exposicion a window: estas funciones se llaman desde atributos
 // onclick="..." embebidos en HTML generado dinamicamente (renderPostsList,
@@ -645,5 +774,6 @@ export { buildPeriodBuckets, computeReportRange, fillBuckets, onReportPeriodChan
 // scope global por default, asi que hace falta este puente explicito.
 window.onReportPeriodChange = onReportPeriodChange;
 window.sendReportNow = sendReportNow;
+window.setMetricLocationView = setMetricLocationView;
 window.setMetricPeriod = setMetricPeriod;
 window.setMetricPlatform = setMetricPlatform;
