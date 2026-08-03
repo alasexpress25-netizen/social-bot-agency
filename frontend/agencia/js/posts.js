@@ -128,6 +128,13 @@ function renderPostMetricsChips(p){
   parts.push(`💬 ${m.comments ?? '—'}`);
   parts.push(`🔁 ${m.shares ?? '—'}`);
   parts.push(`📌 ${m.saved ?? '—'}`);
+  // Parte 1, punto 3 (actualizacion_posts_y_metricas.txt): alcance a
+  // no-seguidores por post -- esto SI existe en la API de Meta, a
+  // diferencia de "nuevos seguidores por post" (que no existe y queda
+  // afuera por decision del cliente).
+  if(m.non_follower_reach != null){
+    parts.push(`🎯 alcanzó a ${m.non_follower_reach} no-seguidores`);
+  }
   return `<div style="margin-top:6px; font-size:12px; color:var(--muted);">${parts.join(' · ')}</div>`;
 }
 async function retryPost(postId, clientId){
