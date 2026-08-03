@@ -1434,8 +1434,6 @@ function pctDeltaBadge(current, previous, latestDateLabel){
   const arrow = positive ? '▲' : '▼';
   return ` <span style="font-size:11px; font-weight:600; color:${color};">${arrow} ${Math.abs(pct)}%</span>`;
 }
-// Fecha/hora del registro más reciente de un set de filas, para el sufijo
-// de pctDeltaBadge() cuando marca "nuevo"/"novo" -- ej. "hasta 02/08 18:40".
 function latestRowDateLabel(rows, dateField){
   const dates = (rows||[]).map(r => r[dateField]).filter(Boolean).map(d => new Date(d));
   if(!dates.length) return null;
@@ -1443,6 +1441,13 @@ function latestRowDateLabel(rows, dateField){
   const prefix = currentLang === 'pt' ? 'até' : 'hasta';
   const locale = currentLang === 'pt' ? 'pt-BR' : 'es-AR';
   return `${prefix} ${latest.toLocaleString(locale, { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}`;
+}
+// Igual criterio que agencia/metrics.js: tarjetas de conteo simple
+// (Interacción en publicaciones, Clics al link) muestran la fecha/hora
+// del dato más reciente solo si hay actividad; en 0 no se muestra nada.
+function lastActivitySuffix(rows, dateField){
+  const label = latestRowDateLabel(rows, dateField);
+  return label ? ` <span style="font-size:11px; font-weight:600; color:var(--muted);">· ${label}</span>` : '';
 }
 function fillBuckets(buckets, rows, dateField, { replyField = null, sumField = null, filterFn = null } = {}){
   buckets.forEach(b => { b.count = 0; b.total = 0; b.replied = 0; b.sum = 0; });
@@ -1821,13 +1826,13 @@ async function loadMetrics(){
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('interactionLabel')}</div>
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-value">${totalComments}</div><div class="kpi-label">${t('kpiComments')}</div></div>
-      ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiShares')}<br><span style="font-size:10px; font-weight:400;">${t('sharesNotOnIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">${t('kpiShares')}</div></div>`}
-      ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiSaved')}<br><span style="font-size:10px; font-weight:400;">${t('savedOnlyIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">${t('kpiSaved')}</div></div>`}
+      <div class="kpi-card"><div class="kpi-value">${totalComments}${lastActivitySuffix(postsRows.filter(p => p.comments > 0), 'published_at')}</div><div class="kpi-label">${t('kpiComments')}</div></div>
+      ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiShares')}<br><span style="font-size:10px; font-weight:400;">${t('sharesNotOnIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}${lastActivitySuffix(postsRows.filter(p => p.shares > 0), 'published_at')}</div><div class="kpi-label">${t('kpiShares')}</div></div>`}
+      ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">${t('kpiSaved')}<br><span style="font-size:10px; font-weight:400;">${t('savedOnlyIg')}</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}${postsWithSaved.length ? lastActivitySuffix(postsWithSaved.filter(p => p.saved > 0), 'published_at') : ''}</div><div class="kpi-label">${t('kpiSaved')}</div></div>`}
     </div>
     ${platform !== 'facebook' && postsWithPlays.length ? `
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-value">${totalPlays.toLocaleString(currentLang === 'pt' ? 'pt-BR' : 'es')}</div><div class="kpi-label">${t('kpiPlays')}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalPlays.toLocaleString(currentLang === 'pt' ? 'pt-BR' : 'es')}${lastActivitySuffix(postsWithPlays.filter(p => p.plays > 0), 'published_at')}</div><div class="kpi-label">${t('kpiPlays')}</div></div>
       <div class="kpi-card"><div class="kpi-value">${avgWatchTimeSeconds}s</div><div class="kpi-label">${t('kpiWatchTime')}</div></div>
     </div>
     ` : ''}
@@ -1897,7 +1902,7 @@ async function loadMetrics(){
          desglose SI se mantiene en el panel de agencia (metrics.js) porque ahi
          sirve para optimizar el enrutamiento de las respuestas. -->
     <div class="kpi-row" style="grid-template-columns:1fr; margin-bottom:14px;">
-      <div class="kpi-card"><div class="kpi-value">${totalClicks}</div><div class="kpi-label">${t('kpiTotalClicks')}</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalClicks}${lastActivitySuffix(linkClicksRows, 'clicked_at')}</div><div class="kpi-label">${t('kpiTotalClicks')}</div></div>
     </div>
     ${hasAnyDemographics ? `
     <div class="metric-title">${t('demographicsTitle')}</div>
