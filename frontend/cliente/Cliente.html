@@ -529,6 +529,13 @@ const I18N = {
     followersDelta: (n) => n === null ? '' : ` · ${n >= 0 ? '+' : ''}${n} esta semana`,
     fbEngagementTitle: 'Engagement de tu página de Facebook (últimos 28 días)',
     kpiPageEngagement: '📘 Engagement total',
+    demographicsTitle: 'Demográficos de audiencia',
+    demographicsGenderLabel: 'Género', demographicsAgeLabel: 'Franja etaria',
+    demographicsAgeFootnote: (n) => `🟡 Mujeres · ⚪ Hombres · ${n.toLocaleString('es')} seguidores con dato de edad.`,
+    demographicsGenderEmptyMsg: 'Todavía no hay datos de género/edad para tu cuenta (solo disponible para Instagram; Meta dejó de dar este dato para Páginas de Facebook en 2024).',
+    demographicsLocationsLabel: 'Principales ubicaciones',
+    demographicsCountriesBtn: 'Países', demographicsCitiesBtn: 'Ciudades',
+    genderF: 'Mujeres', genderM: 'Hombres', genderU: 'No especificado',
     clicksLabel: (n, w) => `🔗 Clics al link (${n} en total, ${w}):`,
     kpiTotalClicks: '🔗 Clics al link',
     kpiClicksComment: '💬 Comentarios', kpiClicksDm: '✉️ Mensajes directos', kpiClicksAi: '🤖 Respuesta IA', kpiClicksKeyword: '🔤 Palabra clave',
@@ -623,6 +630,13 @@ const I18N = {
     followersDelta: (n) => n === null ? '' : ` · ${n >= 0 ? '+' : ''}${n} essa semana`,
     fbEngagementTitle: 'Engajamento da sua página do Facebook (últimos 28 dias)',
     kpiPageEngagement: '📘 Engajamento total',
+    demographicsTitle: 'Demográficos de audiência',
+    demographicsGenderLabel: 'Gênero', demographicsAgeLabel: 'Faixa etária',
+    demographicsAgeFootnote: (n) => `🟡 Mulheres · ⚪ Homens · ${n.toLocaleString('pt-BR')} seguidores com dado de idade.`,
+    demographicsGenderEmptyMsg: 'Ainda não há dados de gênero/idade para sua conta (só disponível para Instagram; a Meta parou de dar esse dado para Páginas do Facebook em 2024).',
+    demographicsLocationsLabel: 'Principais localizações',
+    demographicsCountriesBtn: 'Países', demographicsCitiesBtn: 'Cidades',
+    genderF: 'Mulheres', genderM: 'Homens', genderU: 'Não especificado',
     clicksLabel: (n, w) => `🔗 Cliques no link (${n} no total, ${w}):`,
     kpiTotalClicks: '🔗 Cliques no link',
     kpiClicksComment: '💬 Comentários', kpiClicksDm: '✉️ Mensagens diretas', kpiClicksAi: '🤖 Resposta IA', kpiClicksKeyword: '🔤 Palavra-chave',
@@ -1449,6 +1463,10 @@ function renderBarChart(containerEl, buckets, { rate = false, sum = false } = {}
 
 let metricPeriod = 'week';
 let metricPlatform = 'all'; // 'all' | 'facebook' | 'instagram'
+// Actualización 03/08/2026: toggle Países/Ciudades del bloque "Principales
+// ubicaciones" (demográficos de audiencia) -- mismo patrón que
+// metricPeriod/metricPlatform arriba.
+let metricLocationView = 'country'; // 'country' | 'city'
 
 function setMetricPeriod(period){
   metricPeriod = period;
@@ -1456,6 +1474,10 @@ function setMetricPeriod(period){
 }
 function setMetricPlatform(platform){
   metricPlatform = platform;
+  loadMetrics();
+}
+function setMetricLocationView(view){
+  metricLocationView = view;
   loadMetrics();
 }
 
@@ -1474,7 +1496,7 @@ async function loadMetrics(){
   const prevWindowStartIso = new Date(buckets[0].start.getTime() - windowMs).toISOString();
   const prevWindowEndIso = windowStartIso;
 
-  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }, { data: engagementSnapshotsRaw }] = await Promise.all([
+  const [{ data: leads }, { data: interactions }, { data: postsWithMetrics }, { data: linkClicks }, { data: igAccountsRaw }, { data: fbAccountsRaw }, { data: followerSnapshotsRaw }, { data: prevLeads }, { data: prevPosts }, { data: engagementSnapshotsRaw }, { data: demographicsAccountsRaw }] = await Promise.all([
     sb.from('socialbot_leads').select('created_at, status, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     sb.from('socialbot_interactions_log').select('created_at, replied, platform').eq('client_id', currentClient.id).gte('created_at', windowStartIso),
     // caption/media_url/permalink_url: solo se usan para armar la card de
@@ -1499,6 +1521,13 @@ async function loadMetrics(){
     // Punto 3: historial diario de engagement rate (ver
     // collect_engagement_snapshots() en scheduler/metrics_collector.py).
     sb.from('socialbot_engagement_snapshots').select('snapshot_date, engagement_rate').eq('client_id', currentClient.id).gte('snapshot_date', prevWindowStartIso.slice(0, 10)),
+    // Actualización 03/08/2026 (actualizacion_posts_y_metricas.txt, Parte 2):
+    // demográficos de audiencia (género+edad, país, ciudad) -- mismo
+    // criterio y misma tabla que agencia/metrics.js (socialbot_audience_
+    // demographics, poblada por collect_audience_demographics() en
+    // metrics_collector.py). Se trae de TODAS las cuentas (no se filtra
+    // por plataforma en la query) y se separa despues segun metricPlatform.
+    sb.from('socialbot_social_accounts').select('platform, socialbot_audience_demographics(breakdown_type, breakdown_key, value)').eq('client_id', currentClient.id),
   ]);
 
   let leadsRows = leads || [];
@@ -1667,6 +1696,49 @@ async function loadMetrics(){
     return { name: acc.page_name, value: row.page_engagement };
   }).filter(Boolean);
 
+  // Actualización 03/08/2026 (actualizacion_posts_y_metricas.txt, Parte 2):
+  // demográficos de audiencia -- misma lógica que agencia/metrics.js
+  // (renderMetrics), ver comentarios ahí para el detalle de cada paso.
+  const demoAccounts = (demographicsAccountsRaw || []).filter(acc => platform === 'all' || acc.platform === platform);
+  const demoTotals = { gender_age: {}, country: {}, city: {} };
+  demoAccounts.forEach(acc => {
+    (acc.socialbot_audience_demographics || []).forEach(row => {
+      const bucket = demoTotals[row.breakdown_type];
+      if(!bucket) return;
+      bucket[row.breakdown_key] = (bucket[row.breakdown_key] || 0) + Number(row.value || 0);
+    });
+  });
+  const GENDER_LABELS = { F: t('genderF'), M: t('genderM'), U: t('genderU') };
+  const genderTotals = {};
+  Object.entries(demoTotals.gender_age).forEach(([key, value]) => {
+    const gender = key.split('.')[0];
+    genderTotals[gender] = (genderTotals[gender] || 0) + value;
+  });
+  const genderGrandTotal = Object.values(genderTotals).reduce((s, v) => s + v, 0);
+  const genderRows = Object.entries(genderTotals)
+    .map(([gender, value]) => ({ gender, label: GENDER_LABELS[gender] || gender, value, pct: genderGrandTotal ? Math.round((value / genderGrandTotal) * 100) : 0 }))
+    .sort((a, b) => b.value - a.value);
+  const AGE_ORDER = ['13-17', '18-24', '25-34', '35-44', '45-54', '55-64', '65+'];
+  const ageBuckets = {};
+  Object.entries(demoTotals.gender_age).forEach(([key, value]) => {
+    const [gender, age] = key.split('.');
+    if(!ageBuckets[age]) ageBuckets[age] = { F: 0, M: 0, U: 0 };
+    ageBuckets[age][gender] = (ageBuckets[age][gender] || 0) + value;
+  });
+  const ageRows = Object.keys(ageBuckets)
+    .sort((a, b) => AGE_ORDER.indexOf(a) - AGE_ORDER.indexOf(b))
+    .map(age => ({ age, ...ageBuckets[age], total: ageBuckets[age].F + ageBuckets[age].M + ageBuckets[age].U }));
+  const ageGrandTotal = ageRows.reduce((s, r) => s + r.total, 0);
+  const hasGenderAgeData = genderGrandTotal > 0;
+  const locationTotals = demoTotals[metricLocationView] || {};
+  const locationGrandTotal = Object.values(locationTotals).reduce((s, v) => s + v, 0);
+  const locationRows = Object.entries(locationTotals)
+    .map(([key, value]) => ({ key, value, pct: locationGrandTotal ? Math.round((value / locationGrandTotal) * 100) : 0 }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+  const hasLocationData = locationRows.length > 0;
+  const hasAnyDemographics = hasGenderAgeData || hasLocationData;
+
   // Seguidores/fans totales por cuenta + variacion vs. hace 7 dias (ver
   // collect_follower_snapshots() en post_scheduler.py).
   const snapshotsByAccount = {};
@@ -1812,6 +1884,60 @@ async function loadMetrics(){
     <div class="kpi-row" style="grid-template-columns:1fr; margin-bottom:14px;">
       <div class="kpi-card"><div class="kpi-value">${totalClicks}</div><div class="kpi-label">${t('kpiTotalClicks')}</div></div>
     </div>
+    ${hasAnyDemographics ? `
+    <div class="metric-title">${t('demographicsTitle')}</div>
+    ${hasGenderAgeData ? `
+    <div class="meta-row" style="margin-bottom:6px;">${t('demographicsGenderLabel')}</div>
+    <div style="margin-bottom:14px;">
+      ${genderRows.map(g => `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <div style="width:110px; font-size:12px; color:var(--muted);">${g.label}</div>
+          <div style="flex:1; height:10px; border-radius:99px; overflow:hidden; background:var(--line);">
+            <div style="height:100%; width:${g.pct}%; background:var(--gold);"></div>
+          </div>
+          <div style="width:40px; text-align:right; font-size:12px; font-weight:600;">${g.pct}%</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="meta-row" style="margin-bottom:6px;">${t('demographicsAgeLabel')}</div>
+    <div class="chart-wrap" style="align-items:flex-end; margin-bottom:6px;">
+      ${ageRows.map(r => {
+        const max = Math.max(1, ...ageRows.map(x => x.total));
+        const hF = Math.max(0, (r.F / max) * 60);
+        const hM = Math.max(0, (r.M / max) * 60);
+        return `
+          <div class="chart-bar-col">
+            <div style="display:flex; gap:2px; align-items:flex-end;">
+              <div style="width:8px; height:${hF}px; background:var(--gold);" title="${GENDER_LABELS.F} ${r.age}: ${r.F}"></div>
+              <div style="width:8px; height:${hM}px; background:var(--line);" title="${GENDER_LABELS.M} ${r.age}: ${r.M}"></div>
+            </div>
+            <div class="chart-label">${r.age}</div>
+          </div>`;
+      }).join('')}
+    </div>
+    <div class="meta-row" style="font-size:11px; margin-bottom:14px;">${t('demographicsAgeFootnote')(ageGrandTotal)}</div>
+    ` : `<div class="meta-row" style="font-size:12px; margin-bottom:14px;">${t('demographicsGenderEmptyMsg')}</div>`}
+    ${hasLocationData ? `
+    <div class="meta-row" style="margin-bottom:6px; display:flex; align-items:center; justify-content:space-between;">
+      <span>${t('demographicsLocationsLabel')}</span>
+      <span class="period-toggle">
+        <button type="button" class="${metricLocationView==='country'?'active':''}" style="padding:2px 8px; font-size:11px;" onclick="setMetricLocationView('country')">${t('demographicsCountriesBtn')}</button>
+        <button type="button" class="${metricLocationView==='city'?'active':''}" style="padding:2px 8px; font-size:11px;" onclick="setMetricLocationView('city')">${t('demographicsCitiesBtn')}</button>
+      </span>
+    </div>
+    <div style="margin-bottom:14px;">
+      ${locationRows.map(l => `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <div style="width:110px; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${l.key}</div>
+          <div style="flex:1; height:10px; border-radius:99px; overflow:hidden; background:var(--line);">
+            <div style="height:100%; width:${l.pct}%; background:var(--gold);"></div>
+          </div>
+          <div style="width:40px; text-align:right; font-size:12px; font-weight:600;">${l.pct}%</div>
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+    ` : ''}
     <div class="card">
       <div class="metric-title">${t('chartLeadsTitle')}</div>
       <div id="chartLeads"></div>
