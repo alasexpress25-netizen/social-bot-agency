@@ -275,6 +275,19 @@
   </div>
 </div>
 
+<!-- Modal: Comentarios y respuestas (card "💬 Comentarios" dentro de Interaccion en publicaciones) -->
+<div class="modal-overlay" id="commentsModal" onclick="if(event.target===this) closeCommentsModal()">
+  <div class="modal-box" style="max-width:560px;">
+    <div class="card-row">
+      <h2 style="margin:0;">💬 Comentarios</h2>
+      <button type="button" class="modal-close" onclick="closeCommentsModal()">✕</button>
+    </div>
+    <div id="commentsModalBody">
+      <div class="meta-row">Cargando...</div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Nuevo cliente -->
 <div class="modal-overlay" id="newClientModal" onclick="if(event.target===this) closeNewClientModal()">
   <div class="modal-box">
