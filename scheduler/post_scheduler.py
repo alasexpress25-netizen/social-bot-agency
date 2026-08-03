@@ -181,8 +181,22 @@ def generate_caption(ai_settings, client_name, sales_link, client_id=None):
         "de venta genericas que podria decir cualquiera. "
     )
 
+    # Idioma del post: mismo campo (socialbot_ai_settings.reply_language) que ya
+    # se usaba solo para las respuestas de comentarios/DMs en meta-webhook, ahora
+    # tambien controla en que idioma se redactan los posts de este cliente.
+    # "auto" no tiene sentido para un post nuevo (no hay mensaje entrante del que
+    # detectar idioma), asi que para posts se interpreta como español por default.
+    reply_language = ai_settings.get("reply_language") or "pt-BR"
+    if reply_language == "es":
+        language_line = "Escribi el post en español. "
+    elif reply_language == "auto":
+        language_line = "Escribi el post en español. "
+    else:
+        language_line = "Escribi el post en portugués de Brasil (pt-BR). "
+
     user_prompt = (
         f"Negocio: {client_name}. Temas/keywords: {topics}. Tono: {tone}. "
+        f"{language_line}"
         f"{knowledge_line}"
         f"{confianza_line}"
         f"Escribi UNA publicacion nueva y distinta para Instagram/Facebook, maximo {max_chars} caracteres, "

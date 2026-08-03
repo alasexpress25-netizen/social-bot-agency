@@ -561,8 +561,21 @@ def build_prompt(client, ai_settings, context, num_days):
         "Cada idea debe incluir el TEXTO FINAL del post, listo para publicar, no solo el tema."
     )
 
+    # Idioma de los posts: mismo campo (socialbot_ai_settings.reply_language) que
+    # ya se usaba solo para las respuestas de comentarios/DMs en meta-webhook,
+    # ahora tambien controla en que idioma se redacta el plan semanal de este
+    # cliente. "auto" no aplica a un plan generado de antemano (no hay mensaje
+    # entrante del que detectar idioma), asi que para posts se interpreta como
+    # español por default.
+    reply_language = ai_settings.get("reply_language") or "pt-BR"
+    if reply_language == "pt-BR":
+        language_line = "Escribí TODAS las captions en portugués de Brasil (pt-BR)."
+    else:
+        language_line = "Escribí TODAS las captions en español."
+
     parts = [
         f"Negocio: {client['name']}. Temas/keywords habituales: {topics or '(sin cargar)'}. Tono de marca: {tone}.",
+        language_line,
     ]
 
     parts.append(
