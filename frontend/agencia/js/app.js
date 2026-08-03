@@ -385,6 +385,13 @@ async function loadClients(){
           <label class="sr-only" for="aiTone-${c.id}">Tono de las respuestas</label>
           <input aria-label="Tono de las respuestas" name="tone" id="aiTone-${c.id}" placeholder="Tono (ej: cercano y profesional)" value="${ai.tone||''}" />
         </div>
+        <div style="font-size:13px; color:var(--muted);">Idioma en el que la IA escribe los posts y contesta comentarios/DMs de este cliente</div>
+        <label class="sr-only" for="aiReplyLanguage-${c.id}">Idioma de contenido</label>
+        <select aria-label="Idioma de contenido" name="reply_language" id="aiReplyLanguage-${c.id}">
+          <option value="pt-BR" ${(ai.reply_language||'pt-BR')==='pt-BR'?'selected':''}>Portugués (Brasil)</option>
+          <option value="es" ${ai.reply_language==='es'?'selected':''}>Español</option>
+          <option value="auto" ${ai.reply_language==='auto'?'selected':''}>Auto (detecta el idioma del mensaje, solo para respuestas)</option>
+        </select>
         <div style="font-size:13px; color:var(--muted);">Límite de respuestas con IA por día — al llegar acá, el bot sigue respondiendo pero con una plantilla fija en vez de generar con IA</div>
         <label class="sr-only" for="aiDailyLimit-${c.id}">Límite diario de respuestas con IA</label>
         <input aria-label="Límite diario de respuestas con IA" name="daily_ai_reply_limit" id="aiDailyLimit-${c.id}" type="number" min="1" placeholder="30" value="${ai.daily_ai_reply_limit || ''}" />

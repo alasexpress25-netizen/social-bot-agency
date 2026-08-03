@@ -15,6 +15,7 @@ async function saveAi(e, clientId){
     provider: f.get('provider'),
     content_plan_provider: f.get('content_plan_provider'),
     tone: f.get('tone'),
+    reply_language: f.get('reply_language') || 'pt-BR',
     daily_ai_reply_limit: f.get('daily_ai_reply_limit') ? parseInt(f.get('daily_ai_reply_limit'), 10) : null,
     default_hashtags: f.get('default_hashtags'),
     topics: f.get('topics'),
