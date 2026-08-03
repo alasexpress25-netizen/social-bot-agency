@@ -87,6 +87,24 @@ def sb_update(table, match_params, patch):
     r.raise_for_status()
 
 
+def sb_delete(table, match_params):
+    """
+    Borra filas por match exacto de columnas (ej. {"social_account_id":
+    "eq.xxx", "breakdown_type": "eq.gender_age"}). Usado por
+    collect_audience_demographics() (metrics_collector.py) para limpiar,
+    antes de cada corrida, las claves de un breakdown que ya no vienen en
+    la respuesta de Meta (ej. una ciudad que salio del top-45) -- sb_upsert
+    solo pisa/agrega filas, nunca borra las que dejaron de aparecer.
+    """
+    r = requests.delete(
+        f"{SUPABASE_URL}/rest/v1/{table}",
+        headers=SUPABASE_HEADERS,
+        params=match_params,
+        timeout=30,
+    )
+    r.raise_for_status()
+
+
 def sb_upsert(table, rows, on_conflict):
     """
     Insert-or-update por una clave unica (ej. post_id en

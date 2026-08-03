@@ -17,26 +17,32 @@ cron (mas espaciado que los 15 minutos de post_scheduler.py -- ver
   3. collect_facebook_page_engagement(): engagement total (page_post_
      engagements) de cada Pagina de Facebook, ultimos 28 dias, misma tabla
      que el punto anterior (columna page_engagement).
-  4. collect_follower_snapshots(): snapshot diario de seguidores/fans
+  4. collect_audience_demographics() (agregado 03/08/2026): snapshot
+     demografico de audiencia -- genero+edad, pais y ciudad -- de cada
+     cuenta conectada (socialbot_audience_demographics). Instagram trae
+     los 3 tipos; Facebook solo pais/ciudad (Meta depreco genero/edad de
+     Paginas en 2024 sin dar reemplazo). Solo se guarda el ultimo
+     snapshot, no hay historial dia por dia.
+  5. collect_follower_snapshots(): snapshot diario de seguidores/fans
      totales de CADA cuenta conectada (Facebook e Instagram), para la
      variacion semanal que se muestra en "Métricas" del panel de agencia.
-  5. collect_weekly_client_snapshot(): dashboard consolidado multi-cliente
+  6. collect_weekly_client_snapshot(): dashboard consolidado multi-cliente
      (agencia) -- 1 fila por cliente por semana con 7 metricas clave
      (likes, comments, leads, leads_convertidos, clics_link, seguidores,
      reach), para el semaforo de crecimiento por cliente
      (socialbot_client_weekly_snapshots).
 
 No requiere servidor: corre como un job de GitHub Actions y termina. Mismo
-criterio best-effort que post_scheduler.py: si una de las 5 funciones
-falla, se loguea el error y se sigue con la siguiente (un fallo puntual de
-Meta no debe frenar el resto de la recoleccion).
+criterio best-effort que post_scheduler.py: si una de las funciones falla,
+se loguea el error y se sigue con la siguiente (un fallo puntual de Meta
+no debe frenar el resto de la recoleccion).
 """
 
 from datetime import datetime, timezone, timedelta
 
 import requests
 
-from sb_common import sb_get, sb_update, sb_upsert, GRAPH_API_VERSION, _clean_external_id
+from sb_common import sb_delete, sb_get, sb_update, sb_upsert, GRAPH_API_VERSION, _clean_external_id
 
 # collect_post_metrics(): despues de esta cantidad de fallos consecutivos
 # trayendo metricas de un post (ej. el cliente lo borro, oculto los likes,
@@ -241,6 +247,202 @@ def _fetch_instagram_post_audience_reach(media_id, access_token):
         return by_type.get("FOLLOWER"), by_type.get("NON_FOLLOWER")
     except Exception:
         return None, None
+
+
+# ---------------------------------------------------------------------------
+# Actualización 03/08/2026 (actualizacion_posts_y_metricas.txt, Parte 2):
+# demográficos de audiencia (género+edad, país, ciudad), a nivel de CUENTA
+# (Meta no da este desglose por post). ¡OJO! -- igual que ya paso con
+# post_impressions (ver nota en _fetch_facebook_post_insights de mas
+# arriba), Meta cambia nombres de metricas de insights sin mucho aviso.
+# Los nombres usados aca (follower_demographics para Instagram,
+# page_follows_country/page_follows_city para Facebook) son los vigentes
+# al momento de escribir esto -- confirmar en Graph API Explorer contra la
+# version de API que se este usando (GRAPH_API_VERSION) antes de correr
+# esto en produccion por primera vez.
+# ---------------------------------------------------------------------------
+def _fetch_instagram_follower_demographics(ig_business_id, access_token, breakdown):
+    """
+    Desglose demografico de SEGUIDORES (no de alcance) de una cuenta de
+    Instagram. metric='follower_demographics' con metric_type=total_value
+    (mismo formato "breakdowns" que ya usa _fetch_instagram_audience_reach
+    para 'reach'), period='lifetime' porque es una foto del total actual
+    de seguidores, no una ventana movil de dias.
+
+    breakdown: 'gender,age' (genero+edad combinados en un mismo dimension_
+    values de a 2 elementos, EN ESE ORDEN -- Meta devuelve dimension_values
+    respetando el orden pedido en el parametro 'breakdown'), 'country' o
+    'city' (1 elemento). Devuelve una lista de (breakdown_key, value) --
+    para gender,age arma la clave como 'GENERO.EDAD' (ej. 'F.35-44'); para
+    country/city, el codigo/nombre tal cual lo devuelve Meta (hasta 45
+    valores, los mas importantes primero).
+
+    Devuelve [] (lista vacia) si Meta no tiene el dato todavia (cuenta con
+    menos de 100 seguidores, por ejemplo -- Meta exige un piso de 100 para
+    dar demograficos) o el permiso no alcanza. Best-effort, no corta la
+    corrida.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/insights",
+            params={
+                "metric": "follower_demographics",
+                "period": "lifetime",
+                "metric_type": "total_value",
+                "breakdown": breakdown,
+                "access_token": access_token,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            return []
+        breakdowns = data[0].get("total_value", {}).get("breakdowns", [])
+        if not breakdowns:
+            return []
+        results = breakdowns[0].get("results", [])
+        out = []
+        for item in results:
+            dims = item.get("dimension_values") or []
+            value = item.get("value")
+            if not dims or value is None:
+                continue
+            # breakdown='gender,age' llega como dimension_values=[gender, age]
+            # (orden = mismo orden en que se pidio el parametro 'breakdown').
+            key = ".".join(dims) if len(dims) > 1 else dims[0]
+            out.append((key, value))
+        return out
+    except Exception:
+        return []
+
+
+def _fetch_facebook_follower_geo(page_id, access_token, metric):
+    """
+    Desglose geografico (pais o ciudad) de seguidores de una Pagina de
+    Facebook. metric: 'page_follows_country' o 'page_follows_city' --
+    reemplazo de los viejos page_fans_country/page_fans_city, deprecados
+    por Meta el 15/11/2025 (ver nota arriba de este bloque).
+
+    A diferencia de follower_demographics de Instagram, este tipo de
+    metrica "legacy" de Paginas no usa el formato metric_type=total_value
+    con 'breakdowns' -- Meta la devuelve directo como un diccionario
+    {pais_o_ciudad: cantidad} adentro de 'values'. Se deja el parseo
+    tolerante a los dos formatos por si Meta lo migra mas adelante al
+    mismo esquema que usa Instagram.
+
+    Facebook NO expone genero/edad de seguidores de Pagina desde marzo
+    2024 (deprecado sin reemplazo) -- por eso no existe un
+    _fetch_facebook_follower_gender_age equivalente: esa columna queda
+    vacia para cuentas platform='facebook' en socialbot_audience_demographics.
+
+    Devuelve [] si Meta no tiene el dato o el permiso no alcanza.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/insights",
+            params={"metric": metric, "period": "lifetime", "access_token": access_token},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data or not data[0].get("values"):
+            return []
+        raw_value = data[0]["values"][-1].get("value")
+        if not raw_value:
+            return []
+        if isinstance(raw_value, dict):
+            return list(raw_value.items())
+        # Formato alternativo (por si Meta lo migro a 'breakdowns'), tolerado
+        # por las dudas -- mismo parseo que _fetch_instagram_follower_demographics.
+        breakdowns = raw_value.get("breakdowns", []) if isinstance(raw_value, dict) else []
+        out = []
+        for b in breakdowns:
+            for item in b.get("results", []):
+                dims = item.get("dimension_values") or []
+                if dims and item.get("value") is not None:
+                    out.append((dims[0], item.get("value")))
+        return out
+    except Exception:
+        return []
+
+
+def collect_audience_demographics():
+    """
+    Trae y guarda el snapshot demografico de audiencia (genero+edad, pais,
+    ciudad) de CADA cuenta conectada -- Instagram con los 3 tipos via
+    _fetch_instagram_follower_demographics, Facebook solo country/city via
+    _fetch_facebook_follower_geo (Meta no da genero/edad de Paginas desde
+    2024). Guarda en socialbot_audience_demographics -- upsert por
+    (social_account_id, breakdown_type, breakdown_key), y ANTES de insertar
+    borra (sb_delete) las filas viejas de ese social_account_id+breakdown_type
+    que ya no vinieron en esta corrida (ej. una ciudad que salio del top-45),
+    para no dejar claves huerfanas de corridas anteriores.
+
+    Se corre junto con el resto de las recolecciones de audiencia
+    (collect_audience_reach, collect_facebook_page_engagement).
+    """
+    accounts = sb_get(
+        "socialbot_social_accounts",
+        {"select": "id,platform,page_id,ig_business_id,page_access_token,page_name"},
+    )
+    if not accounts:
+        return
+
+    print(f"Actualizando demograficos de audiencia de {len(accounts)} cuenta(s)...")
+    updated = 0
+    for account in accounts:
+        platform = account.get("platform")
+        access_token = account.get("page_access_token")
+        try:
+            # breakdown_type -> lista de (breakdown_key, value) a guardar
+            fetched_by_type = {}
+            if platform == "instagram":
+                ig_id = account.get("ig_business_id")
+                if not ig_id or not access_token:
+                    continue
+                fetched_by_type["gender_age"] = _fetch_instagram_follower_demographics(ig_id, access_token, "gender,age")
+                fetched_by_type["country"] = _fetch_instagram_follower_demographics(ig_id, access_token, "country")
+                fetched_by_type["city"] = _fetch_instagram_follower_demographics(ig_id, access_token, "city")
+            elif platform == "facebook":
+                page_id = account.get("page_id")
+                if not page_id or not access_token:
+                    continue
+                fetched_by_type["country"] = _fetch_facebook_follower_geo(page_id, access_token, "page_follows_country")
+                fetched_by_type["city"] = _fetch_facebook_follower_geo(page_id, access_token, "page_follows_city")
+                # No hay fetched_by_type["gender_age"] para Facebook a proposito.
+            else:
+                continue
+
+            any_data = False
+            for breakdown_type, rows in fetched_by_type.items():
+                if not rows:
+                    continue  # sin dato nuevo -- no tocamos lo que ya estaba guardado de este tipo
+                any_data = True
+                sb_delete(
+                    "socialbot_audience_demographics",
+                    {"social_account_id": f"eq.{account['id']}", "breakdown_type": f"eq.{breakdown_type}"},
+                )
+                sb_upsert(
+                    "socialbot_audience_demographics",
+                    [
+                        {
+                            "social_account_id": account["id"],
+                            "breakdown_type": breakdown_type,
+                            "breakdown_key": key,
+                            "value": value,
+                            "fetched_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        for key, value in rows
+                    ],
+                    on_conflict="social_account_id,breakdown_type,breakdown_key",
+                )
+            if any_data:
+                updated += 1
+        except Exception as e:
+            print(f"ERROR actualizando demograficos de {account.get('page_name') or account['id']}: {e}")
+
+    print(f"Demograficos de audiencia actualizados: {updated}/{len(accounts)}.")
 
 
 def _fetch_facebook_shares(post_id, access_token):
@@ -940,7 +1142,7 @@ def collect_weekly_client_snapshot():
 
 def run():
     """
-    Corre las 6 recolecciones en orden, cada una best-effort (un fallo en
+    Corre las 7 recolecciones en orden, cada una best-effort (un fallo en
     una no frena a las demas). Pensado para GitHub Actions: no hay servidor
     ni loop, se ejecuta una vez y termina.
     """
@@ -966,6 +1168,11 @@ def run():
         collect_facebook_page_engagement()
     except Exception as e:
         print(f"ERROR actualizando engagement de pagina de Facebook (no se corta la corrida): {e}")
+
+    try:
+        collect_audience_demographics()
+    except Exception as e:
+        print(f"ERROR actualizando demograficos de audiencia (no se corta la corrida): {e}")
 
     try:
         collect_follower_snapshots()
