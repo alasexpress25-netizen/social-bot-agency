@@ -127,6 +127,14 @@ function latestRowDateLabel(rows, dateField){
   const latest = new Date(Math.max(...dates));
   return `hasta ${latest.toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}`;
 }
+// Igual idea que el sufijo de pctDeltaBadge, pero para tarjetas de conteo
+// simple (sin comparación de periodo) -- Interacción en publicaciones y
+// Clics al link: si hay actividad (rows no vacío tras filtrar por >0) se
+// muestra la fecha/hora del más reciente; si está en 0, no se muestra nada.
+function lastActivitySuffix(rows, dateField){
+  const label = latestRowDateLabel(rows, dateField);
+  return label ? ` <span style="font-size:11px; font-weight:600; color:var(--muted);">· ${label}</span>` : '';
+}
 function fillBuckets(buckets, rows, dateField, { replyField = null, sumField = null, filterFn = null } = {}){
   buckets.forEach(b => { b.count = 0; b.total = 0; b.replied = 0; b.sum = 0; });
   (rows||[]).forEach(r => {
@@ -631,13 +639,13 @@ async function renderMetrics(clientId){
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Interacción en publicaciones (${windowLabel}):</div>
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-value">${totalComments}</div><div class="kpi-label">💬 Comentarios</div></div>
-      ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔁 Compartidos<br><span style="font-size:10px; font-weight:400;">Instagram no lo reporta vía API</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}</div><div class="kpi-label">🔁 Compartidos</div></div>`}
-      ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔖 Guardados<br><span style="font-size:10px; font-weight:400;">Solo existe para Instagram</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>`}
+      <div class="kpi-card"><div class="kpi-value">${totalComments}${lastActivitySuffix(postsRows.filter(p => p.comments > 0), 'published_at')}</div><div class="kpi-label">💬 Comentarios</div></div>
+      ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔁 Compartidos<br><span style="font-size:10px; font-weight:400;">Instagram no lo reporta vía API</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}${lastActivitySuffix(postsRows.filter(p => p.shares > 0), 'published_at')}</div><div class="kpi-label">🔁 Compartidos</div></div>`}
+      ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔖 Guardados<br><span style="font-size:10px; font-weight:400;">Solo existe para Instagram</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}${postsWithSaved.length ? lastActivitySuffix(postsWithSaved.filter(p => p.saved > 0), 'published_at') : ''}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>`}
     </div>
     ${platform !== 'facebook' && postsWithPlays.length ? `
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-value">${totalPlays.toLocaleString('es')}</div><div class="kpi-label">▶️ Reproducciones (Reels)</div></div>
+      <div class="kpi-card"><div class="kpi-value">${totalPlays.toLocaleString('es')}${lastActivitySuffix(postsWithPlays.filter(p => p.plays > 0), 'published_at')}</div><div class="kpi-label">▶️ Reproducciones (Reels)</div></div>
       <div class="kpi-card"><div class="kpi-value">${avgWatchTimeSeconds}s</div><div class="kpi-label">⏱️ Duración promedio vista</div></div>
     </div>
     ` : ''}
@@ -654,10 +662,10 @@ async function renderMetrics(clientId){
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">🔗 Clics al link (${totalClicks} en total, ${windowLabel}):</div>
     <div class="kpi-row kpi-row-4">
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}</div><div class="kpi-label">💬 Comentarios</div></div>
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.dm_reply}</div><div class="kpi-label">✉️ Mensajes directos</div></div>
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.ai_reply}</div><div class="kpi-label">🤖 Respuesta IA</div></div>
-      <div class="kpi-card"><div class="kpi-value">${clicksBySource.fallback_reply}</div><div class="kpi-label">🔤 Palabra clave</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.comment_reply}${lastActivitySuffix(linkClicksRows.filter(c => c.source === 'comment_reply'), 'clicked_at')}</div><div class="kpi-label">💬 Comentarios</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.dm_reply}${lastActivitySuffix(linkClicksRows.filter(c => c.source === 'dm_reply'), 'clicked_at')}</div><div class="kpi-label">✉️ Mensajes directos</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.ai_reply}${lastActivitySuffix(linkClicksRows.filter(c => c.source === 'ai_reply'), 'clicked_at')}</div><div class="kpi-label">🤖 Respuesta IA</div></div>
+      <div class="kpi-card"><div class="kpi-value">${clicksBySource.fallback_reply}${lastActivitySuffix(linkClicksRows.filter(c => c.source === 'fallback_reply'), 'clicked_at')}</div><div class="kpi-label">🔤 Palabra clave</div></div>
     </div>
     ${igAccounts.length ? `
     <div class="metric-title">Audiencia de Instagram: seguidores vs. no seguidores (últimos 28 días)</div>
