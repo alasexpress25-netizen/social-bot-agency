@@ -639,7 +639,7 @@ async function renderMetrics(clientId){
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Interacción en publicaciones (${windowLabel}):</div>
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-value">${totalComments}${lastActivitySuffix(postsRows.filter(p => p.comments > 0), 'published_at')}</div><div class="kpi-label">💬 Comentarios</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openCommentsModal('${clientId}')"><div class="kpi-value">${totalComments}${lastActivitySuffix(postsRows.filter(p => p.comments > 0), 'published_at')}</div><div class="kpi-label">💬 Comentarios</div></div>
       ${platform === 'instagram' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔁 Compartidos<br><span style="font-size:10px; font-weight:400;">Instagram no lo reporta vía API</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${totalShares}${lastActivitySuffix(postsRows.filter(p => p.shares > 0), 'published_at')}</div><div class="kpi-label">🔁 Compartidos</div></div>`}
       ${platform === 'facebook' ? `<div class="kpi-card"><div class="kpi-value">—</div><div class="kpi-label">🔖 Guardados<br><span style="font-size:10px; font-weight:400;">Solo existe para Instagram</span></div></div>` : `<div class="kpi-card"><div class="kpi-value">${postsWithSaved.length ? totalSaved : '—'}${postsWithSaved.length ? lastActivitySuffix(postsWithSaved.filter(p => p.saved > 0), 'published_at') : ''}</div><div class="kpi-label">🔖 Guardados (Instagram)</div></div>`}
     </div>
@@ -789,13 +789,95 @@ async function renderMetrics(clientId){
   renderBarChart(document.getElementById(`chartReplyRate-${clientId}`), replyBuckets, { rate: true });
 }
 
-export { buildPeriodBuckets, computeReportRange, fillBuckets, onReportPeriodChange, renderBarChart, renderHomeView, renderMetrics, sendReportNow, setMetricLocationView, setMetricPeriod, setMetricPlatform };
+// ---------------------------------------------------------------------------
+// Popup de comentarios (card "💬 Comentarios" de Interaccion en
+// publicaciones): lista los comentarios/DMs con su respuesta (si la hay),
+// fecha y hora de cada uno, y el titulo del post al que pertenecen.
+//
+// Actualizacion 03/08/2026 (actualizacion_popup_comentarios.txt): el texto
+// (comment_text/reply_text/external_post_id) solo existe para
+// interacciones nuevas (migracion 0041) o traidas por el backfill
+// (backfill-post-comments, matched_keyword='historico-import') -- las de
+// antes de eso quedan en null y se muestran con una nota aclaratoria en
+// vez de texto vacio.
+function escapeHtml(str){
+  return String(str ?? '').replace(/[&<>"']/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]));
+}
+function formatDateTime(iso){
+  if(!iso) return '';
+  return new Date(iso).toLocaleString('es', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+async function openCommentsModal(clientId){
+  const modal = document.getElementById('commentsModal');
+  const body = document.getElementById('commentsModalBody');
+  body.innerHTML = `<div class="meta-row">Cargando...</div>`;
+  modal.classList.add('open');
+
+  const [{ data: interactions, error: interactionsError }, { data: posts }] = await Promise.all([
+    sb.from('socialbot_interactions_log')
+      .select('comment_text, reply_text, created_at, replied_at, external_post_id, platform')
+      .eq('client_id', clientId)
+      .eq('type', 'comment')
+      .order('created_at', { ascending: false })
+      .limit(200),
+    sb.from('socialbot_posts')
+      .select('external_post_id, caption, platform')
+      .eq('client_id', clientId)
+      .not('external_post_id', 'is', null),
+  ]);
+
+  if(interactionsError){
+    body.innerHTML = `<div class="meta-row">No se pudieron cargar los comentarios. Intentá de nuevo en un momento.</div>`;
+    return;
+  }
+
+  const titleByPostId = {};
+  (posts || []).forEach(p => {
+    if(!p.external_post_id) return;
+    titleByPostId[p.external_post_id] = p.caption ? p.caption.slice(0, 80) + (p.caption.length > 80 ? '...' : '') : null;
+  });
+
+  const rows = interactions || [];
+  if(!rows.length){
+    body.innerHTML = `<div class="meta-row">Todavía no hay comentarios registrados para este cliente.</div>`;
+    return;
+  }
+
+  body.innerHTML = rows.map(r => {
+    const postTitle = r.external_post_id ? (titleByPostId[r.external_post_id] || null) : null;
+    const platformIcon = r.platform === 'instagram' ? '📸' : '📘';
+    const titleLine = postTitle
+      ? `${platformIcon} ${escapeHtml(postTitle)}`
+      : (r.external_post_id ? `${platformIcon} Publicación (sin título guardado)` : `${platformIcon} Publicación no identificada`);
+    const commentBody = r.comment_text
+      ? escapeHtml(r.comment_text)
+      : `<span style="font-style:italic; color:var(--muted);">Comentario anterior a esta función: no se guardó el texto original.</span>`;
+    const replyBlock = r.reply_text
+      ? `<div class="comment-reply">${escapeHtml(r.reply_text)}<div class="comment-reply-meta">Respondido ${formatDateTime(r.replied_at || r.created_at)}</div></div>`
+      : `<div class="comment-no-reply">Sin respuesta registrada</div>`;
+    return `
+      <div class="comment-item">
+        <div class="comment-post-title">${titleLine}</div>
+        <div class="comment-text">${commentBody}</div>
+        <div class="comment-meta">${formatDateTime(r.created_at)}</div>
+        ${replyBlock}
+      </div>
+    `;
+  }).join('');
+}
+function closeCommentsModal(){
+  document.getElementById('commentsModal').classList.remove('open');
+}
+
+export { buildPeriodBuckets, closeCommentsModal, computeReportRange, fillBuckets, onReportPeriodChange, openCommentsModal, renderBarChart, renderHomeView, renderMetrics, sendReportNow, setMetricLocationView, setMetricPeriod, setMetricPlatform };
 
 // Exposicion a window: estas funciones se llaman desde atributos
 // onclick="..." embebidos en HTML generado dinamicamente (renderPostsList,
 // renderArchivosHostRow, etc). Los modulos ES no exponen sus funciones al
 // scope global por default, asi que hace falta este puente explicito.
+window.closeCommentsModal = closeCommentsModal;
 window.onReportPeriodChange = onReportPeriodChange;
+window.openCommentsModal = openCommentsModal;
 window.sendReportNow = sendReportNow;
 window.setMetricLocationView = setMetricLocationView;
 window.setMetricPeriod = setMetricPeriod;
