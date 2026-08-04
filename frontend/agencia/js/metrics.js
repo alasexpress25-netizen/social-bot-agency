@@ -828,7 +828,7 @@ async function openCommentsModal(clientId, platform = 'all'){
   // la card (ej. card en 3 por filtrar solo Instagram, popup trayendo
   // tambien las de Facebook).
   let query = sb.from('socialbot_interactions_log')
-    .select('comment_text, reply_text, created_at, replied_at, external_post_id, platform')
+    .select('comment_text, reply_text, created_at, replied_at, external_post_id, platform, post_permalink_url')
     .eq('client_id', clientId)
     .eq('type', 'comment')
     .order('created_at', { ascending: false })
@@ -874,10 +874,15 @@ async function openCommentsModal(clientId, platform = 'all'){
     const titleLine = postTitle
       ? `${platformIcon} ${platformLabel} — ${escapeHtml(postTitle)}`
       : (r.external_post_id ? `${platformIcon} ${platformLabel} — Publicación (sin título guardado)` : `${platformIcon} ${platformLabel} — Publicación no identificada`);
-    // Link directo al post -- solo si guardamos permalink_url para ese
-    // external_post_id (posts de antes de la migracion 0025, o posts
-    // borrados del panel, no tienen link y no se muestra nada en su lugar).
-    const permalink = r.external_post_id ? permalinkByPostId[r.external_post_id] : null;
+    // Link directo al post. Actualizacion 03/08/2026 (migracion 0042):
+    // prioriza post_permalink_url, guardado por meta-webhook/index.ts en
+    // el momento del comentario (pedido directo a la Graph API, no
+    // depende de matchear con socialbot_posts). Fallback al cruce viejo
+    // por external_post_id para comentarios registrados antes de esa
+    // columna -- puede seguir sin link si el post no vive en
+    // socialbot_posts o si su external_post_id tiene un sufijo pegado
+    // (ej. "123 (foto manual)") que no matchea con el postId limpio.
+    const permalink = r.post_permalink_url || (r.external_post_id ? permalinkByPostId[r.external_post_id] : null);
     const postLink = permalink
       ? ` <a href="${permalink}" target="_blank" rel="noopener" style="font-size:11px; text-decoration:underline;">Ver publicación ↗</a>`
       : '';
