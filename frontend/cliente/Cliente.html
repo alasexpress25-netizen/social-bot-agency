@@ -164,7 +164,23 @@
     font-size:18px; cursor:pointer; line-height:1;
   }
   .comment-item{ border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
-  .comment-item .comment-post-title{ font-size:11.5px; color:var(--gold2); margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .comment-item .comment-post-title{ font-size:11.5px; color:var(--gold2); margin-bottom:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Actualizacion 04/08/2026: el link "Ver publicacion" iba pegado dentro
+     de .comment-post-title (mismo texto, mismo div) -- ese div tiene
+     white-space:nowrap + overflow:hidden + text-overflow:ellipsis, asi que
+     cuando el titulo del post era largo, el recorte se comia el link junto
+     con el texto y quedaba invisible (aunque seguia en el DOM). Se separo
+     en su propio div/linea con badge dorado, igual criterio que metrics.js
+     del panel de agencia. */
+  .comment-item .comment-post-link{
+    display:inline-flex; align-items:center; gap:5px;
+    font-size:11px; font-weight:600; color:var(--gold2);
+    text-decoration:none; margin-bottom:8px;
+    padding:4px 10px; border:1px solid var(--gold); border-radius:20px;
+    transition:background .15s ease, color .15s ease;
+  }
+  .comment-item .comment-post-link:hover{ background:var(--gold); color:var(--black); }
+  .comment-item .comment-post-link svg{ flex-shrink:0; }
   .comment-item .comment-text{ font-size:13.5px; margin-bottom:2px; }
   .comment-item .comment-meta{ font-size:11px; color:var(--muted); margin-bottom:8px; }
   .comment-item .comment-reply{ background:var(--accent-soft); border-radius:8px; padding:8px 10px; font-size:13px; margin-top:6px; }
@@ -558,6 +574,7 @@ const I18N = {
     commentsModalNoText: 'Comentario anterior a esta función: no se guardó el texto original.',
     commentsModalNoReply: 'Sin respuesta registrada', commentsModalReplied: 'Respondido',
     commentsModalNoPost: 'Publicación no identificada', commentsModalUntitledPost: 'Publicación (sin título guardado)',
+    commentsModalViewPost: 'Ver publicación',
     audienceTitle: '¿Quién te ve en Instagram? (últimos 28 días)',
     audienceFollowerLabel: '👥 Seguidores', audienceNonFollowerLabel: '🌟 Gente nueva',
     kpiProfileViews: '🔎 Visitas al perfil',
