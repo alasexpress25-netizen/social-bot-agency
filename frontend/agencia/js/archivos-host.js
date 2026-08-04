@@ -347,12 +347,17 @@ function renderArchivosHostRow(file){
   const sizeMb = (file.size / 1024 / 1024).toFixed(2);
   const fecha = file.mtime ? new Date(file.mtime * 1000).toLocaleString('es-AR') : '';
   const safeId = (file.url || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const previewType = file.media_type === 'video' ? 'video' : 'image';
+  const previewUrls = JSON.stringify([file.url]).replace(/"/g, '&quot;');
   row.innerHTML = `
     <div style="display:flex; align-items:flex-start; gap:10px;">
       <label class="sr-only" for="archivosHostCheck-${safeId}">Seleccionar ${file.name}</label>
       <input type="checkbox" id="archivosHostCheck-${safeId}" name="archivosHostCheck-${safeId}" aria-label="Seleccionar ${file.name}" class="archivos-host-check" data-url="${file.url}" onchange="onArchivosHostCheckChange()" style="margin-top:4px; flex-shrink:0;" />
       <div style="flex:1; min-width:0;">
-        <div class="meta-row">${file.media_type === 'video' ? 'Video' : 'Imagen'} · ${sizeMb} MB · ${fecha}</div>
+        <div class="meta-row" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <span>${file.media_type === 'video' ? 'Video' : 'Imagen'} · ${sizeMb} MB · ${fecha}</span>
+          <button type="button" class="media-preview-btn" title="Ver contenido" onclick="openMediaPreviewModal('${previewType}', ${previewUrls})">👁 Ver</button>
+        </div>
         <label class="sr-only" for="archivosHostName-${safeId}">Nombre del archivo</label>
         <input type="text" id="archivosHostName-${safeId}" name="archivosHostName-${safeId}" aria-label="Nombre del archivo" readonly value="${file.name}" title="${file.url}" onclick="this.select()" style="margin-top:6px; width:100%; box-sizing:border-box; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-family:inherit; background:var(--dark); color:var(--white);" />
       </div>
