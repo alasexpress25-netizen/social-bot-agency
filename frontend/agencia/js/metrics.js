@@ -818,6 +818,13 @@ async function renderMetrics(clientId){
 // div), asi que el link quedaba en el DOM pero invisible. Separandolo en
 // su propio div ya no lo afecta ese recorte, sin importar el largo del
 // titulo.
+//
+// Actualizacion 04/08/2026 (2): .comment-post-link tenia la clase puesta
+// pero sin ningun CSS asociado (quedaba como link azul de navegador por
+// defecto, sin relacion visual con el resto del panel). Se agrego el
+// estilo en styles.css (badge dorado con icono) para que se note como
+// elemento clickeable de verdad -- mismo criterio visual que el link de
+// "Ver publicación en vivo" del post destacado (mas arriba en este archivo).
 function escapeHtml(str){
   return String(str ?? '').replace(/[&<>"']/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]));
 }
@@ -895,7 +902,7 @@ async function openCommentsModal(clientId, platform = 'all'){
     // arriba de la funcion) -- por eso ya no arranca con un espacio ni se
     // concatena al titulo.
     const postLink = permalink
-      ? `<a href="${permalink}" target="_blank" rel="noopener" class="comment-post-link">Ver publicación ↗</a>`
+      ? `<a href="${permalink}" target="_blank" rel="noopener" class="comment-post-link">Ver publicación<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a>`
       : '';
     const commentBody = r.comment_text
       ? escapeHtml(r.comment_text)
