@@ -112,13 +112,63 @@ async function deleteMedia(mediaId, clientId){
   loadClients();
 }
 
-export { addMedia, deleteMedia, toggleMediaTypeFields, updateMedia };
+// ── Vista previa de medio (video/reel o carrusel) ──────────────────────
+// Estado del carrusel actualmente abierto en el modal, para poder navegar
+// entre imagenes con los botones prev/next.
+let mediaPreviewUrls = [];
+let mediaPreviewIndex = 0;
+let mediaPreviewType = 'video';
+
+function renderMediaPreviewStage(){
+  const body = document.getElementById('mediaPreviewBody');
+  const url = mediaPreviewUrls[mediaPreviewIndex];
+  if(!url){
+    body.innerHTML = '<div class="media-preview-error">No hay contenido cargado para este medio todavía.</div>';
+    return;
+  }
+  const isVideo = mediaPreviewType === 'video';
+  const navHtml = mediaPreviewUrls.length > 1 ? `
+    <button type="button" class="media-preview-nav prev" onclick="mediaPreviewStep(-1)" aria-label="Anterior">‹</button>
+    <button type="button" class="media-preview-nav next" onclick="mediaPreviewStep(1)" aria-label="Siguiente">›</button>
+  ` : '';
+  body.innerHTML = `
+    <div class="media-preview-stage">
+      ${isVideo
+        ? `<video src="${url}" controls autoplay playsinline></video>`
+        : `<img src="${url}" alt="Vista previa" />`}
+      ${navHtml}
+    </div>
+    ${mediaPreviewUrls.length > 1 ? `<div class="media-preview-counter">${mediaPreviewIndex + 1} / ${mediaPreviewUrls.length}</div>` : ''}
+  `;
+}
+function mediaPreviewStep(delta){
+  if(!mediaPreviewUrls.length) return;
+  mediaPreviewIndex = (mediaPreviewIndex + delta + mediaPreviewUrls.length) % mediaPreviewUrls.length;
+  renderMediaPreviewStage();
+}
+function openMediaPreviewModal(mediaType, urls){
+  mediaPreviewType = mediaType;
+  mediaPreviewUrls = (urls || []).filter(Boolean);
+  mediaPreviewIndex = 0;
+  document.getElementById('mediaPreviewTitle').textContent = mediaType === 'carousel' ? '🖼️ Carrusel' : (mediaType === 'video' ? '🎬 Video / Reel' : '🖼️ Imagen');
+  renderMediaPreviewStage();
+  document.getElementById('mediaPreviewModal').classList.add('open');
+}
+function closeMediaPreviewModal(){
+  document.getElementById('mediaPreviewModal').classList.remove('open');
+  document.getElementById('mediaPreviewBody').innerHTML = '';
+}
+
+export { addMedia, closeMediaPreviewModal, deleteMedia, mediaPreviewStep, openMediaPreviewModal, toggleMediaTypeFields, updateMedia };
 
 // Exposicion a window: estas funciones se llaman desde atributos
 // onclick="..." embebidos en HTML generado dinamicamente (renderPostsList,
 // renderArchivosHostRow, etc). Los modulos ES no exponen sus funciones al
 // scope global por default, asi que hace falta este puente explicito.
 window.addMedia = addMedia;
+window.closeMediaPreviewModal = closeMediaPreviewModal;
 window.deleteMedia = deleteMedia;
+window.mediaPreviewStep = mediaPreviewStep;
+window.openMediaPreviewModal = openMediaPreviewModal;
 window.toggleMediaTypeFields = toggleMediaTypeFields;
 window.updateMedia = updateMedia;

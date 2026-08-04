@@ -583,6 +583,7 @@ async function loadClients(){
           <div class="meta-row">
             <span class="pill" style="background:var(--accent-soft); color:var(--gold); font-weight:700; margin-right:6px;">${mediaQueueRank.get(m.id) === 1 ? '▶ Próxima a publicar' : `${mediaQueueRank.get(m.id)}º en la fila`}</span>
             ${m.media_type}${m.media_type==='carousel' ? ` (${carouselCounts[m.id]||0} imágenes)` : ''} · usado ${m.times_used}x${m.manual_order != null ? ` · orden manual: ${m.manual_order}` : ''}
+            <button type="button" class="media-preview-btn" title="Ver contenido" onclick="openMediaPreviewModal('${m.media_type}', ${JSON.stringify(m.media_type==='carousel' ? (carouselUrlsByAsset[m.id]||[]) : [m.url]).replace(/"/g,'&quot;')})">👁 Ver</button>
           </div>
           <label class="sr-only" for="mediaManualOrder-${m.id}">Orden manual</label>
           <input aria-label="Orden manual" name="manual_order" id="mediaManualOrder-${m.id}" type="number" min="1" step="1" value="${m.manual_order != null ? m.manual_order : ''}" placeholder="Orden manual (opcional, ej: 1). Vacío = automático" />

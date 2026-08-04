@@ -288,6 +288,17 @@
   </div>
 </div>
 
+<!-- Modal: Vista previa de medio (video/reel o carrusel) -->
+<div class="modal-overlay" id="mediaPreviewModal" onclick="if(event.target===this) closeMediaPreviewModal()">
+  <div class="modal-box" style="max-width:420px;">
+    <div class="card-row">
+      <h2 style="margin:0;" id="mediaPreviewTitle">Vista previa</h2>
+      <button type="button" class="modal-close" onclick="closeMediaPreviewModal()">✕</button>
+    </div>
+    <div id="mediaPreviewBody" style="text-align:center;"></div>
+  </div>
+</div>
+
 <!-- Modal: Nuevo cliente -->
 <div class="modal-overlay" id="newClientModal" onclick="if(event.target===this) closeNewClientModal()">
   <div class="modal-box">
