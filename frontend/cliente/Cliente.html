@@ -2137,8 +2137,12 @@ async function openCommentsModal(clientId, platform = 'all'){
     // al cruce viejo por external_post_id para comentarios de antes de
     // esa columna.
     const permalink = r.post_permalink_url || (r.external_post_id ? permalinkByPostId[r.external_post_id] : null);
+    // Actualizacion: el link va en su propia linea, como boton separado
+    // (clase .comment-post-link ya definida en el CSS de este archivo),
+    // en vez de ir pegado al titulo -- ahi quedaba oculto por el
+    // overflow:hidden/white-space:nowrap de .comment-post-title.
     const postLink = permalink
-      ? ` <a href="${permalink}" target="_blank" rel="noopener" style="font-size:11px; text-decoration:underline;">Ver publicación ↗</a>`
+      ? `<a href="${permalink}" target="_blank" rel="noopener" class="comment-post-link">Ver publicación<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg></a>`
       : '';
     const commentBody = r.comment_text
       ? escapeHtmlComment(r.comment_text)
@@ -2148,7 +2152,8 @@ async function openCommentsModal(clientId, platform = 'all'){
       : `<div class="comment-no-reply">${t('commentsModalNoReply')}</div>`;
     return `
       <div class="comment-item">
-        <div class="comment-post-title">${titleLine}${postLink}</div>
+        <div class="comment-post-title">${titleLine}</div>
+        ${postLink}
         <div class="comment-text">${commentBody}</div>
         <div class="comment-meta">${formatCommentDateTime(r.created_at)}</div>
         ${replyBlock}
