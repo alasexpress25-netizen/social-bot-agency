@@ -2068,7 +2068,7 @@ async function openCommentsModal(clientId, platform = 'all'){
   // que en el panel de agencia (metrics.js), para que el numero de la card
   // siempre coincida con lo que muestra el popup.
   let query = sb.from('socialbot_interactions_log')
-    .select('comment_text, reply_text, created_at, replied_at, external_post_id, platform')
+    .select('comment_text, reply_text, created_at, replied_at, external_post_id, platform, post_permalink_url')
     .eq('client_id', clientId)
     .eq('type', 'comment')
     .order('created_at', { ascending: false })
@@ -2114,9 +2114,12 @@ async function openCommentsModal(clientId, platform = 'all'){
     const titleLine = postTitle
       ? `${platformIcon} ${platformLabel} — ${escapeHtmlComment(postTitle)}`
       : (r.external_post_id ? `${platformIcon} ${platformLabel} — ${t('commentsModalUntitledPost')}` : `${platformIcon} ${platformLabel} — ${t('commentsModalNoPost')}`);
-    // Link directo al post -- solo si guardamos permalink_url (posts de
-    // antes de la migracion 0025, o borrados del panel, no tienen link).
-    const permalink = r.external_post_id ? permalinkByPostId[r.external_post_id] : null;
+    // Link directo al post. Actualizacion 03/08/2026 (migracion 0042):
+    // prioriza post_permalink_url, guardado por meta-webhook/index.ts en
+    // el momento del comentario (pedido directo a la Graph API). Fallback
+    // al cruce viejo por external_post_id para comentarios de antes de
+    // esa columna.
+    const permalink = r.post_permalink_url || (r.external_post_id ? permalinkByPostId[r.external_post_id] : null);
     const postLink = permalink
       ? ` <a href="${permalink}" target="_blank" rel="noopener" style="font-size:11px; text-decoration:underline;">Ver publicación ↗</a>`
       : '';
