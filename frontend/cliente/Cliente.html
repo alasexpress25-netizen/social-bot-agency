@@ -59,6 +59,38 @@
     .topbar .tag{ display:none; } /* en celular no entra el email completo junto al boton Salir */
   }
 
+  /* ─── Lengüeta dorada "peek" pegada al borde izq: reemplaza al botón
+     hamburguesa. Solo existe/se ve en móvil (ver media query 760px). En
+     PC queda display:none y el sidebar sigue fijo como siempre. Al tocarla
+     desliza el sidebar completo por encima; mientras el sidebar está
+     abierto la lengüeta se esconde (JS le agrega .peek-hidden) y reaparece
+     al cerrar. Mismo patrón que agencia/index.html. ──────────────────── */
+  .sidebar-peek-tab{
+    display:none; position:fixed; left:0; top:50%; transform:translateY(-50%);
+    width:16px; height:64px; z-index:45; background:var(--gold); border-radius:0 10px 10px 0;
+    align-items:center; justify-content:center; cursor:pointer; border:none; padding:0;
+    box-shadow:2px 0 12px rgba(0,0,0,0.4);
+  }
+  .sidebar-peek-tab svg{ width:11px; height:11px; stroke:var(--black); fill:none; stroke-width:3; }
+  .sidebar-overlay{
+    display:none; position:fixed; inset:0; z-index:39;
+    background:rgba(0,0,0,0.55);
+  }
+  @media (max-width:760px){
+    .sidebar-peek-tab{ display:flex; }
+    .sidebar-peek-tab.peek-hidden{ display:none; }
+
+    /* Sidebar pasa a ser un panel deslizable (off-canvas), oculto por
+       defecto y solo visible cuando se le agrega la clase .open (via JS,
+       toggleSidebar()). En PC no se toca nada de esto porque vive adentro
+       de este media query de 760px. */
+    .sidebar{
+      transform:translateX(-100%); transition:transform .25s ease; box-shadow:4px 0 24px rgba(0,0,0,0.5);
+    }
+    .sidebar.open{ transform:translateX(0); }
+    .sidebar-overlay.open{ display:block; }
+  }
+
   /* ─── Layout: sidebar fija a la izquierda + contenido ────────────────── */
   .layout{ display:flex; padding-top:64px; min-height:100vh; }
   .sidebar{
@@ -92,6 +124,14 @@
     letter-spacing:0; text-transform:none; box-shadow:0 0 0 2px var(--dark2);
   }
   main{ margin-left:84px; flex:1; max-width:760px; padding:28px; width:100%; }
+  /* El contenido ya no reserva espacio fijo para el sidebar en móvil: el
+     sidebar flota por encima (position:fixed) cuando está abierto. Este
+     override tiene que vivir DESPUÉS de la regla base "main" de arriba
+     para ganar el empate de especificidad -- si va antes, el navegador
+     aplica la regla base igual aunque estemos en móvil. */
+  @media (max-width:760px){
+    main{ margin-left:0; }
+  }
   .page{ display:none; }
   .page.active{ display:block; }
   .page-title{
@@ -284,9 +324,14 @@
   </div>
 </div>
 
+<button type="button" class="sidebar-peek-tab" id="sidebarPeekTab" onclick="toggleSidebar()" title="Menú" aria-label="Abrir menú">
+  <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+</button>
+
 <div id="app" style="display:none;">
   <div class="layout">
-    <nav class="sidebar">
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+    <nav class="sidebar" id="sidebarEl">
       <button class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')">
         <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4.5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1V19a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/></svg>
         <span data-i18n="navDashboard">Inicio</span>
@@ -842,7 +887,26 @@ function showPage(pageId){
   document.getElementById(`page-${pageId}`)?.classList.add('active');
   document.querySelector(`.nav-item[data-page="${pageId}"]`)?.classList.add('active');
   window.scrollTo(0, 0);
+  closeSidebar(); // en móvil, elegir una sección cierra el menú lateral solo
 }
+// ---------------------------------------------------------------------------
+// Sidebar off-canvas en móvil (solo aplica visualmente <=760px, ver CSS).
+// En PC .sidebar nunca tiene "open" ni transform, así que estas funciones
+// no cambian nada de su comportamiento actual ahí. Mismo patrón que
+// agencia/js/ui-chrome.js.
+// ---------------------------------------------------------------------------
+function toggleSidebar(){
+  document.getElementById('sidebarEl').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+  document.getElementById('sidebarPeekTab').classList.toggle('peek-hidden');
+}
+function closeSidebar(){
+  document.getElementById('sidebarEl').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+  document.getElementById('sidebarPeekTab').classList.remove('peek-hidden');
+}
+window.toggleSidebar = toggleSidebar;
+window.closeSidebar = closeSidebar;
 
 async function loadAll(){
   // loadPosts va antes que loadLeads (y no en el mismo Promise.all): la
