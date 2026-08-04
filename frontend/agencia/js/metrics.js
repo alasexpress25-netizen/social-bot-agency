@@ -810,6 +810,14 @@ async function renderMetrics(clientId){
 // (backfill-post-comments, matched_keyword='historico-import') -- las de
 // antes de eso quedan en null y se muestran con una nota aclaratoria en
 // vez de texto vacio.
+//
+// Actualizacion 04/08/2026: el link "Ver publicación" se movio a su propia
+// linea (clase .comment-post-link) en vez de ir pegado al titulo del post
+// -- cuando el titulo era largo, .comment-post-title lo recortaba junto
+// con el texto (white-space:nowrap + text-overflow:ellipsis en el mismo
+// div), asi que el link quedaba en el DOM pero invisible. Separandolo en
+// su propio div ya no lo afecta ese recorte, sin importar el largo del
+// titulo.
 function escapeHtml(str){
   return String(str ?? '').replace(/[&<>"']/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]));
 }
@@ -883,8 +891,11 @@ async function openCommentsModal(clientId, platform = 'all'){
     // socialbot_posts o si su external_post_id tiene un sufijo pegado
     // (ej. "123 (foto manual)") que no matchea con el postId limpio.
     const permalink = r.post_permalink_url || (r.external_post_id ? permalinkByPostId[r.external_post_id] : null);
+    // Actualizacion 04/08/2026: el link va en su propia linea (ver nota
+    // arriba de la funcion) -- por eso ya no arranca con un espacio ni se
+    // concatena al titulo.
     const postLink = permalink
-      ? ` <a href="${permalink}" target="_blank" rel="noopener" style="font-size:11px; text-decoration:underline;">Ver publicación ↗</a>`
+      ? `<a href="${permalink}" target="_blank" rel="noopener" class="comment-post-link">Ver publicación ↗</a>`
       : '';
     const commentBody = r.comment_text
       ? escapeHtml(r.comment_text)
@@ -894,7 +905,8 @@ async function openCommentsModal(clientId, platform = 'all'){
       : `<div class="comment-no-reply">Sin respuesta registrada</div>`;
     return `
       <div class="comment-item">
-        <div class="comment-post-title">${titleLine}${postLink}</div>
+        <div class="comment-post-title">${titleLine}</div>
+        ${postLink}
         <div class="comment-text">${commentBody}</div>
         <div class="comment-meta">${formatDateTime(r.created_at)}</div>
         ${replyBlock}
