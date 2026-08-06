@@ -589,13 +589,22 @@ async function renderMetrics(clientId){
     if(!snapshotsByAccount[row.social_account_id]) snapshotsByAccount[row.social_account_id] = { platform: acc.platform, name: acc.page_name, snaps: [] };
     snapshotsByAccount[row.social_account_id].snaps.push({ date: row.snapshot_date, count: row.follower_count });
   });
-  // Actualizacion 06/08/2026: % de crecimiento de seguidores en los ultimos
-  // 28 dias -- el dato que Meta muestra en su propio Insights ("creciste X%
-  // este mes") y que hasta ahora no existia ni en agencia ni en cliente.
-  // Reutiliza el mismo historial diario (followerSnapshotsRaw) que ya se
-  // pedia para "Seguidores totales" / delta semanal -- no hace falta
-  // ninguna query nueva, solo se agrega, por cuenta, la muestra mas cercana
-  // a 28 dias antes de la ultima, ademas de la de 7 dias que ya existia.
+  // Actualizacion 06/08/2026: % de crecimiento de seguidores -- el dato que
+  // Meta muestra en su propio Insights ("creciste X% este mes") y que hasta
+  // ahora no existia ni en agencia ni en cliente. Reutiliza el mismo
+  // historial diario (followerSnapshotsRaw) que ya se pedia para
+  // "Seguidores totales" / delta semanal -- no hace falta ninguna query
+  // nueva.
+  // Actualizacion 06/08/2026 (v2): al principio no hay 28 dias de historial
+  // para nadie, asi que en vez de exigir ese numero fijo (y esconder la
+  // tarjeta hasta fin de mes), la ventana se va agrandando sola: usa la
+  // muestra mas vieja que haya por cuenta, hasta un tope de 28 dias, y la
+  // etiqueta dice la ventana real ("ultimos 12 dias", etc). Con menos de
+  // MIN_GROWTH_DAYS de historial el numero seria puro ruido (un +1 en una
+  // cuenta chica ya mueve el % un monton), asi que ahi se muestra un aviso
+  // de "todavia no" en vez de un porcentaje enganoso.
+  const MIN_GROWTH_DAYS = 7;
+  const MAX_GROWTH_DAYS = 28;
   const followerCards = Object.values(snapshotsByAccount).map(acc => {
     const snaps = acc.snaps.filter(s => s.count != null);
     if(!snaps.length) return null;
@@ -607,21 +616,27 @@ async function renderMetrics(clientId){
       if(new Date(s.date) <= targetDate) weekAgo = s; // se queda con el ultimo que cumple, o sea el mas cercano a 7 dias atras
     }
     const target28 = new Date(latest.date);
-    target28.setDate(target28.getDate() - 28);
-    let base28 = null;
+    target28.setDate(target28.getDate() - MAX_GROWTH_DAYS);
+    let growthBase = null;
     for(const s of snaps){
-      if(new Date(s.date) <= target28) base28 = s;
+      if(new Date(s.date) <= target28) growthBase = s; // el mas cercano a 28 dias atras, si hay
     }
-    return { platform: acc.platform, name: acc.name, count: latest.count, delta: weekAgo ? latest.count - weekAgo.count : null, base28: base28 ? base28.count : null };
+    if(!growthBase && snaps.length > 1) growthBase = snaps[0]; // sin 28 dias todavia: usamos la muestra mas vieja que tengamos
+    const growthBaseDaysAgo = growthBase ? Math.round((new Date(latest.date) - new Date(growthBase.date)) / 86400000) : null;
+    return { platform: acc.platform, name: acc.name, count: latest.count, delta: weekAgo ? latest.count - weekAgo.count : null, growthBase: growthBase ? growthBase.count : null, growthBaseDaysAgo };
   }).filter(Boolean).filter(f => platform === 'all' || f.platform === platform);
   // Se suma entre todas las cuentas visibles (respeta el selector de
-  // plataforma, igual que followerCards). Cuentas sin 28 dias de historial
-  // todavia (recien conectadas) se excluyen del calculo por completo, en
+  // plataforma, igual que followerCards). Cuentas con menos de
+  // MIN_GROWTH_DAYS de historial se excluyen del calculo por completo, en
   // vez de arruinar el numero con un 0 que en realidad es "sin dato".
-  const growthAccounts = followerCards.filter(f => f.base28 !== null);
+  const growthAccounts = followerCards.filter(f => f.growthBase !== null && f.growthBaseDaysAgo >= MIN_GROWTH_DAYS);
   const growthLatestSum = growthAccounts.reduce((s, f) => s + f.count, 0);
-  const growthBaseSum = growthAccounts.reduce((s, f) => s + f.base28, 0);
+  const growthBaseSum = growthAccounts.reduce((s, f) => s + f.growthBase, 0);
   const hasGrowthData = growthAccounts.length > 0;
+  // Ventana real a mostrar en la etiqueta: la mas corta entre las cuentas
+  // incluidas, para no prometer mas dias de los que realmente tiene la
+  // cuenta con menos historial.
+  const growthWindowDays = hasGrowthData ? Math.min(...growthAccounts.map(f => f.growthBaseDaysAgo)) : null;
   const growthIsNew = hasGrowthData && growthBaseSum === 0 && growthLatestSum > 0;
   const growthPct = (hasGrowthData && growthBaseSum > 0) ? Math.round(((growthLatestSum - growthBaseSum) / growthBaseSum) * 1000) / 10 : null;
 
@@ -639,12 +654,16 @@ async function renderMetrics(clientId){
         <option value="instagram" ${platform==='instagram'?'selected':''}>📷 Instagram</option>
       </select>
     </div>
-    ${hasGrowthData ? `
+    ${followerCards.length ? `
     <div class="card" style="text-align:center; padding:18px; margin-bottom:14px; border:1px solid var(--gold);">
+      ${hasGrowthData ? `
       <div style="font-size:34px; font-weight:700; line-height:1.1; color:${growthIsNew || (growthPct !== null && growthPct >= 0) ? '#5fae6a' : 'var(--warn)'};">
         ${growthIsNew ? 'nuevo' : (growthPct === null ? '—' : `${growthPct >= 0 ? '+' : ''}${growthPct}%`)}
       </div>
-      <div class="kpi-label" style="margin-top:4px;">📈 Crecimiento de seguidores (últimos 28 días)</div>
+      <div class="kpi-label" style="margin-top:4px;">📈 Crecimiento de seguidores (últimos ${growthWindowDays >= MAX_GROWTH_DAYS ? MAX_GROWTH_DAYS : growthWindowDays} días)</div>
+      ` : `
+      <div style="font-size:14px; color:var(--muted); padding:4px 0;">📈 La cuenta todavía no tiene suficiente historial para esta estadística — aparecerá en unos días.</div>
+      `}
     </div>
     ` : ''}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">Totales de ${windowLabel}:</div>
