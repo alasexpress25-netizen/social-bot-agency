@@ -739,7 +739,8 @@ const I18N = {
     audienceEmptyMsg: 'Ainda não há dados da sua audiência (pode levar alguns dias para aparecer).',
     onlineFollowersTitle: '🕒 Horário em que sua audiência está mais conectada (média últimos 7 dias)',
     onlineFollowersFootnote: (hours) => `Por isso programamos suas publicações perto de ${hours}.`,
-    growthTitle: '📈 Crescimento de seguidores (últimos 28 dias)', growthNew: 'novo',
+    growthTitle: (d) => `📈 Crescimento de seguidores (últimos ${d} dias)`, growthNew: 'novo',
+    growthWaiting: '📈 A conta ainda não tem histórico suficiente para essa estatística — aparecerá em alguns dias.',
     followersTitle: 'Seus seguidores',
     followersDelta: (n) => n === null ? '' : ` · ${n >= 0 ? '+' : ''}${n} essa semana`,
     fbEngagementTitle: 'Engajamento da sua página do Facebook (últimos 28 dias)',
@@ -1959,25 +1960,40 @@ async function loadMetrics(){
     for(const s of snaps){
       if(new Date(s.date) <= targetDate) weekAgo = s;
     }
+    // Hibrido 06/08/2026: en vez de exigir una muestra a <=28 dias exactos
+    // (lo que dejaba a las cuentas con menos historial afuera del calculo
+    // hasta el dia 28), se toma la muestra mas vieja disponible de cada
+    // cuenta -- sea cual sea su antiguedad -- y se guarda ademas cuantos
+    // dias reales cubre esa ventana. El target de 28 dias solo se usa como
+    // techo: si ya hay una muestra a 28+ dias, se usa esa (comportamiento
+    // identico al de antes); si no, se usa la mas vieja que haya.
     const target28 = new Date(latest.date);
     target28.setDate(target28.getDate() - 28);
-    let base28 = null;
+    let base = null;
     for(const s of snaps){
-      if(new Date(s.date) <= target28) base28 = s;
+      if(new Date(s.date) <= target28){ base = s; break; } // ya hay 28+ dias, no hace falta seguir
+      if(!base || new Date(s.date) < new Date(base.date)) base = s; // si no, quedate con la mas vieja
     }
-    return { platform: acc.platform, name: acc.name, count: latest.count, delta: weekAgo ? latest.count - weekAgo.count : null, base28: base28 ? base28.count : null };
+    const baseDays = base ? Math.round((new Date(latest.date) - new Date(base.date)) / 86400000) : null;
+    return { platform: acc.platform, name: acc.name, count: latest.count, delta: weekAgo ? latest.count - weekAgo.count : null, base28: base ? base.count : null, baseDays };
   }).filter(Boolean).filter(f => platform === 'all' || f.platform === platform);
   // Se suma entre todas las cuentas visibles (respeta el selector de
-  // plataforma, igual que followerCards). Si una cuenta todavia no tiene
-  // 28 dias de historial (recien conectada), se excluye del calculo -- ni
-  // suma en el antes ni en el despues -- en vez de arruinar el numero con
-  // un 0 que en realidad es "todavia no tenemos el dato".
-  const growthAccounts = followerCards.filter(f => f.base28 !== null);
+  // plataforma, igual que followerCards).
+  // Umbral minimo: con menos de 7 dias de historial el numero es demasiado
+  // ruidoso para mostrarse como "%" (una cuenta recien conectada) -- se
+  // excluye del calculo y, si ninguna cuenta visible llega a 7 dias, se
+  // muestra el mensaje de espera en vez del numero.
+  const MIN_GROWTH_DAYS = 7;
+  const growthAccounts = followerCards.filter(f => f.base28 !== null && f.baseDays >= MIN_GROWTH_DAYS);
   const growthLatestSum = growthAccounts.reduce((s, f) => s + f.count, 0);
   const growthBaseSum = growthAccounts.reduce((s, f) => s + f.base28, 0);
   const hasGrowthData = growthAccounts.length > 0;
+  const hasAnyHistory = followerCards.length > 0;
   const growthIsNew = hasGrowthData && growthBaseSum === 0 && growthLatestSum > 0;
   const growthPct = (hasGrowthData && growthBaseSum > 0) ? Math.round(((growthLatestSum - growthBaseSum) / growthBaseSum) * 1000) / 10 : null;
+  // Ventana honesta: la etiqueta usa la ventana real y mas chica entre las
+  // cuentas que entraron al calculo, nunca "28" si en realidad hay menos.
+  const growthWindowDays = hasGrowthData ? Math.min(...growthAccounts.map(f => f.baseDays)) : null;
 
   const el = document.getElementById('metricsBox');
   el.innerHTML = `
@@ -1997,9 +2013,13 @@ async function loadMetrics(){
       <div style="font-size:34px; font-weight:700; line-height:1.1; color:${growthIsNew || (growthPct !== null && growthPct >= 0) ? '#5fae6a' : 'var(--warn)'};">
         ${growthIsNew ? t('growthNew') : (growthPct === null ? '—' : `${growthPct >= 0 ? '+' : ''}${growthPct}%`)}
       </div>
-      <div class="kpi-label" style="margin-top:4px;">${t('growthTitle')}</div>
+      <div class="kpi-label" style="margin-top:4px;">${typeof I18N[currentLang].growthTitle === 'function' ? t('growthTitle')(growthWindowDays) : t('growthTitle')}</div>
     </div>
-    ` : ''}
+    ` : (hasAnyHistory ? `
+    <div class="card" style="text-align:center; padding:18px; margin-bottom:14px; border:1px solid var(--gold); opacity:0.75;">
+      <div class="kpi-label" style="margin:0;">${t('growthWaiting')}</div>
+    </div>
+    ` : '')}
     <div class="meta-row" style="margin-top:0; margin-bottom:8px;">${t('totalsLabel')(windowLabel)}</div>
     <div class="kpi-row kpi-row-4">
       <div class="kpi-card"><div class="kpi-value">${totalLeads}${pctDeltaBadge(totalLeads, prevTotalLeads, latestRowDateLabel(leadsRows, 'created_at'))}</div><div class="kpi-label">${t('kpiLeads')}</div></div>
