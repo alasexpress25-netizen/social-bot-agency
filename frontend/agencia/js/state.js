@@ -6,7 +6,7 @@
 
 // ⚠️ Completá con los datos de tu proyecto Supabase (Settings > API)
 const SUPABASE_URL = "https://redaqqxoeciycqgjhpbv.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlZGFxcXhvZWNpeWNxZ2pocGJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxMDcyMjEsImV4cCI6MjA5MzY4MzIyMX0.HqpOrWPtbYImgy57TafbaB4qriqmq4FI9GIa4Vg9FhI";
+const SUPABASE_ANON_KEY = "sb_publishable_XYeljNeSm2awnovoTvzXiQ_va4cFyvU";
 // ⚠️ URL pública donde vive frontend/cliente.html. Tiene que ser EXACTA
 // (con o sin barra final, según cómo la tengas publicada) y estar agregada
 // en Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
