@@ -246,8 +246,12 @@ def _call_groq(system_prompt, user_prompt):
 
 
 def _call_gemini(system_prompt, user_prompt):
+    # Se usa el alias "gemini-flash-latest" (no una version fija como
+    # "gemini-2.5-flash") porque Google jubila los modelos Gemini seguido
+    # -- el mismo problema que tuvimos con Groq/Llama 3.3 (24/08/2026). El
+    # alias apunta siempre al ultimo Flash estable sin tocar el codigo.
     r = requests.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
         headers={"Content-Type": "application/json"},
         params={"key": GEMINI_API_KEY},
         json={
