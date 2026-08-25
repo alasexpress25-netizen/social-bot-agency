@@ -229,7 +229,10 @@ def _call_groq(system_prompt, user_prompt):
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
         json={
-            "model": "llama-3.3-70b-versatile",
+            # llama-3.3-70b-versatile fue dado de baja por Groq (deprecado
+            # 17/06/2026, decomisionado agosto 2026). Reemplazado por el
+            # modelo recomendado por Groq como sucesor (24/08/2026).
+            "model": "openai/gpt-oss-120b",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
