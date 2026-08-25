@@ -30,6 +30,10 @@ jobs:
           # Mismos secrets de IA que ya usa content_planner.py, sin el
           # sufijo _CONTENT_PLAN (este script no compite por esa cuota).
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Fallback si Groq falla o queda deprecado (pedido 24/08/2026):
+          # reviews_monitor.py ya prueba Gemini automaticamente despues de
+          # Groq, pero necesita esta key para poder hacerlo.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: python scheduler/reviews_monitor.py

@@ -36,4 +36,11 @@ jobs:
           GROQ_API_KEY_CONTENT_PLAN: ${{ secrets.GROQ_API_KEY_CONTENT_PLAN }}
           OPENAI_API_KEY_CONTENT_PLAN: ${{ secrets.OPENAI_API_KEY_CONTENT_PLAN }}
           CLAUDE_API_KEY_CONTENT_PLAN: ${{ secrets.CLAUDE_API_KEY_CONTENT_PLAN }}
+          # Fallback si Groq falla o queda deprecado (pedido 24/08/2026):
+          # content_planner.py ya prueba Gemini automaticamente despues de
+          # Groq, pero necesita esta key para poder hacerlo. Se puede usar
+          # una key separada (GEMINI_API_KEY_CONTENT_PLAN) o compartir la
+          # general (GEMINI_API_KEY), igual que ya hace con las demas IA.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_CONTENT_PLAN: ${{ secrets.GEMINI_API_KEY_CONTENT_PLAN }}
         run: python scheduler/content_planner.py
