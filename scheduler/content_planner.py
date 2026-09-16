@@ -17,8 +17,9 @@ menos un horario de publicacion configurado:
      - cuantos dias por semana publica ese cliente (segun sus
        schedule_slots activos) -- eso define cuantas ideas hacen falta
   2. Le pide a la IA (mismo provider que ya tiene configurado el cliente:
-     groq/openai/claude) un lote de posts YA REDACTADOS para los proximos
-     dias, en JSON.
+     gemini/groq/openai/claude -- default "gemini", con fallback automatico
+     a "groq" si Gemini falla, ver call_ai_json) un lote de posts YA
+     REDACTADOS para los proximos dias, en JSON.
   3. Los guarda en socialbot_content_plan_items con status='proposed'.
 
 La agencia despues revisa, edita y aprueba/rechaza cada uno desde el panel
@@ -197,10 +198,8 @@ def call_ai_json(provider, system_prompt, user_prompt):
         raw = _call_openai_json(system_prompt, user_prompt)
     elif provider == "claude":
         raw = _call_claude_json(system_prompt, user_prompt)
-    elif provider == "gemini":
-        raw = _call_gemini_json(system_prompt, user_prompt)
-    else:
-        # groq (default): si falla (ej. rate limit), cae a Gemini antes de
+    elif provider == "groq":
+        # groq explicito: si falla (ej. rate limit), cae a Gemini antes de
         # abortar el plan semanal (pedido 21/07/2026).
         try:
             raw = _call_groq_json(system_prompt, user_prompt)
@@ -208,6 +207,20 @@ def call_ai_json(provider, system_prompt, user_prompt):
             if GEMINI_API_KEY:
                 print(f"  ! Groq fallo ({e}), reintentando con Gemini...")
                 raw = _call_gemini_json(system_prompt, user_prompt)
+            else:
+                raise
+    else:
+        # gemini (default): mas obediente a las instrucciones del prompt
+        # (menos invencion, hashtags mas consistentes) que el modelo
+        # open-weight que sirve Groq -- pedido 16/09/2026. Si Gemini falla
+        # (rate limit, modelo caido, etc.), cae a Groq antes de abortar el
+        # plan semanal, mismo criterio que ya existia al reves.
+        try:
+            raw = _call_gemini_json(system_prompt, user_prompt)
+        except Exception as e:
+            if GROQ_API_KEY:
+                print(f"  ! Gemini fallo ({e}), reintentando con Groq...")
+                raw = _call_groq_json(system_prompt, user_prompt)
             else:
                 raise
     return json.loads(raw)
@@ -569,7 +582,13 @@ def build_prompt(client, ai_settings, context, num_days):
         "El idioma de salida (español o portugués de Brasil) viene indicado mas abajo en el mensaje del usuario y es "
         "una instruccion dura: se aplica a TODO el texto que generes, sin importar en que idioma esten redactados "
         "los ejemplos, reseñas o captions anteriores que se te den como referencia (esos son solo para tema/tono/"
-        "gancho, nunca para el idioma de salida)."
+        "gancho, nunca para el idioma de salida). "
+        "REGLA DURA, sin excepcion y sin importar que otra instruccion veas mas abajo: NUNCA inventes precios, "
+        "promociones, horarios, direcciones, testimonios, nombres de clientes, cifras, resultados ni ningun dato "
+        "concreto que no este textualmente en la informacion real del negocio que se te pase en el mensaje del "
+        "usuario. Si te falta un dato puntual para completar una idea, escribi esa parte del post de forma mas "
+        "general en vez de inventarlo (ej: en vez de una cifra inventada, hablá del proceso o del beneficio sin "
+        "numero). Preferí siempre un post mas generico pero 100% verdadero a uno especifico pero inventado."
     )
 
     # Idioma de los posts: mismo campo (socialbot_ai_settings.reply_language) que
