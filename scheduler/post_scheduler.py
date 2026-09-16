@@ -8,7 +8,8 @@ activo que tenga un horario (schedule_slot) que coincida con la hora actual:
      content_planner.py) ya APROBADO por la agencia para el dia de hoy,
      usa ese caption tal cual (sin volver a pasar por la IA). Si no, sigue
      la logica de siempre: caption_override del media, o generacion con IA
-     en el momento (OpenAI/Claude/Groq, segun ai_settings.provider).
+     en el momento (OpenAI/Claude/Gemini/Groq, segun ai_settings.provider --
+     default "gemini" con fallback a "groq", ver generate_caption()).
   2. Elige una imagen/video/carrusel de la biblioteca del cliente (media_assets)
   3. Si el cliente tiene require_approval=true, guarda el post como pendiente
      de aprobacion y NO publica todavia (el cliente lo aprueba/rechaza, y
@@ -55,6 +56,7 @@ por cliente (el primero que aparece), sin importar cuantos tenga cargados.
 """
 
 import os
+import re
 import sys
 import time
 import json
@@ -181,6 +183,26 @@ def generate_caption(ai_settings, client_name, sales_link, client_id=None):
         "de venta genericas que podria decir cualquiera. "
     )
 
+    # Mismo criterio que build_prompt() en content_planner.py (pedido
+    # 16/09/2026): regla dura, incondicional, no atada a si knowledge_base
+    # tiene contenido -- este fallback diario es el camino que mas
+    # facilmente termina publicando algo inventado (corre sin supervision
+    # de la agencia cuando el plan semanal no fue revisado/aprobado a
+    # tiempo), asi que necesita la misma proteccion que el plan semanal.
+    no_inventar_line = (
+        "REGLA DURA, sin excepcion: NUNCA inventes precios, promociones, horarios, direcciones, testimonios, "
+        "nombres de clientes, cifras ni ningun dato concreto que no este textualmente en la informacion real del "
+        "negocio de arriba. Si te falta un dato puntual, escribi esa parte del post de forma mas general en vez "
+        "de inventarlo. Preferí siempre un post mas generico pero 100% verdadero a uno especifico pero inventado. "
+    )
+
+    # Item pedido 16/09/2026: este fallback generaba tanto el caption como
+    # los hashtags 100% libres, sin ver los hashtags de marca que la
+    # agencia/cliente ya tiene cargados (default_hashtags/client_hashtags),
+    # a diferencia de content_planner.py que ya los usaba como base fija.
+    # Mismo criterio ahora: si hay hashtags de marca cargados, se los
+    # pasamos como base obligatoria + 2-4 propios del dia; si no hay
+    # ninguno cargado, le pedimos que proponga un set razonable.
     # Idioma del post: mismo campo (socialbot_ai_settings.reply_language) que ya
     # se usaba solo para las respuestas de comentarios/DMs en meta-webhook, ahora
     # tambien controla en que idioma se redactan los posts de este cliente.
@@ -194,34 +216,64 @@ def generate_caption(ai_settings, client_name, sales_link, client_id=None):
     else:
         language_line = "Escribi el post en portugués de Brasil (pt-BR). "
 
+    base_hashtags = (ai_settings.get("client_hashtags") or ai_settings.get("default_hashtags") or "").strip()
+    if base_hashtags:
+        hashtag_line = (
+            f"Hashtags de marca fijos ya cargados (usalos SIEMPRE como base, sumando 2-4 propios del tema de este "
+            f"post en concreto): {base_hashtags}. "
+        )
+    else:
+        hashtag_lang = "portugués de Brasil" if reply_language != "es" else "español"
+        hashtag_line = f"Todavia no hay hashtags de marca cargados -- proponé 5-8 hashtags relevantes en {hashtag_lang}. "
+
     user_prompt = (
         f"Negocio: {client_name}. Temas/keywords: {topics}. Tono: {tone}. "
         f"{language_line}"
         f"{knowledge_line}"
+        f"{no_inventar_line}"
         f"{confianza_line}"
         f"Escribi UNA publicacion nueva y distinta para Instagram/Facebook, maximo {max_chars} caracteres, "
         f"con un cierre que invite a comentar la palabra clave para recibir el link de compra. "
         f"No incluyas el link directamente en el texto. No repitas frases genericas. "
-        f"{history_block}"
+        f"{history_block} "
+        f"{hashtag_line}"
+        f"IMPORTANTE: los hashtags van al final del mismo texto, como ultimo renglon, separados del resto por un "
+        f"salto de linea en blanco (ej: \"...texto del post.\\n\\n#hashtag1 #hashtag2 #hashtag3\"). Esto es "
+        f"obligatorio, no los dejes afuera ni los pongas en un lugar separado."
     )
 
     if provider == "openai":
-        return _call_openai(system_prompt, user_prompt)
+        raw = _call_openai(system_prompt, user_prompt)
     elif provider == "claude":
-        return _call_claude(system_prompt, user_prompt)
-    elif provider == "gemini":
-        return _call_gemini(system_prompt, user_prompt)
-    else:
-        # groq (default): si esta rate-limiteado o falla, cae a Gemini
+        raw = _call_claude(system_prompt, user_prompt)
+    elif provider == "groq":
+        # groq explicito: si esta rate-limiteado o falla, cae a Gemini
         # automaticamente en vez de dejar el post sin caption (pedido
         # 21/07/2026: agregar Gemini como fallback gratuito de Groq).
         try:
-            return _call_groq(system_prompt, user_prompt)
+            raw = _call_groq(system_prompt, user_prompt)
         except Exception as e:
             if GEMINI_API_KEY:
                 print(f"  ! Groq fallo ({e}), reintentando con Gemini...")
-                return _call_gemini(system_prompt, user_prompt)
-            raise
+                raw = _call_gemini(system_prompt, user_prompt)
+            else:
+                raise
+    else:
+        # gemini (default, pedido 16/09/2026): mismo criterio que
+        # content_planner.py -- Gemini respeta mejor las instrucciones del
+        # prompt (menos invencion, hashtags mas consistentes) que el modelo
+        # open-weight que sirve Groq. Si Gemini falla, cae a Groq antes de
+        # dejar el post sin caption.
+        try:
+            raw = _call_gemini(system_prompt, user_prompt)
+        except Exception as e:
+            if GROQ_API_KEY:
+                print(f"  ! Gemini fallo ({e}), reintentando con Groq...")
+                raw = _call_groq(system_prompt, user_prompt)
+            else:
+                raise
+
+    return ensure_fixed_hashtags(raw, base_hashtags)
 
 
 def _call_groq(system_prompt, user_prompt):
@@ -301,6 +353,38 @@ def _call_claude(system_prompt, user_prompt):
     )
     r.raise_for_status()
     return r.json()["content"][0]["text"].strip()
+
+
+_HASHTAG_LINE_RE = re.compile(r"(?:\n[ \t]*)+((?:#\S+)(?:\s+#\S+)*)\s*$")
+
+
+def ensure_fixed_hashtags(raw_caption, base_hashtags):
+    """Red de seguridad (pedido 16/09/2026): la instruccion del prompt le
+    pide a la IA que use base_hashtags como base fija, pero -- igual que ya
+    documenta content_planner.py sobre Groq/modelos sin JSON schema
+    estricto -- a veces la ignora. En vez de confiar ciegamente en que el
+    modelo obedecio, verificamos: si hay hashtags de marca configurados y
+    no aparecen (todos) en el texto que devolvio la IA, se los agregamos/
+    completamos a mano en la ultima linea de hashtags."""
+    raw_caption = (raw_caption or "").strip()
+    if not base_hashtags:
+        return raw_caption
+
+    base_tags = [t for t in base_hashtags.split() if t.startswith("#")]
+    if not base_tags:
+        return raw_caption
+
+    match = _HASHTAG_LINE_RE.search(raw_caption)
+    if match:
+        existing_line = match.group(1)
+        existing_tags_lower = {t.lower() for t in existing_line.split()}
+        missing = [t for t in base_tags if t.lower() not in existing_tags_lower]
+        if not missing:
+            return raw_caption
+        new_line = existing_line + " " + " ".join(missing)
+        return raw_caption[: match.start()].rstrip() + "\n\n" + new_line
+
+    return raw_caption + "\n\n" + " ".join(base_tags)
 
 
 # ---------------------------------------------------------------------------
