@@ -134,7 +134,11 @@ async function loadClients(){
     const todayIso = new Date().toISOString().slice(0, 10);
     const { data: aiUsageRow } = await sb.from('socialbot_ai_usage_log').select('call_count').eq('client_id', c.id).eq('usage_date', todayIso).maybeSingle();
     const { data: pendingPosts } = await sb.from('socialbot_posts').select('*').eq('client_id', c.id).eq('approval_status', 'pending').order('created_at', { ascending:false });
-    const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).in('status', ['proposed','approved']).order('target_date', { ascending:true });
+    // Solo 'proposed': los ya aprobados/rechazados no se muestran mas en
+    // este panel (quedaban acumulados en la vista de Lista/Calendario y
+    // tapaban lo que faltaba revisar). Una vez que la agencia decide,
+    // el item sale de esta consulta para siempre.
+    const { data: planItems } = await sb.from('socialbot_content_plan_items').select('*').eq('client_id', c.id).eq('status', 'proposed').order('target_date', { ascending:true });
     const { data: reviews } = await sb.from('socialbot_reviews').select('*').eq('client_id', c.id).order('review_created_at', { ascending:false }).limit(20);
 
     const ai = (aiRows && aiRows[0]) || {};
@@ -280,7 +284,7 @@ async function loadClients(){
     // ── Pestaña "Plan" ────────────────────────────────────────────────
     const planItemsSectionHtml = (planItems||[]).length ? `
         <div class="meta-row" style="margin-bottom:8px;">
-          POST DE PUBLICACION (texto que va debajo del video, junto con los hashtags), generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá/rechaza o edita cada uno — el que quede aprobado se publica solo el día sugerido, con este texto y ese Hashtag.
+          POST DE PUBLICACION (texto que va debajo del video, junto con los hashtags), generado automáticamente todos los lunes con base en métricas de posts, leads recientes y lo ya publicado. Editá el texto si hace falta y aprobá/rechaza o edita cada uno — el que quede aprobado se publica solo el día sugerido, con este texto y ese Hashtag. Una vez que decidís, el post sale de esta lista.
         </div>
         <div class="plan-view-toggle" data-plan-toggle="${c.id}">
           <button data-mode="list" class="${(planViewMode[c.id]||'list')==='list'?'active':''}" onclick="setPlanView('${c.id}','list')">📋 Lista</button>
@@ -291,28 +295,20 @@ async function loadClients(){
         </div>
         <div id="planListView-${c.id}" style="display:${(planViewMode[c.id]||'list')==='list'?'block':'none'};">
         ${planItems.map(item => `
-          <div class="card ${item.status === 'approved' ? '' : 'pending'}" style="margin-top:8px;">
+          <div class="card pending" style="margin-top:8px;">
             <div class="meta-row" style="margin-bottom:6px;">
               <strong>${new Date(item.target_date + 'T00:00:00').toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'short' })}</strong>
               ${item.angle ? ` · <span class="pill">${item.angle}</span>` : ''}
-              ${item.status === 'approved' ? ' · <span class="pill">aprobado, se publica solo</span>' : ''}
             </div>
             ${item.based_on ? `<div class="meta-row" style="font-style:italic; margin-bottom:8px;">${item.based_on}</div>` : ''}
             <label class="sr-only" for="plan-caption-${item.id}">Texto del post</label>
-            <textarea id="plan-caption-${item.id}" aria-label="Texto del post" rows="4" ${item.status === 'approved' ? 'disabled' : ''}>${(item.caption||'').replace(/</g,'&lt;')}</textarea>
+            <textarea id="plan-caption-${item.id}" aria-label="Texto del post" rows="4">${(item.caption||'').replace(/</g,'&lt;')}</textarea>
             <div style="font-size:12px; color:var(--muted); display:block; margin-top:8px;">Hashtags de este post (los propuso la IA — editalos, borralos, o agregá los tuyos antes de aprobar)</div>
-            ${item.status === 'approved'
-              ? `<div class="hashtag-row">${hashtagsToArray(item.hashtags).map(t => `<span class="hashtag-chip" style="padding:3px 12px;">${t}</span>`).join('') || '<span class="meta-row" style="margin-top:0;">sin hashtags</span>'}</div>`
-              : hashtagEditorHtml(`plan-hashtags-${item.id}`, item.hashtags)}
+            ${hashtagEditorHtml(`plan-hashtags-${item.id}`, item.hashtags)}
             <div class="btn-row">
-              ${item.status === 'approved' ? `
-                <button class="secondary" onclick="reviewContentPlanItem('${item.id}', 'proposed')">Volver a editar</button>
-                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
-              ` : `
-                <button class="secondary" onclick="saveContentPlanItem('${item.id}')">Guardar cambios</button>
-                <button onclick="reviewContentPlanItem('${item.id}', 'approved')">Aprobar (se publica con este texto y estos hashtags)</button>
-                <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
-              `}
+              <button class="secondary" onclick="saveContentPlanItem('${item.id}')">Guardar cambios</button>
+              <button onclick="reviewContentPlanItem('${item.id}', 'approved')">Aprobar (se publica con este texto y estos hashtags)</button>
+              <button class="reject" onclick="reviewContentPlanItem('${item.id}', 'rejected')">Rechazar</button>
             </div>
           </div>
         `).join('')}
@@ -324,7 +320,7 @@ async function loadClients(){
       planDiv.className = 'card client-card';
       planDiv.dataset.clientId = c.id;
       planDiv.innerHTML = `
-        <div class="section-client-heading">${c.name} · ${(planItems||[]).length} idea(s)</div>
+        <div class="section-client-heading">${c.name} · ${(planItems||[]).length} pendiente(s) de aprobar</div>
         ${hookRankingHtml}
         ${planItemsSectionHtml}
       `;
