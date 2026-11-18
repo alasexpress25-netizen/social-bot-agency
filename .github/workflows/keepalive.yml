@@ -1,0 +1,32 @@
+name: Keepalive (evita que GitHub desactive los workflows programados)
+
+on:
+  schedule:
+    # Cada lunes a las 12:00 UTC
+    - cron: "0 12 * * 1"
+  workflow_dispatch:   # permite ejecutarlo a mano desde la pestaña Actions
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Commit vacío si el último commit tiene más de 30 días
+        run: |
+          ULTIMO=$(git log -1 --format=%ct)
+          AHORA=$(date +%s)
+          DIAS=$(( (AHORA - ULTIMO) / 86400 ))
+          echo "Último commit hace $DIAS días"
+
+          if [ "$DIAS" -ge 30 ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keepalive"
+            git push
+          else
+            echo "Hay actividad reciente, no hace falta commit."
+          fi
