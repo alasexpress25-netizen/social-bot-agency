@@ -47,7 +47,7 @@ socket.getaddrinfo = _ipv4_only_getaddrinfo
 # ---------------------------------------------------------------------------
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]  # service_role key (NUNCA la anon key acá)
-GRAPH_API_VERSION = os.environ.get("GRAPH_API_VERSION", "v21.0")
+GRAPH_API_VERSION = os.environ.get("GRAPH_API_VERSION", "v25.0")
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
