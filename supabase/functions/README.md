@@ -15,7 +15,7 @@ quedar desactualizada y confundir.
 
 ## Cambios importantes ya aplicados en Supabase
 
-- **meta-webhook (versión 53, 24/11/2026):**
+- **meta-webhook (versión 55, 24/11/2026):**
   - La IA principal pasa a ser **Gemini** (alias `gemini-flash-latest`,
     configurable con el secret `GEMINI_MODEL`). **Groq** queda como respaldo
     (`openai/gpt-oss-20b`, configurable con `GROQ_MODEL`). Si ambos fallan, se
